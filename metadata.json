@@ -1,5 +1,5 @@
 {
-  "name": "DnD Campaign Database",
+  "name": "DnDocs",
   "description": "A collaborative database for Dungeons & Dragons campaigns. Manage cities, NPCs, areas, lore, and items. DMs can control player knowledge and visibility of secrets.",
   "requestFramePermissions": []
 }
