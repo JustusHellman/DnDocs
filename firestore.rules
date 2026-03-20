@@ -1,0 +1,166 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - uid: string (required, max 100)
+    //   - displayName: string (required, max 100)
+    //   - email: string (required, max 200)
+    //   - createdAt: string (required, max 100)
+    //
+    // Collection: campaigns
+    // Document ID: {campaignId}
+    // Fields:
+    //   - id: string
+    //   - name: string
+    //   - dmId: string
+    //   - players: list
+    //   - joinCode: string
+    //   - createdAt: string
+    //
+    // Collection: entities
+    // Document ID: {entityId}
+    // Fields:
+    //   - id: string (required, max 100)
+    //   - campaignId: string (required)
+    //   - type: string (required, 'npc', 'settlement', 'landmark', 'country', 'faction', 'shop', 'item', 'note', 'lore')
+    //   - name: string (required, max 200)
+    //   - content: string (required, max 100000)
+    //   - tags: list of strings (required, max 100 items)
+    //   - ownerId: string (required, max 100)
+    //   - isPublic: bool (required)
+    //   - allowedPlayers: list of strings (required)
+    //   - playerKnowledge: map (optional)
+    //   - locationId: string (optional)
+    //   - gender: string (optional)
+    //   - imageUrls: list of strings (optional)
+    //   - attributes: map (optional)
+    //   - createdAt: string (required, max 100)
+    //   - updatedAt: string (required, max 100)
+    //
+    // Collection: relationships
+    // Document ID: {relId}
+    // Fields:
+    //   - id: string
+    //   - campaignId: string
+    //   - sourceId: string
+    //   - targetId: string
+    //   - targetName: string
+    //   - label: string
+    //   - reverseId: string
+    //   - createdAt: string
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isCampaignDM(campaignId) {
+      return get(/databases/$(database)/documents/campaigns/$(campaignId)).data.dmId == request.auth.uid;
+    }
+
+    function isCampaignMember(campaignId) {
+      let camp = get(/databases/$(database)/documents/campaigns/$(campaignId)).data;
+      return camp.dmId == request.auth.uid || request.auth.uid in camp.players;
+    }
+
+    function isValidUser() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'createdAt']) &&
+             data.uid is string && data.uid.size() > 0 && data.uid.size() < 100 &&
+             data.displayName is string && data.displayName.size() > 0 && data.displayName.size() < 100 &&
+             data.email is string && data.email.size() > 0 && data.email.size() < 200 &&
+             data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() < 100;
+    }
+
+    function isValidCampaign() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['id', 'name', 'dmId', 'players', 'joinCode', 'createdAt']) &&
+             data.id is string && data.name is string && data.dmId is string &&
+             data.players is list && data.joinCode is string && data.createdAt is string;
+    }
+
+    function isValidEntity() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['id', 'campaignId', 'type', 'name', 'content', 'tags', 'ownerId', 'isPublic', 'allowedPlayers', 'createdAt', 'updatedAt']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() < 100 &&
+             data.campaignId is string && data.campaignId.size() > 0 &&
+             data.type in ['npc', 'settlement', 'landmark', 'country', 'faction', 'shop', 'item', 'note', 'lore'] &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
+             data.content is string && data.content.size() < 100000 &&
+             data.tags is list && data.tags.size() <= 100 &&
+             data.ownerId is string && data.ownerId.size() > 0 && data.ownerId.size() < 100 &&
+             data.isPublic is bool &&
+             data.allowedPlayers is list && data.allowedPlayers.size() <= 100 &&
+             data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() < 100 &&
+             data.updatedAt is string && data.updatedAt.size() > 0 && data.updatedAt.size() < 100 &&
+             (!('playerKnowledge' in data) || data.playerKnowledge is map) &&
+             (!('fieldPermissions' in data) || data.fieldPermissions is map) &&
+             (!('locationId' in data) || data.locationId == null || data.locationId is string) &&
+             (!('gender' in data) || data.gender == null || data.gender is string) &&
+             (!('imageUrls' in data) || data.imageUrls is list) &&
+             (!('attributes' in data) || data.attributes is map);
+    }
+
+    function isValidRelationship() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['id', 'campaignId', 'sourceId', 'targetId', 'targetName', 'label', 'reverseId', 'createdAt']) &&
+             data.id is string && data.campaignId is string &&
+             data.sourceId is string && data.targetId is string &&
+             data.targetName is string && data.label is string &&
+             data.reverseId is string && data.createdAt is string;
+    }
+
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && isValidUser() && request.resource.data.uid == userId && isOwner(userId);
+      allow delete: if false;
+    }
+
+    match /campaigns/{campaignId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidCampaign() && request.resource.data.dmId == request.auth.uid;
+      allow update: if isAuthenticated() && isValidCampaign() && (
+        resource.data.dmId == request.auth.uid ||
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['players']) &&
+         request.resource.data.players.hasAll(resource.data.players) &&
+         request.resource.data.players.size() == resource.data.players.size() + 1 &&
+         request.auth.uid in request.resource.data.players)
+      );
+      allow delete: if isAuthenticated() && resource.data.dmId == request.auth.uid;
+    }
+
+    match /entities/{entityId} {
+      allow read: if isAuthenticated() && isCampaignMember(resource.data.campaignId) && (
+        resource.data.isPublic == true || 
+        resource.data.ownerId == request.auth.uid || 
+        request.auth.uid in resource.data.allowedPlayers || 
+        (isCampaignDM(resource.data.campaignId) && resource.data.type != 'note')
+      );
+      allow create: if isAuthenticated() && isCampaignMember(request.resource.data.campaignId) && isValidEntity() && request.resource.data.ownerId == request.auth.uid && request.resource.data.id == entityId && (isCampaignDM(request.resource.data.campaignId) || request.resource.data.type == 'note');
+      allow update: if isAuthenticated() && isCampaignMember(resource.data.campaignId) && isValidEntity() && request.resource.data.ownerId == resource.data.ownerId && request.resource.data.id == resource.data.id && (isCampaignDM(resource.data.campaignId) || (resource.data.type == 'note' && resource.data.ownerId == request.auth.uid));
+      allow delete: if isAuthenticated() && isCampaignMember(resource.data.campaignId) && (isCampaignDM(resource.data.campaignId) || (resource.data.type == 'note' && resource.data.ownerId == request.auth.uid));
+    }
+
+    match /relationships/{relId} {
+      allow read: if isAuthenticated() && isCampaignMember(resource.data.campaignId);
+      allow create: if isAuthenticated() && isCampaignDM(request.resource.data.campaignId) && isValidRelationship();
+      allow update: if isAuthenticated() && isCampaignDM(resource.data.campaignId) && isValidRelationship();
+      allow delete: if isAuthenticated() && isCampaignDM(resource.data.campaignId);
+    }
+  }
+}
