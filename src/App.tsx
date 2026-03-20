@@ -14,11 +14,9 @@ import { LogIn, Menu } from 'lucide-react';
 
 function AuthRoute({ children }: { children: React.ReactNode }) {
   const { user, loading, login } = useAuth();
-
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center text-stone-400">Loading DnD Database...</div>;
   }
-
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center text-stone-100">
@@ -36,24 +34,19 @@ function AuthRoute({ children }: { children: React.ReactNode }) {
       </div>
     );
   }
-
   return <>{children}</>;
 }
 
 function CampaignRoute({ children }: { children: React.ReactNode }) {
   const { currentCampaign } = useAuth();
   const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth >= 768);
-
   if (!currentCampaign) {
     return <CampaignDashboard />;
   }
-
   return (
     <div className="flex h-screen text-stone-100 overflow-hidden bg-transparent">
       <Sidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} />
-      
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Header */}
         <div className="h-16 bg-stone-900/80 backdrop-blur-md border-b border-stone-800/50 flex items-center px-4 shrink-0">
           {!isSidebarOpen && (
             <button onClick={() => setIsSidebarOpen(true)} className="p-2 text-stone-400 hover:text-amber-500 mr-2">
@@ -62,7 +55,6 @@ function CampaignRoute({ children }: { children: React.ReactNode }) {
           )}
           <h1 className="ml-2 text-lg font-display font-bold text-amber-500 truncate">{currentCampaign.name}</h1>
         </div>
-
         <main className="flex-1 overflow-y-auto p-6 md:p-10 bg-transparent">
           {children}
         </main>
@@ -75,7 +67,7 @@ export default function App() {
   return (
     <ErrorBoundary>
       <AuthProvider>
-        <Router>
+        <Router basename="/DnDocs/">
           <Routes>
             <Route path="/" element={<AuthRoute><CampaignRoute><Navigate to="/search" replace /></CampaignRoute></AuthRoute>} />
             <Route path="/search" element={<AuthRoute><CampaignRoute><GlobalSearch /></CampaignRoute></AuthRoute>} />
