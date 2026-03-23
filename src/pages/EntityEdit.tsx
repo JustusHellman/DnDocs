@@ -1,15 +1,20 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { doc, getDoc, setDoc, collection, getDocs, query, where, or } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, getDocs, query, where, or, and } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Entity, EntityType, User, OperationType, FieldPermission } from '../types';
-import { ENTITY_SCHEMAS } from '../utils/entitySchemas';
+import { ENTITY_SCHEMAS, ENTITY_HIERARCHY, ENTITY_TYPES_ORDERED } from '../utils/entitySchemas';
 import { handleFirestoreError } from '../utils/firebaseUtils';
+import { generateUniqueId } from '../utils/slugify';
 import { useAuth } from '../AuthContext';
-import { ArrowLeft, Save, Globe, Lock, Users, Image as ImageIcon, X } from 'lucide-react';
+import { ArrowLeft, Save, Globe, Lock, Users, Image as ImageIcon, X, Link as LinkIcon, BookOpen } from 'lucide-react';
 import clsx from 'clsx';
 import SearchableDropdown from '../components/SearchableDropdown';
 import FieldPermissionToggle from '../components/FieldPermissionToggle';
+import LinkModal from '../components/LinkModal';
+import QuickCreateModal from '../components/QuickCreateModal';
+import AutoExpandingTextarea from '../components/AutoExpandingTextarea';
+import MDEditor from '@uiw/react-md-editor';
 
 export default function EntityEdit() {
   const { id } = useParams<{ id: string }>();
@@ -23,6 +28,15 @@ export default function EntityEdit() {
   const [saving, setSaving] = useState(false);
   const [players, setPlayers] = useState<User[]>([]);
   const [availableLocations, setAvailableLocations] = useState<Entity[]>([]);
+  const [isQuickCreateOpen, setIsQuickCreateOpen] = useState(false);
+  const [isStatBlockModalOpen, setIsStatBlockModalOpen] = useState(false);
+  const [quickCreateName, setQuickCreateName] = useState('');
+
+  const handleQuickCreate = (newEntity: Entity) => {
+    setAvailableLocations(prev => [...prev, newEntity]);
+    setFormData(prev => ({ ...prev, locationId: newEntity.id }));
+    setIsQuickCreateOpen(false);
+  };
   
   const [formData, setFormData] = useState<Partial<Entity>>({
     type: defaultType,
@@ -40,23 +54,90 @@ export default function EntityEdit() {
   
   const [tagInput, setTagInput] = useState('');
   const [imageUrlInput, setImageUrlInput] = useState('');
+  const [isLinkModalOpen, setIsLinkModalOpen] = useState(false);
+  const [pendingRelationships, setPendingRelationships] = useState<{ targetId: string, label: string, reverseLabel: string, targetName: string }[]>([]);
+  const [relSearch, setRelSearch] = useState('');
+  const [relLabel, setRelLabel] = useState('');
+  const [relReverseLabel, setRelReverseLabel] = useState('');
+  const [otherFields, setOtherFields] = useState<Set<string>>(new Set());
+  const [existingLabels, setExistingLabels] = useState<string[]>([]);
 
-  const typePriority: Record<EntityType, EntityType[]> = {
-    npc: ['settlement', 'landmark', 'faction', 'country', 'shop', 'note', 'npc', 'item'],
-    item: ['npc', 'shop', 'settlement', 'landmark', 'faction', 'country', 'note', 'item'],
-    settlement: ['country', 'landmark', 'faction', 'note', 'settlement', 'npc', 'shop', 'item'],
-    landmark: ['country', 'settlement', 'faction', 'note', 'landmark', 'npc', 'shop', 'item'],
-    country: ['note', 'country', 'settlement', 'landmark', 'faction', 'npc', 'shop', 'item'],
-    faction: ['settlement', 'country', 'landmark', 'note', 'faction', 'npc', 'shop', 'item'],
-    shop: ['settlement', 'landmark', 'country', 'faction', 'note', 'shop', 'npc', 'item'],
-    note: ['note', 'npc', 'settlement', 'landmark', 'country', 'faction', 'shop', 'item'],
+  const handleDndStatChange = (field: keyof DndStats, value: any) => {
+    setFormData(prev => ({
+      ...prev,
+      dndStats: {
+        ...(prev.dndStats || {
+          armorClass: '',
+          hitPoints: '',
+          speed: '',
+          str: 10,
+          dex: 10,
+          con: 10,
+          int: 10,
+          wis: 10,
+          cha: 10,
+          skills: '',
+          senses: '',
+          languages: '',
+          challenge: '',
+          proficiencyBonus: ''
+        }),
+        [field]: value
+      }
+    }));
   };
 
-  const getSortedLocations = () => {
-    const currentType = formData.type as EntityType;
-    const priorities = typePriority[currentType] || [];
-    
-    return [...availableLocations].sort((a, b) => {
+  const calculateModifier = (score: number) => {
+    const mod = Math.floor((score - 10) / 2);
+    return mod >= 0 ? `+${mod}` : `${mod}`;
+  };
+
+  const typePriority: Record<EntityType, EntityType[]> = {
+    npc: ['settlement', 'landmark', 'faction', 'country', 'geography', 'shop', 'note', 'npc', 'item'],
+    item: ['npc', 'shop', 'settlement', 'landmark', 'faction', 'country', 'geography', 'note', 'item'],
+    settlement: ['country', 'geography', 'landmark', 'faction', 'note', 'settlement', 'npc', 'shop', 'item'],
+    landmark: ['country', 'geography', 'settlement', 'faction', 'note', 'landmark', 'npc', 'shop', 'item'],
+    country: ['geography', 'note', 'country', 'settlement', 'landmark', 'faction', 'npc', 'shop', 'item'],
+    faction: ['settlement', 'country', 'geography', 'landmark', 'note', 'faction', 'npc', 'shop', 'item'],
+    shop: ['settlement', 'landmark', 'country', 'geography', 'faction', 'note', 'shop', 'npc', 'item'],
+    note: ['note', 'npc', 'settlement', 'landmark', 'country', 'geography', 'faction', 'shop', 'item'],
+    geography: ['geography', 'country', 'note', 'settlement', 'landmark', 'faction', 'npc', 'shop', 'item'],
+  };
+
+  const dropdownOptions = availableLocations
+    .filter(loc => {
+      const currentType = formData.type as EntityType;
+      const locType = loc.type as EntityType;
+      
+      // Specific filtering based on common D&D hierarchy
+      if (currentType === 'settlement') {
+        return ['country', 'geography'].includes(locType);
+      }
+      if (currentType === 'geography') {
+        return ['geography', 'country'].includes(locType);
+      }
+      if (currentType === 'npc') {
+        return ['settlement', 'shop', 'landmark', 'country', 'geography', 'faction'].includes(locType);
+      }
+      if (currentType === 'shop') {
+        return ['settlement', 'landmark', 'country', 'geography'].includes(locType);
+      }
+      if (currentType === 'landmark') {
+        return ['settlement', 'country', 'geography'].includes(locType);
+      }
+      if (currentType === 'faction') {
+        return ['country', 'settlement', 'geography'].includes(locType);
+      }
+      if (currentType === 'item') {
+        return ['npc', 'shop', 'settlement', 'landmark'].includes(locType);
+      }
+      
+      const currentLevel = ENTITY_HIERARCHY[currentType] || 0;
+      const locLevel = ENTITY_HIERARCHY[locType] || 0;
+      return locLevel > currentLevel || (locLevel === currentLevel && locType === currentType);
+    })
+    .sort((a, b) => {
+      const priorities = typePriority[formData.type as EntityType] || [];
       const typeAIndex = priorities.indexOf(a.type);
       const typeBIndex = priorities.indexOf(b.type);
       
@@ -64,14 +145,12 @@ export default function EntityEdit() {
         return typeAIndex - typeBIndex;
       }
       return a.name.localeCompare(b.name);
-    });
-  };
-
-  const dropdownOptions = getSortedLocations().map(loc => ({
-    id: loc.id,
-    label: loc.name,
-    type: loc.type
-  }));
+    })
+    .map(loc => ({
+      id: loc.id,
+      label: loc.name,
+      type: loc.type
+    }));
 
   useEffect(() => {
     if (!currentCampaign || !user) {
@@ -94,6 +173,19 @@ export default function EntityEdit() {
     };
     fetchPlayers();
 
+    const fetchLabels = async () => {
+      try {
+        const q = query(collection(db, 'relationships'), where('campaignId', '==', currentCampaign.id));
+        const snap = await getDocs(q);
+        const labels = new Set<string>();
+        snap.docs.forEach(d => labels.add(d.data().label));
+        setExistingLabels(Array.from(labels));
+      } catch (error) {
+        console.error("Error fetching relationship labels", error);
+      }
+    };
+    fetchLabels();
+
     const fetchLocations = async () => {
       try {
         let q;
@@ -102,11 +194,13 @@ export default function EntityEdit() {
         } else {
           q = query(
             collection(db, 'entities'),
-            where('campaignId', '==', currentCampaign.id),
-            or(
-              where('isPublic', '==', true),
-              where('allowedPlayers', 'array-contains', user.uid),
-              where('ownerId', '==', user.uid)
+            and(
+              where('campaignId', '==', currentCampaign.id),
+              or(
+                where('isPublic', '==', true),
+                where('allowedPlayers', 'array-contains', user.uid),
+                where('ownerId', '==', user.uid)
+              )
             )
           );
         }
@@ -119,7 +213,7 @@ export default function EntityEdit() {
     };
     fetchLocations();
 
-    if (id) {
+    if (id && id !== 'new') {
       const fetchEntity = async () => {
         try {
           const docSnap = await getDoc(doc(db, 'entities', id));
@@ -140,6 +234,17 @@ export default function EntityEdit() {
         }
       };
       fetchEntity();
+    } else if (id === 'new') {
+      if (defaultType === 'note') {
+        setFormData(prev => ({
+          ...prev,
+          attributes: {
+            ...prev.attributes,
+            date: new Date().toISOString().split('T')[0]
+          }
+        }));
+      }
+      setLoading(false);
     }
   }, [id, isDM, navigate, currentCampaign, user, defaultType]);
 
@@ -150,7 +255,10 @@ export default function EntityEdit() {
     
     setSaving(true);
     try {
-      const entityId = id || crypto.randomUUID();
+      let entityId = id;
+      if (!entityId || entityId === 'new') {
+        entityId = await generateUniqueId(formData.name || 'Untitled');
+      }
       const now = new Date().toISOString();
       
       const allAllowedPlayers = new Set<string>();
@@ -188,12 +296,53 @@ export default function EntityEdit() {
         imageUrls: formData.imageUrls || [],
         attributes: formData.attributes || {},
         fieldPermissions: formData.fieldPermissions || {},
+        statBlock: formData.statBlock,
+        dndStats: formData.dndStats,
+        dmNotes: formData.dmNotes,
         createdAt: formData.createdAt || now,
         updatedAt: now,
       };
 
       await setDoc(doc(db, 'entities', entityId), entityData);
-      navigate(`/entity/${entityId}`, { replace: true });
+
+      // Save pending relationships
+      for (const rel of pendingRelationships) {
+        const relId = `${entityId}_${rel.targetId}`;
+        const reverseRelId = `${rel.targetId}_${entityId}`;
+        
+        const relationship = {
+          id: relId,
+          campaignId: currentCampaign.id,
+          sourceId: entityId,
+          targetId: rel.targetId,
+          targetName: rel.targetName,
+          label: rel.label,
+          reverseId: reverseRelId,
+          createdAt: now,
+        };
+        
+        const reverseRelationship = {
+          id: reverseRelId,
+          campaignId: currentCampaign.id,
+          sourceId: rel.targetId,
+          targetId: entityId,
+          targetName: formData.name,
+          label: rel.reverseLabel || rel.label, // Fallback if empty
+          reverseId: relId,
+          createdAt: now,
+        };
+        
+        await Promise.all([
+          setDoc(doc(db, 'relationships', relId), relationship),
+          setDoc(doc(db, 'relationships', reverseRelId), reverseRelationship)
+        ]);
+      }
+
+      if (id === 'new' || !(window.history.state && window.history.state.idx > 0)) {
+        navigate(`/entity/${entityId}`, { replace: true });
+      } else {
+        navigate(-1);
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `entities/${id || 'new'}`);
     } finally {
@@ -244,13 +393,25 @@ export default function EntityEdit() {
   };
 
   const handleFieldPermissionChange = (field: string, permission: FieldPermission) => {
-    setFormData(prev => ({
-      ...prev,
-      fieldPermissions: {
-        ...(prev.fieldPermissions || {}),
-        [field]: permission
-      }
-    }));
+    setFormData(prev => {
+      // If a field is shared with specific players, ensure they can also see the entity itself
+      const newAllowedPlayers = new Set(prev.allowedPlayers || []);
+      permission.allowedPlayers.forEach(p => newAllowedPlayers.add(p));
+      
+      return {
+        ...prev,
+        allowedPlayers: Array.from(newAllowedPlayers),
+        fieldPermissions: {
+          ...(prev.fieldPermissions || {}),
+          [field]: permission
+        }
+      };
+    });
+  };
+
+  const handleInsertLink = (text: string, entityId: string) => {
+    const markdownLink = `[${text}](/entity/${entityId})`;
+    setFormData(prev => ({ ...prev, content: (prev.content || '') + markdownLink }));
   };
 
   const setAllPermissions = (isPublic: boolean) => {
@@ -276,33 +437,59 @@ export default function EntityEdit() {
     }));
   };
 
-  const renderLabel = (field: string, label: string) => (
-    <div className="flex items-center justify-between mb-2">
-      <label className="block text-sm font-medium text-stone-400">{label}</label>
-      {isDM && (
-        <FieldPermissionToggle
-          permission={formData.fieldPermissions?.[field]}
-          onChange={(perm) => handleFieldPermissionChange(field, perm)}
-          players={players}
-        />
-      )}
+  const renderLabel = (field: string, label: string, description?: string) => (
+    <div className="flex flex-col mb-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <label className="block text-sm font-medium text-stone-400">{label}</label>
+          {description && (
+            <div className="group relative">
+              <div className="cursor-help text-stone-500 hover:text-stone-300">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              </div>
+              <div className="absolute bottom-full left-0 mb-2 w-64 p-2 bg-stone-800 text-stone-200 text-xs rounded-lg shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 border border-stone-700">
+                {description}
+              </div>
+            </div>
+          )}
+        </div>
+        {isDM && (
+          <FieldPermissionToggle
+            permission={formData.fieldPermissions?.[field]}
+            onChange={(perm) => handleFieldPermissionChange(field, perm)}
+            players={players}
+          />
+        )}
+      </div>
     </div>
   );
+
+  const getSuggestions = (fieldKey: string) => {
+    const values = new Set<string>();
+    availableLocations.forEach(loc => {
+      if (loc.attributes?.[fieldKey]) {
+        values.add(loc.attributes[fieldKey]);
+      }
+    });
+    return Array.from(values);
+  };
 
   if (loading) return <div className="text-center py-12 text-stone-500">Loading...</div>;
 
   return (
     <div className="max-w-4xl mx-auto pb-12">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <button 
           onClick={() => {
-            if (id) {
-              navigate(`/entity/${id}`);
+            if (window.history.state && window.history.state.idx > 0) {
+              navigate(-1);
+            } else if (id && id !== 'new') {
+              navigate(`/entity/${id}`, { replace: true });
             } else {
-              navigate(`/entities/${formData.type}`);
+              navigate(`/entities/${formData.type}`, { replace: true });
             }
           }} 
-          className="flex items-center gap-2 text-stone-400 hover:text-stone-100 transition-colors text-sm font-medium"
+          className="flex items-center justify-center gap-2 px-4 py-2 text-stone-400 hover:text-stone-100 transition-colors text-sm font-medium bg-stone-900/50 border border-stone-800 rounded-lg sm:bg-transparent sm:border-0"
         >
           <ArrowLeft size={16} />
           Cancel
@@ -310,7 +497,7 @@ export default function EntityEdit() {
         <button
           onClick={handleSave}
           disabled={saving}
-          className="flex items-center gap-2 px-6 py-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded-lg font-medium transition-colors shadow-lg shadow-amber-900/20"
+          className="flex items-center justify-center gap-2 px-6 py-3 sm:py-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded-lg font-bold sm:font-medium transition-all shadow-lg shadow-amber-900/20 active:scale-95"
         >
           <Save size={18} />
           {saving ? 'Saving...' : 'Save Entity'}
@@ -320,28 +507,93 @@ export default function EntityEdit() {
       <form onSubmit={handleSave} className="space-y-8">
         <div className="bg-stone-900/80 backdrop-blur-md border border-stone-800 rounded-2xl p-8 shadow-xl">
           {isDM && (
-            <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 pb-6 border-b border-stone-800 gap-4">
-              <div>
-                <h2 className="text-xl font-cinzel font-bold text-amber-500">Global Visibility</h2>
-                <p className="text-sm text-stone-400 mt-1">Set visibility for all fields at once.</p>
+            <div className="flex flex-col md:flex-row md:items-start justify-between mb-8 pb-6 border-b border-stone-800 gap-4">
+              <div className="flex-1">
+                <h2 className="text-xl font-cinzel font-bold text-amber-500">Entity Visibility</h2>
+                <p className="text-sm text-stone-400 mt-1 mb-4">Control who can see this entity and its basic information.</p>
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setFormData(prev => ({ ...prev, isPublic: true, allowedPlayers: [] }))}
+                    className={clsx(
+                      "flex items-center gap-2 px-4 py-2 rounded-lg transition-colors text-sm font-medium border",
+                      formData.isPublic 
+                        ? "bg-emerald-900/50 text-emerald-300 border-emerald-500/50" 
+                        : "bg-stone-950/50 text-stone-400 border-stone-800 hover:bg-stone-800"
+                    )}
+                  >
+                    <Globe size={16} />
+                    Public (All Players)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormData(prev => ({ ...prev, isPublic: false, allowedPlayers: [] }))}
+                    className={clsx(
+                      "flex items-center gap-2 px-4 py-2 rounded-lg transition-colors text-sm font-medium border",
+                      !formData.isPublic && (!formData.allowedPlayers || formData.allowedPlayers.length === 0)
+                        ? "bg-red-900/50 text-red-300 border-red-500/50" 
+                        : "bg-stone-950/50 text-stone-400 border-stone-800 hover:bg-stone-800"
+                    )}
+                  >
+                    <Lock size={16} />
+                    Secret (DM Only)
+                  </button>
+                </div>
+                
+                {players.length > 0 && !formData.isPublic && (
+                  <div className="mt-4 p-4 bg-stone-950/50 border border-stone-800 rounded-xl">
+                    <label className="block text-xs font-bold text-stone-500 uppercase tracking-wider mb-3">Specific Players</label>
+                    <div className="flex flex-wrap gap-2">
+                      {players.map(player => {
+                        const isAllowed = formData.allowedPlayers?.includes(player.uid);
+                        return (
+                          <button
+                            key={player.uid}
+                            type="button"
+                            onClick={() => {
+                              const newAllowed = isAllowed 
+                                ? (formData.allowedPlayers || []).filter(id => id !== player.uid)
+                                : [...(formData.allowedPlayers || []), player.uid];
+                              setFormData(prev => ({ ...prev, allowedPlayers: newAllowed }));
+                            }}
+                            className={clsx(
+                              "flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border",
+                              isAllowed
+                                ? "bg-amber-900/30 text-amber-400 border-amber-700/50"
+                                : "bg-stone-900 text-stone-400 border-stone-800 hover:bg-stone-800"
+                            )}
+                          >
+                            <Users size={14} />
+                            {player.displayName}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
-              <div className="flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  onClick={() => setAllPermissions(true)}
-                  className="flex items-center gap-2 px-4 py-2 bg-emerald-950/30 text-emerald-400 border border-emerald-900/50 rounded-lg hover:bg-emerald-900/50 transition-colors text-sm font-medium"
-                >
-                  <Globe size={16} />
-                  Make All Public
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAllPermissions(false)}
-                  className="flex items-center gap-2 px-4 py-2 bg-red-950/30 text-red-400 border border-red-900/50 rounded-lg hover:bg-red-900/50 transition-colors text-sm font-medium"
-                >
-                  <Lock size={16} />
-                  Make All Secret
-                </button>
+              
+              <div className="flex-1 md:pl-8 md:border-l border-stone-800">
+                <h2 className="text-xl font-cinzel font-bold text-amber-500">Bulk Permissions</h2>
+                <p className="text-sm text-stone-400 mt-1 mb-4">Set visibility for all individual fields at once.</p>
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setAllPermissions(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-emerald-950/30 text-emerald-400 border border-emerald-900/50 rounded-lg hover:bg-emerald-900/50 transition-colors text-sm font-medium"
+                  >
+                    <Globe size={16} />
+                    Make All Fields Public
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAllPermissions(false)}
+                    className="flex items-center gap-2 px-4 py-2 bg-red-950/30 text-red-400 border border-red-900/50 rounded-lg hover:bg-red-900/50 transition-colors text-sm font-medium"
+                  >
+                    <Lock size={16} />
+                    Make All Fields Secret
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -384,12 +636,11 @@ export default function EntityEdit() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
             <div>
               <label className="block text-sm font-medium text-stone-400 mb-2">Name</label>
-              <input
-                type="text"
+              <AutoExpandingTextarea
                 required
                 value={formData.name}
                 onChange={e => setFormData({ ...formData, name: e.target.value })}
-                className="w-full px-4 py-3 bg-stone-950/50 border border-stone-800 rounded-xl text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50 transition-all font-semibold text-lg"
+                className="font-semibold text-lg min-h-[52px]"
                 placeholder="e.g. Neverwinter"
               />
             </div>
@@ -401,31 +652,39 @@ export default function EntityEdit() {
                 disabled={!isDM}
                 className="w-full px-4 py-3 bg-stone-950/50 border border-stone-800 rounded-xl text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50 transition-all font-medium appearance-none disabled:opacity-50"
               >
-                <option value="npc">NPC</option>
-                <option value="settlement">Settlement</option>
-                <option value="landmark">Landmark</option>
-                <option value="country">Country</option>
-                <option value="faction">Faction</option>
-                <option value="shop">Shop</option>
-                <option value="item">Item</option>
-                <option value="note">Note</option>
+                {ENTITY_TYPES_ORDERED.map(type => (
+                  <option key={type.value} value={type.value}>{type.label}</option>
+                ))}
               </select>
             </div>
           </div>
 
           {formData.type === 'npc' && (
-            <div className="mb-6">
-              {renderLabel('gender', 'Gender')}
-              <select
-                value={formData.gender || ''}
-                onChange={e => setFormData({ ...formData, gender: e.target.value })}
-                className="w-full px-4 py-3 bg-stone-950/50 border border-stone-800 rounded-xl text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50 transition-all font-medium appearance-none"
-              >
-                <option value="">Not specified</option>
-                <option value="Male">Male</option>
-                <option value="Female">Female</option>
-                <option value="Other">Other</option>
-              </select>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+              <div>
+                {renderLabel('gender', 'Gender')}
+                <select
+                  value={formData.gender || ''}
+                  onChange={e => setFormData({ ...formData, gender: e.target.value })}
+                  className="w-full px-4 py-3 bg-stone-950/50 border border-stone-800 rounded-xl text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50 transition-all font-medium appearance-none"
+                >
+                  <option value="">Not specified</option>
+                  <option value="Male">Male</option>
+                  <option value="Female">Female</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              <div>
+                {renderLabel('statBlock', 'Stat Block')}
+                <button
+                  type="button"
+                  onClick={() => setIsStatBlockModalOpen(true)}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-stone-950/50 border border-stone-800 rounded-xl text-stone-300 hover:text-amber-400 hover:border-amber-900/50 transition-all font-medium"
+                >
+                  <BookOpen size={18} />
+                  {formData.statBlock ? 'Edit Stat Block' : 'Add Stat Block'}
+                </button>
+              </div>
             </div>
           )}
 
@@ -437,33 +696,72 @@ export default function EntityEdit() {
               </div>
               {ENTITY_SCHEMAS[formData.type].map(field => (
                 <div key={field.key} className={field.type === 'textarea' ? 'col-span-full' : ''}>
-                  {renderLabel(field.key, field.label)}
+                  {renderLabel(field.key, field.label, field.description)}
                   {field.type === 'text' && (
-                    <input
-                      type="text"
-                      value={formData.attributes?.[field.key] || ''}
-                      onChange={e => setFormData({ ...formData, attributes: { ...formData.attributes, [field.key]: e.target.value } })}
-                      className="w-full px-4 py-3 bg-stone-950/50 border border-stone-800 rounded-xl text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50 transition-all"
-                    />
+                    <>
+                      <AutoExpandingTextarea
+                        value={formData.attributes?.[field.key] || ''}
+                        onChange={e => setFormData({ ...formData, attributes: { ...formData.attributes, [field.key]: e.target.value } })}
+                        className="min-h-[52px]"
+                        list={`suggestions-${field.key}`}
+                      />
+                      <datalist id={`suggestions-${field.key}`}>
+                        {getSuggestions(field.key).map(val => (
+                          <option key={val} value={val} />
+                        ))}
+                      </datalist>
+                    </>
                   )}
                   {field.type === 'textarea' && (
-                    <textarea
+                    <AutoExpandingTextarea
                       value={formData.attributes?.[field.key] || ''}
                       onChange={e => setFormData({ ...formData, attributes: { ...formData.attributes, [field.key]: e.target.value } })}
-                      className="w-full px-4 py-3 bg-stone-950/50 border border-stone-800 rounded-xl text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50 transition-all min-h-[100px]"
+                      className="min-h-[100px]"
                     />
                   )}
                   {field.type === 'select' && field.options && (
-                    <select
+                    <div className="relative">
+                      <select
+                        value={otherFields.has(field.key) ? 'CUSTOM_OTHER' : (formData.attributes?.[field.key] || '')}
+                        onChange={e => {
+                          if (e.target.value === 'CUSTOM_OTHER') {
+                            setOtherFields(prev => new Set(prev).add(field.key));
+                          } else {
+                            setOtherFields(prev => {
+                              const next = new Set(prev);
+                              next.delete(field.key);
+                              return next;
+                            });
+                            setFormData({ ...formData, attributes: { ...formData.attributes, [field.key]: e.target.value } });
+                          }
+                        }}
+                        className="w-full px-4 py-3 bg-stone-950/50 border border-stone-800 rounded-xl text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50 transition-all appearance-none"
+                      >
+                        <option value="">Select...</option>
+                        {field.options.map(opt => (
+                          <option key={opt} value={opt}>{opt}</option>
+                        ))}
+                        <option value="CUSTOM_OTHER">Other...</option>
+                      </select>
+                      {otherFields.has(field.key) && (
+                        <div className="mt-2">
+                          <AutoExpandingTextarea
+                            placeholder="Enter custom value..."
+                            autoFocus
+                            onChange={e => setFormData({ ...formData, attributes: { ...formData.attributes, [field.key]: e.target.value } })}
+                            className="min-h-[52px]"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {field.type === 'entity-select' && (
+                    <SearchableDropdown
+                      options={availableLocations.filter(e => !field.targetType || e.type === field.targetType).map(e => ({ id: e.id, label: e.name, type: e.type }))}
                       value={formData.attributes?.[field.key] || ''}
-                      onChange={e => setFormData({ ...formData, attributes: { ...formData.attributes, [field.key]: e.target.value } })}
-                      className="w-full px-4 py-3 bg-stone-950/50 border border-stone-800 rounded-xl text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50 transition-all appearance-none"
-                    >
-                      <option value="">Select...</option>
-                      {field.options.map(opt => (
-                        <option key={opt} value={opt}>{opt}</option>
-                      ))}
-                    </select>
+                      onChange={val => setFormData({ ...formData, attributes: { ...formData.attributes, [field.key]: val } })}
+                      placeholder={`Select ${field.targetType || 'entity'}...`}
+                    />
                   )}
                   {field.type === 'boolean' && (
                     <label className="flex items-center gap-3 p-3 bg-stone-950/50 border border-stone-800 rounded-xl cursor-pointer hover:border-amber-500/50 transition-colors">
@@ -488,6 +786,10 @@ export default function EntityEdit() {
               value={formData.locationId || ''}
               onChange={(val) => setFormData({ ...formData, locationId: val })}
               placeholder="Select location..."
+              onCreateNew={(name) => {
+                setQuickCreateName(name);
+                setIsQuickCreateOpen(true);
+              }}
             />
           </div>
 
@@ -509,16 +811,15 @@ export default function EntityEdit() {
             </div>
             
             <div className="flex gap-2 mt-2">
-              <input
-                type="url"
+              <AutoExpandingTextarea
                 value={imageUrlInput}
                 onChange={(e) => setImageUrlInput(e.target.value)}
                 placeholder="Or paste a direct image URL (e.g., from Discord, Imgur)..."
-                className="flex-1 px-4 py-2 bg-stone-950/50 border border-stone-800 rounded-xl text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50 transition-all text-sm"
+                className="flex-1 text-sm min-h-[42px]"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
-                    handleAddImageUrl(e);
+                    handleAddImageUrl(e as any);
                   }
                 }}
               />
@@ -534,15 +835,26 @@ export default function EntityEdit() {
           </div>
 
           <div className="mb-6">
-            {renderLabel('content', 'Content (Markdown supported)')}
-            <textarea
-              required
-              rows={12}
-              value={formData.content}
-              onChange={e => setFormData({ ...formData, content: e.target.value })}
-              className="w-full px-4 py-3 bg-stone-950/50 border border-stone-800 rounded-xl text-stone-300 focus:outline-none focus:ring-2 focus:ring-amber-500/50 transition-all font-mono text-sm leading-relaxed"
-              placeholder="Write the details here..."
-            />
+            <div className="flex items-center justify-between mb-2">
+              {renderLabel('content', 'Content')}
+              <button
+                type="button"
+                onClick={() => setIsLinkModalOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1 bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-amber-400 rounded-lg text-xs font-medium transition-all border border-stone-700"
+              >
+                <LinkIcon size={14} />
+                Add Entity Link
+              </button>
+            </div>
+            <div data-color-mode="dark" className="rounded-xl overflow-hidden border border-stone-800">
+              <MDEditor
+                value={formData.content || ''}
+                onChange={val => setFormData({ ...formData, content: val || '' })}
+                height={400}
+                preview="edit"
+                className="!bg-stone-950/50 !border-none"
+              />
+            </div>
           </div>
 
           <div>
@@ -555,16 +867,104 @@ export default function EntityEdit() {
                 </span>
               ))}
             </div>
-            <input
-              type="text"
+            <AutoExpandingTextarea
               value={tagInput}
               onChange={e => setTagInput(e.target.value)}
               onKeyDown={addTag}
-              className="w-full px-4 py-3 bg-stone-950/50 border border-stone-800 rounded-xl text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50 transition-all"
+              className="min-h-[52px]"
               placeholder="Type a tag and press Enter..."
             />
           </div>
+
+          <div className="pt-6 border-t border-stone-800">
+            <h3 className="text-lg font-semibold text-stone-100 font-cinzel tracking-wider mb-4">Relationships</h3>
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <SearchableDropdown
+                  options={availableLocations.map(e => ({ id: e.id, label: e.name, type: e.type }))}
+                  value={relSearch}
+                  onChange={(val) => setRelSearch(val)}
+                  placeholder="Link to Faction, NPC, or Country..."
+                />
+                <div className="flex gap-2">
+                  <div className="flex-1 relative flex flex-col gap-2">
+                    <AutoExpandingTextarea
+                      value={relLabel}
+                      onChange={(e) => setRelLabel(e.target.value)}
+                      placeholder="This entity is... (e.g. Member)"
+                      className="min-h-[42px]"
+                      list="rel-labels"
+                    />
+                    <AutoExpandingTextarea
+                      value={relReverseLabel}
+                      onChange={(e) => setRelReverseLabel(e.target.value)}
+                      placeholder="Target entity is... (e.g. Faction)"
+                      className="min-h-[42px]"
+                      list="rel-labels"
+                    />
+                    <datalist id="rel-labels">
+                      {existingLabels.map(l => <option key={l} value={l} />)}
+                    </datalist>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!relSearch || !relLabel.trim() || !relReverseLabel.trim()}
+                    onClick={() => {
+                      if (relSearch && relLabel && relReverseLabel) {
+                        const target = availableLocations.find(e => e.id === relSearch);
+                        if (target) {
+                          setPendingRelationships([...pendingRelationships, { targetId: relSearch, label: relLabel, reverseLabel: relReverseLabel, targetName: target.name }]);
+                          setRelSearch('');
+                          setRelLabel('');
+                          setRelReverseLabel('');
+                        }
+                      }
+                    }}
+                    className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-sm font-medium transition-colors h-[42px] self-start disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {pendingRelationships.map((rel, idx) => (
+                  <div key={idx} className="flex items-center gap-2 px-3 py-1.5 bg-stone-800 border border-stone-700 rounded-lg text-sm">
+                    <span className="text-stone-400">{rel.label}:</span>
+                    <span className="text-amber-400 font-medium">{rel.targetName}</span>
+                    <button
+                      type="button"
+                      onClick={() => setPendingRelationships(pendingRelationships.filter((_, i) => i !== idx))}
+                      className="text-stone-500 hover:text-red-400 transition-colors"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
         </div>
+
+        {isDM && (
+          <div className="bg-stone-900/80 backdrop-blur-md border border-stone-800 rounded-2xl p-8 shadow-xl mb-6">
+            <div className="flex items-center gap-3 mb-6">
+              <Lock className="text-red-400" size={24} />
+              <h2 className="text-xl font-bold text-stone-100 font-cinzel tracking-wider">DM Secret Notes</h2>
+            </div>
+            <p className="text-stone-400 text-sm mb-6">
+              These notes are strictly for you. Players will never see this section, even if the entity is public.
+            </p>
+            <div data-color-mode="dark" className="rounded-xl overflow-hidden border border-red-900/30">
+              <MDEditor
+                value={formData.dmNotes || ''}
+                onChange={val => setFormData({ ...formData, dmNotes: val || '' })}
+                height={300}
+                preview="edit"
+                className="!bg-stone-950/50 !border-none"
+              />
+            </div>
+          </div>
+        )}
 
         {isDM && (
           <div className="bg-stone-900/80 backdrop-blur-md border border-stone-800 rounded-2xl p-8 shadow-xl">
@@ -585,11 +985,10 @@ export default function EntityEdit() {
                 {players.map(player => (
                   <div key={player.uid} className="p-4 bg-stone-950/50 border border-stone-800 rounded-xl">
                     <label className="block text-sm font-semibold text-stone-300 mb-2">{player.displayName}</label>
-                    <textarea
-                      rows={3}
+                    <AutoExpandingTextarea
                       value={formData.playerKnowledge?.[player.uid] || ''}
                       onChange={e => handleKnowledgeChange(player.uid, e.target.value)}
-                      className="w-full px-4 py-3 bg-stone-900/50 border border-stone-800 rounded-xl text-stone-300 focus:outline-none focus:ring-2 focus:ring-amber-500/50 transition-all text-sm"
+                      className="text-sm min-h-[80px]"
                       placeholder={`What does ${player.displayName} know?`}
                     />
                   </div>
@@ -599,6 +998,126 @@ export default function EntityEdit() {
           </div>
         )}
       </form>
+
+      <LinkModal
+        isOpen={isLinkModalOpen}
+        onClose={() => setIsLinkModalOpen(false)}
+        onInsert={handleInsertLink}
+        entities={availableLocations}
+        sourceEntityId={id && id !== 'new' ? id : undefined}
+        sourceEntityName={formData.name}
+      />
+
+      <QuickCreateModal
+        isOpen={isQuickCreateOpen}
+        onClose={() => setIsQuickCreateOpen(false)}
+        onCreated={handleQuickCreate}
+        initialName={quickCreateName}
+      />
+
+      {isStatBlockModalOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-stone-900 border border-stone-800 rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl">
+            <div className="flex items-center justify-between p-6 border-b border-stone-800">
+              <div>
+                <h2 className="text-xl font-cinzel font-bold text-stone-100">Stat Block</h2>
+                <p className="text-sm text-stone-400">Edit the stat block for {formData.name || 'this NPC'}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsStatBlockModalOpen(false)}
+                className="p-2 text-stone-400 hover:text-stone-100 hover:bg-stone-800 rounded-lg transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-6 flex-1 overflow-y-auto space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-stone-950/50 p-4 rounded-xl border border-stone-800">
+                <div>
+                  <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">Armor Class</label>
+                  <input type="text" value={formData.dndStats?.armorClass || ''} onChange={e => handleDndStatChange('armorClass', e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-1.5 text-sm text-stone-100 placeholder-stone-600 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none" placeholder="e.g. 16 (chain shirt, shield)" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">Hit Points</label>
+                  <input type="text" value={formData.dndStats?.hitPoints || ''} onChange={e => handleDndStatChange('hitPoints', e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-1.5 text-sm text-stone-100 placeholder-stone-600 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none" placeholder="e.g. 11 (2d8 + 2)" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">Speed</label>
+                  <input type="text" value={formData.dndStats?.speed || ''} onChange={e => handleDndStatChange('speed', e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-1.5 text-sm text-stone-100 placeholder-stone-600 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none" placeholder="e.g. 30 ft." />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-4 bg-stone-950/50 p-4 rounded-xl border border-stone-800">
+                {['str', 'dex', 'con', 'int', 'wis', 'cha'].map((stat) => (
+                  <div key={stat} className="text-center">
+                    <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">{stat}</label>
+                    <div className="flex flex-col items-center">
+                      <input 
+                        type="number" 
+                        value={formData.dndStats?.[stat as keyof DndStats] ?? 10} 
+                        onChange={e => handleDndStatChange(stat as keyof DndStats, parseInt(e.target.value) || 0)} 
+                        className="w-16 bg-stone-900 border border-stone-700 rounded-lg px-2 py-1 text-center text-lg font-bold text-amber-500 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none" 
+                      />
+                      <span className="text-sm text-stone-500 mt-1">
+                        {calculateModifier(Number(formData.dndStats?.[stat as keyof DndStats]) || 10)}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-stone-950/50 p-4 rounded-xl border border-stone-800">
+                <div>
+                  <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">Skills</label>
+                  <input type="text" value={formData.dndStats?.skills || ''} onChange={e => handleDndStatChange('skills', e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-1.5 text-sm text-stone-100 placeholder-stone-600 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none" placeholder="e.g. Perception +2" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">Senses</label>
+                  <input type="text" value={formData.dndStats?.senses || ''} onChange={e => handleDndStatChange('senses', e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-1.5 text-sm text-stone-100 placeholder-stone-600 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none" placeholder="e.g. Passive Perception 12" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">Languages</label>
+                  <input type="text" value={formData.dndStats?.languages || ''} onChange={e => handleDndStatChange('languages', e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-1.5 text-sm text-stone-100 placeholder-stone-600 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none" placeholder="e.g. Common" />
+                </div>
+                <div className="flex gap-4">
+                  <div className="flex-1">
+                    <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">Challenge</label>
+                    <input type="text" value={formData.dndStats?.challenge || ''} onChange={e => handleDndStatChange('challenge', e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-1.5 text-sm text-stone-100 placeholder-stone-600 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none" placeholder="e.g. 1/8 (25 XP)" />
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">Proficiency Bonus</label>
+                    <input type="text" value={formData.dndStats?.proficiencyBonus || ''} onChange={e => handleDndStatChange('proficiencyBonus', e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-1.5 text-sm text-stone-100 placeholder-stone-600 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none" placeholder="e.g. +2" />
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-stone-300 mb-2">Actions, Traits, & Description</label>
+                <div data-color-mode="dark" className="rounded-xl overflow-hidden border border-stone-800 min-h-[300px]">
+                  <MDEditor
+                    value={formData.statBlock || ''}
+                    onChange={val => setFormData({ ...formData, statBlock: val || '' })}
+                    height={300}
+                    preview="edit"
+                    className="!bg-stone-950/50 !border-none"
+                  />
+                </div>
+              </div>
+            </div>
+            
+            <div className="p-6 border-t border-stone-800 flex justify-end gap-3 bg-stone-950/50 rounded-b-2xl">
+              <button
+                type="button"
+                onClick={() => setIsStatBlockModalOpen(false)}
+                className="px-6 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl font-medium transition-colors"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

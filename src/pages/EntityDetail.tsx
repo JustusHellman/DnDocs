@@ -1,15 +1,17 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { doc, onSnapshot, deleteDoc, collection, getDocs, query, where, getDoc, setDoc, or } from 'firebase/firestore';
+import { doc, onSnapshot, deleteDoc, collection, getDocs, query, where, getDoc, setDoc, or, and } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Entity, User, OperationType, Relationship } from '../types';
+import { Entity, User, OperationType, Relationship, DndStats } from '../types';
 import { ENTITY_SCHEMAS } from '../utils/entitySchemas';
 import { handleFirestoreError } from '../utils/firebaseUtils';
 import { useAuth } from '../AuthContext';
-import { Edit, Trash2, ArrowLeft, Lock, Globe, Users, BookOpen, MapPin, Plus, X, ChevronRight, ChevronDown } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+import { Edit, Trash2, ArrowLeft, Lock, Globe, Users, BookOpen, MapPin, Plus, X, ChevronRight, ChevronDown, Info } from 'lucide-react';
+import MDEditor from '@uiw/react-md-editor';
 import CollapsibleSection from '../components/CollapsibleSection';
 import SearchableDropdown from '../components/SearchableDropdown';
+import QuickCreateModal from '../components/QuickCreateModal';
+import AutoExpandingTextarea from '../components/AutoExpandingTextarea';
 
 export default function EntityDetail() {
   const { id } = useParams<{ id: string }>();
@@ -23,9 +25,13 @@ export default function EntityDetail() {
   const [locatedHere, setLocatedHere] = useState<Entity[]>([]);
   const [allCampaignEntities, setAllCampaignEntities] = useState<Entity[]>([]);
   const [relationships, setRelationships] = useState<Relationship[]>([]);
+  const [ownerName, setOwnerName] = useState<string>('');
 
   // Modal state
   const [showRelModal, setShowRelModal] = useState(false);
+  const [isQuickCreateOpen, setIsQuickCreateOpen] = useState(false);
+  const [isStatBlockModalOpen, setIsStatBlockModalOpen] = useState(false);
+  const [quickCreateName, setQuickCreateName] = useState('');
   const [relTargetId, setRelTargetId] = useState('');
   const [relTargetIsMy, setRelTargetIsMy] = useState('');
   const [relIAmTargets, setRelIAmTargets] = useState('');
@@ -61,6 +67,16 @@ export default function EntityDetail() {
 
   const collapseAll = () => {
     setExpandedNodes(new Set());
+  };
+
+  const markdownComponents = {
+    a: ({ node, ...props }: any) => {
+      const href = props.href || '';
+      if (href.startsWith('/')) {
+        return <Link to={href} {...props} className="text-amber-400 hover:text-amber-300 underline decoration-amber-500/30 underline-offset-4" />;
+      }
+      return <a {...props} target="_blank" rel="noopener noreferrer" className="text-amber-400 hover:text-amber-300 underline decoration-amber-500/30 underline-offset-4" />;
+    }
   };
 
   const canViewField = (field: string) => {
@@ -99,11 +115,13 @@ export default function EntityDetail() {
             } else {
               allEntQ = query(
                 collection(db, 'entities'),
-                where('campaignId', '==', currentCampaign.id),
-                or(
-                  where('isPublic', '==', true),
-                  where('allowedPlayers', 'array-contains', user.uid),
-                  where('ownerId', '==', user.uid)
+                and(
+                  where('campaignId', '==', currentCampaign.id),
+                  or(
+                    where('isPublic', '==', true),
+                    where('allowedPlayers', 'array-contains', user.uid),
+                    where('ownerId', '==', user.uid)
+                  )
                 )
               );
             }
@@ -118,6 +136,14 @@ export default function EntityDetail() {
             const relsQ = query(collection(db, 'relationships'), where('campaignId', '==', currentCampaign.id), where('sourceId', '==', id));
             const relsSnap = await getDocs(relsQ);
             setRelationships(relsSnap.docs.map(d => d.data() as Relationship));
+
+            // Fetch owner name
+            if (entityData.ownerId) {
+              const ownerDoc = await getDoc(doc(db, 'users', entityData.ownerId));
+              if (ownerDoc.exists()) {
+                setOwnerName(ownerDoc.data().displayName);
+              }
+            }
           } catch (err) {
             console.error("Error fetching related data", err);
           }
@@ -232,6 +258,12 @@ export default function EntityDetail() {
     }
   };
 
+  const handleQuickCreate = (newEntity: Entity) => {
+    setAllEntities(prev => [...prev, newEntity]);
+    setRelTargetId(newEntity.id);
+    setIsQuickCreateOpen(false);
+  };
+
   if (loading) return <div className="text-center py-12 text-stone-500">Loading entity...</div>;
   if (!entity) return <div className="text-center py-12 text-red-500">Entity not found or you don't have permission to view it.</div>;
 
@@ -292,9 +324,9 @@ export default function EntityDetail() {
       </div>
 
       <div className="bg-stone-900/80 backdrop-blur-md border border-stone-800 rounded-2xl overflow-hidden shadow-xl mb-8">
-        <div className="p-8 border-b border-stone-800 flex items-start justify-between">
-          <div>
-            <div className="flex items-center gap-3 mb-2">
+        <div className="p-6 md:p-8 border-b border-stone-800 flex flex-col sm:flex-row sm:items-start justify-between gap-6">
+          <div className="flex-1 min-w-0">
+            <div className="flex flex-wrap items-center gap-3 mb-3">
               <span className="px-2.5 py-1 rounded-md text-xs font-bold bg-stone-800 text-stone-300 uppercase tracking-widest">
                 {entity.type}
               </span>
@@ -312,9 +344,31 @@ export default function EntityDetail() {
                   <Lock size={12} /> Secret
                 </span>
               )}
+              {ownerName && (
+                <div className="group relative flex items-center">
+                  <span className="flex items-center justify-center w-5 h-5 rounded-full bg-stone-800 text-stone-400 cursor-help hover:bg-stone-700 hover:text-stone-200 transition-colors">
+                    <Info size={12} />
+                  </span>
+                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-stone-800 text-stone-200 text-xs rounded-lg shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap border border-stone-700 z-50">
+                    Created by {ownerName}
+                  </div>
+                </div>
+              )}
             </div>
-            <h1 className="text-4xl font-black text-white tracking-tight mb-4">{entity.name}</h1>
+            <h1 className="text-3xl md:text-4xl font-black text-white tracking-tight mb-4 break-words">{entity.name}</h1>
             
+            {entity.type === 'npc' && entity.statBlock && canViewField('statBlock') && (
+              <div className="mb-4">
+                <button
+                  onClick={() => setIsStatBlockModalOpen(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-stone-800 hover:bg-stone-700 text-amber-400 hover:text-amber-300 rounded-lg transition-colors text-sm font-medium border border-stone-700"
+                >
+                  <BookOpen size={16} />
+                  View Stat Block
+                </button>
+              </div>
+            )}
+
             {entity.tags && entity.tags.length > 0 && canViewField('tags') && (
               <div className="flex flex-wrap gap-2">
                 {entity.tags.map(tag => (
@@ -327,20 +381,22 @@ export default function EntityDetail() {
           </div>
           
           {(isDM || (entity.type === 'note' && entity.ownerId === user?.uid)) && (
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 shrink-0">
               <Link
                 to={`/entity/${entity.id}/edit`}
-                className="p-2 bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-stone-100 rounded-lg transition-colors"
+                className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-stone-100 rounded-lg transition-colors text-sm font-medium"
                 title="Edit"
               >
-                <Edit size={20} />
+                <Edit size={18} />
+                <span className="sm:hidden lg:inline">Edit</span>
               </Link>
               <button
                 onClick={handleDelete}
-                className="p-2 bg-red-950/30 hover:bg-red-900/50 text-red-400 hover:text-red-300 border border-red-900/30 rounded-lg transition-colors"
+                className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 bg-red-950/30 hover:bg-red-900/50 text-red-400 hover:text-red-300 border border-red-900/30 rounded-lg transition-colors text-sm font-medium"
                 title="Delete"
               >
-                <Trash2 size={20} />
+                <Trash2 size={18} />
+                <span className="sm:hidden lg:inline">Delete</span>
               </button>
             </div>
           )}
@@ -357,11 +413,26 @@ export default function EntityDetail() {
                     const schema = ENTITY_SCHEMAS[entity.type]?.find(s => s.key === key);
                     const label = schema ? schema.label : key;
                     
+                    const isEntitySelect = schema?.type === 'entity-select';
+                    const targetEntity = isEntitySelect ? allCampaignEntities.find(e => e.id === value) : null;
+
                     return (
                       <div key={key} className={`bg-stone-950 rounded-xl p-4 border border-stone-800 ${schema?.type === 'textarea' ? 'col-span-full' : ''}`}>
                         <div className="text-xs font-bold text-stone-500 uppercase tracking-wider mb-1.5">{label}</div>
                         <div className="text-stone-300 whitespace-pre-wrap font-medium">
-                          {typeof value === 'boolean' ? (value ? 'Yes' : 'No') : String(value)}
+                          {isEntitySelect ? (
+                            targetEntity ? (
+                              <Link to={`/entity/${targetEntity.id}`} className="text-amber-400 hover:text-amber-300 underline decoration-amber-500/30 underline-offset-4">
+                                {targetEntity.name}
+                              </Link>
+                            ) : (
+                              <span className="text-stone-600 italic">Unknown Entity</span>
+                            )
+                          ) : typeof value === 'boolean' ? (
+                            value ? 'Yes' : 'No'
+                          ) : (
+                            String(value)
+                          )}
                         </div>
                       </div>
                     );
@@ -399,6 +470,17 @@ export default function EntityDetail() {
                     <div className="flex items-center justify-between mb-3">
                       <h3 className="text-sm font-semibold text-stone-500 uppercase tracking-wider">Located Here</h3>
                       <div className="flex items-center gap-3">
+                        {isDM && (
+                          <button 
+                            onClick={() => {
+                              setQuickCreateName('');
+                              setIsQuickCreateOpen(true);
+                            }}
+                            className="text-xs text-amber-400 hover:text-amber-300 font-medium transition-colors flex items-center gap-1"
+                          >
+                            <Plus size={12} /> Quick Create
+                          </button>
+                        )}
                         <button 
                           onClick={expandAll}
                           className="text-xs text-amber-400 hover:text-amber-300 font-medium transition-colors"
@@ -453,8 +535,8 @@ export default function EntityDetail() {
 
         <CollapsibleSection title="Content">
             {canViewField('content') ? (
-              <div className="prose prose-invert prose-stone max-w-none">
-                <ReactMarkdown>{entity.content}</ReactMarkdown>
+              <div data-color-mode="dark" className="prose prose-invert prose-stone max-w-none bg-transparent">
+                <MDEditor.Markdown source={entity.content} className="!bg-transparent" components={markdownComponents} />
               </div>
             ) : (
               <div className="p-6 bg-stone-950 border border-stone-800 rounded-xl text-center">
@@ -480,8 +562,8 @@ export default function EntityDetail() {
                     <Link to={`/entity/${note.id}`} className="font-medium text-amber-400 hover:text-amber-300 text-lg block mb-2">
                       {note.name}
                     </Link>
-                    <div className="prose prose-invert prose-stone max-w-none text-sm line-clamp-3">
-                      <ReactMarkdown>{note.content}</ReactMarkdown>
+                    <div data-color-mode="dark" className="prose prose-invert prose-stone max-w-none text-sm line-clamp-3 bg-transparent">
+                      <MDEditor.Markdown source={note.content} className="!bg-transparent" components={markdownComponents} />
                     </div>
                   </div>
                 ))}
@@ -493,7 +575,19 @@ export default function EntityDetail() {
 
       {/* Player Knowledge Section */}
       {isDM ? (
-        <CollapsibleSection title="Player Knowledge">
+        <>
+          {entity.dmNotes && (
+            <div className="bg-stone-900/80 backdrop-blur-md border border-red-900/50 rounded-2xl p-8 shadow-xl mb-6">
+              <div className="flex items-center gap-3 mb-6">
+                <Lock className="text-red-400" size={24} />
+                <h2 className="text-xl font-bold text-stone-100 font-cinzel tracking-wider">DM Secret Notes</h2>
+              </div>
+              <div data-color-mode="dark" className="prose prose-invert prose-stone max-w-none bg-transparent">
+                <MDEditor.Markdown source={entity.dmNotes} className="!bg-transparent" components={markdownComponents} />
+              </div>
+            </div>
+          )}
+          <CollapsibleSection title="Player Knowledge">
           <div className="p-2">
             {players.length === 0 ? (
               <p className="text-stone-500 text-sm">No players found in the database.</p>
@@ -528,11 +622,12 @@ export default function EntityDetail() {
             )}
           </div>
         </CollapsibleSection>
+        </>
       ) : myKnowledge ? (
         <CollapsibleSection title="What You Know">
           <div className="p-2">
-            <div className="prose prose-invert prose-amber max-w-none text-amber-200">
-              <ReactMarkdown>{myKnowledge}</ReactMarkdown>
+            <div data-color-mode="dark" className="prose prose-invert prose-amber max-w-none text-amber-200 bg-transparent">
+              <MDEditor.Markdown source={myKnowledge} className="!bg-transparent" components={markdownComponents} />
             </div>
           </div>
         </CollapsibleSection>
@@ -554,6 +649,10 @@ export default function EntityDetail() {
                   value={relTargetId}
                   onChange={setRelTargetId}
                   placeholder="Select an entity..."
+                  onCreateNew={(name) => {
+                    setQuickCreateName(name);
+                    setIsQuickCreateOpen(true);
+                  }}
                 />
               </div>
               
@@ -563,18 +662,140 @@ export default function EntityDetail() {
 
               <div>
                 <label className="block text-sm font-medium text-stone-400 mb-1">Target is my...</label>
-                <input required type="text" list="relationship-labels" placeholder="e.g. Friend, Father, Enemy" value={relTargetIsMy} onChange={e => setRelTargetIsMy(e.target.value)} className="w-full px-4 py-2 bg-stone-950 border border-stone-800 rounded-xl text-stone-100 focus:ring-2 focus:ring-amber-500/50 outline-none" />
+                <AutoExpandingTextarea
+                  required
+                  list="relationship-labels"
+                  placeholder="e.g. Friend, Father, Enemy"
+                  value={relTargetIsMy}
+                  onChange={e => setRelTargetIsMy(e.target.value)}
+                  className="min-h-[42px]"
+                />
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-stone-400 mb-1">I am Target's...</label>
-                <input required type="text" list="relationship-labels" placeholder="e.g. Friend, Son, Enemy" value={relIAmTargets} onChange={e => setRelIAmTargets(e.target.value)} className="w-full px-4 py-2 bg-stone-950 border border-stone-800 rounded-xl text-stone-100 focus:ring-2 focus:ring-amber-500/50 outline-none" />
+                <AutoExpandingTextarea
+                  required
+                  list="relationship-labels"
+                  placeholder="e.g. Friend, Son, Enemy"
+                  value={relIAmTargets}
+                  onChange={e => setRelIAmTargets(e.target.value)}
+                  className="min-h-[42px]"
+                />
               </div>
 
               <button type="submit" disabled={savingRel} className="w-full py-3 bg-amber-600/20 hover:bg-amber-600/30 border border-amber-500/50 disabled:opacity-50 text-amber-500 rounded-xl font-medium transition-colors mt-6">
                 {savingRel ? 'Saving...' : 'Save Relationship'}
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      <QuickCreateModal
+        isOpen={isQuickCreateOpen}
+        onClose={() => setIsQuickCreateOpen(false)}
+        onCreated={handleQuickCreate}
+        initialName={quickCreateName}
+        sourceEntityId={entity?.id}
+        sourceEntityName={entity?.name}
+        initialLocationId={entity?.id}
+      />
+
+      {isStatBlockModalOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-stone-900 border border-stone-800 rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl">
+            <div className="flex items-center justify-between p-6 border-b border-stone-800">
+              <div>
+                <h2 className="text-xl font-cinzel font-bold text-stone-100">Stat Block</h2>
+                <p className="text-sm text-stone-400">{entity?.name || 'NPC'}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsStatBlockModalOpen(false)}
+                className="p-2 text-stone-400 hover:text-stone-100 hover:bg-stone-800 rounded-lg transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-6 flex-1 overflow-y-auto">
+              {entity?.dndStats && (
+                <div className="mb-8 space-y-4 text-sm">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    {entity.dndStats.armorClass && (
+                      <div>
+                        <span className="text-amber-500 font-bold">Armor Class</span> <span className="text-stone-300">{entity.dndStats.armorClass}</span>
+                      </div>
+                    )}
+                    {entity.dndStats.hitPoints && (
+                      <div>
+                        <span className="text-amber-500 font-bold">Hit Points</span> <span className="text-stone-300">{entity.dndStats.hitPoints}</span>
+                      </div>
+                    )}
+                    {entity.dndStats.speed && (
+                      <div>
+                        <span className="text-amber-500 font-bold">Speed</span> <span className="text-stone-300">{entity.dndStats.speed}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="border-y border-amber-900/50 py-4">
+                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-4 text-center">
+                      {['str', 'dex', 'con', 'int', 'wis', 'cha'].map((stat) => {
+                        const score = entity.dndStats?.[stat as keyof DndStats] as number || 10;
+                        const mod = Math.floor((score - 10) / 2);
+                        const modStr = mod >= 0 ? `+${mod}` : `${mod}`;
+                        return (
+                          <div key={stat}>
+                            <div className="font-bold text-amber-500 uppercase">{stat}</div>
+                            <div className="text-stone-300">{score} ({modStr})</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    {entity.dndStats.skills && (
+                      <div><span className="text-amber-500 font-bold">Skills</span> <span className="text-stone-300">{entity.dndStats.skills}</span></div>
+                    )}
+                    {entity.dndStats.senses && (
+                      <div><span className="text-amber-500 font-bold">Senses</span> <span className="text-stone-300">{entity.dndStats.senses}</span></div>
+                    )}
+                    {entity.dndStats.languages && (
+                      <div><span className="text-amber-500 font-bold">Languages</span> <span className="text-stone-300">{entity.dndStats.languages}</span></div>
+                    )}
+                    {(entity.dndStats.challenge || entity.dndStats.proficiencyBonus) && (
+                      <div className="flex gap-6 mt-2">
+                        {entity.dndStats.challenge && (
+                          <div><span className="text-amber-500 font-bold">Challenge</span> <span className="text-stone-300">{entity.dndStats.challenge}</span></div>
+                        )}
+                        {entity.dndStats.proficiencyBonus && (
+                          <div><span className="text-amber-500 font-bold">Proficiency Bonus</span> <span className="text-stone-300">{entity.dndStats.proficiencyBonus}</span></div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {entity?.statBlock && (
+                <div data-color-mode="dark" className="prose prose-invert prose-stone max-w-none bg-transparent">
+                  <MDEditor.Markdown source={entity.statBlock} className="!bg-transparent" components={markdownComponents} />
+                </div>
+              )}
+            </div>
+            
+            <div className="p-6 border-t border-stone-800 flex justify-end gap-3 bg-stone-950/50 rounded-b-2xl">
+              <button
+                type="button"
+                onClick={() => setIsStatBlockModalOpen(false)}
+                className="px-6 py-2.5 bg-stone-800 hover:bg-stone-700 text-white rounded-xl font-medium transition-colors"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

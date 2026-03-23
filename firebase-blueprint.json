@@ -15,11 +15,11 @@
     },
     "Entity": {
       "title": "Entity",
-      "description": "A generic entry in the DnD database (city, npc, area, etc.).",
+      "description": "A generic entry in the DnD database (npc, settlement, landmark, etc.).",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
-        "type": { "type": "string", "enum": ["city", "npc", "area", "lore", "item", "other"] },
+        "type": { "type": "string", "enum": ["npc", "settlement", "landmark", "country", "faction", "shop", "item", "note"] },
         "name": { "type": "string" },
         "content": { "type": "string", "description": "Markdown content of the entity." },
         "tags": { 

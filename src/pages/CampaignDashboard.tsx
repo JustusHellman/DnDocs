@@ -5,6 +5,7 @@ import { Campaign, OperationType } from '../types';
 import { useAuth } from '../AuthContext';
 import { handleFirestoreError } from '../utils/firebaseUtils';
 import { Plus, LogIn, Swords, LogOut } from 'lucide-react';
+import AutoExpandingTextarea from '../components/AutoExpandingTextarea';
 
 export default function CampaignDashboard() {
   const { user, setCurrentCampaign, logout } = useAuth();
@@ -121,12 +122,12 @@ export default function CampaignDashboard() {
   return (
     <div className="min-h-screen text-stone-100 p-6 md:p-12 bg-transparent">
       <div className="max-w-4xl mx-auto">
-        <div className="flex items-center justify-between mb-12">
-          <div>
-            <h1 className="text-4xl font-display font-bold text-amber-500 mb-2">Your Campaigns</h1>
-            <p className="text-stone-400">Select a campaign to continue, or start a new adventure.</p>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 mb-12">
+          <div className="min-w-0">
+            <h1 className="text-3xl md:text-4xl font-display font-bold text-amber-500 mb-2 truncate">Your Campaigns</h1>
+            <p className="text-stone-400 text-sm md:text-base">Select a campaign to continue, or start a new adventure.</p>
           </div>
-          <button onClick={logout} className="flex items-center gap-2 text-stone-400 hover:text-amber-500 transition-colors">
+          <button onClick={logout} className="flex items-center justify-center gap-2 px-4 py-2 bg-stone-900/50 border border-stone-800 rounded-xl text-stone-400 hover:text-amber-500 transition-colors text-sm font-medium shrink-0">
             <LogOut size={18} /> Sign Out
           </button>
         </div>
@@ -144,12 +145,11 @@ export default function CampaignDashboard() {
               <Plus className="text-amber-400" /> Create Campaign
             </h2>
             <form onSubmit={handleCreateCampaign}>
-              <input
-                type="text"
+              <AutoExpandingTextarea
                 placeholder="Campaign Name"
                 value={newCampaignName}
                 onChange={e => setNewCampaignName(e.target.value)}
-                className="w-full px-4 py-3 bg-stone-950/80 border border-stone-800/50 rounded-xl text-stone-100 mb-4 focus:ring-2 focus:ring-amber-500 outline-none"
+                className="mb-4 focus:ring-2 focus:ring-amber-500 outline-none min-h-[52px]"
                 required
               />
               <button
@@ -168,12 +168,11 @@ export default function CampaignDashboard() {
               <LogIn className="text-emerald-400" /> Join Campaign
             </h2>
             <form onSubmit={handleJoinCampaign}>
-              <input
-                type="text"
+              <AutoExpandingTextarea
                 placeholder="Enter Join Code"
                 value={joinCode}
                 onChange={e => setJoinCode(e.target.value)}
-                className="w-full px-4 py-3 bg-stone-950/80 border border-stone-800/50 rounded-xl text-stone-100 mb-4 focus:ring-2 focus:ring-emerald-500 outline-none uppercase"
+                className="mb-4 focus:ring-2 focus:ring-emerald-500 outline-none uppercase min-h-[52px]"
                 required
               />
               <button

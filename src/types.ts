@@ -12,16 +12,34 @@ export interface Campaign {
   id: string;
   name: string;
   dmId: string;
+  coDms?: string[];
   players: string[];
   joinCode: string;
   createdAt: string;
 }
 
-export type EntityType = 'npc' | 'settlement' | 'landmark' | 'country' | 'faction' | 'shop' | 'item' | 'note';
+export type EntityType = 'npc' | 'settlement' | 'landmark' | 'country' | 'faction' | 'shop' | 'item' | 'note' | 'geography' | 'quest' | 'monster';
 
 export interface FieldPermission {
   isPublic: boolean;
   allowedPlayers: string[];
+}
+
+export interface DndStats {
+  armorClass: string;
+  hitPoints: string;
+  speed: string;
+  str: number;
+  dex: number;
+  con: number;
+  int: number;
+  wis: number;
+  cha: number;
+  skills: string;
+  senses: string;
+  languages: string;
+  challenge: string;
+  proficiencyBonus: string;
 }
 
 export interface Entity {
@@ -40,6 +58,9 @@ export interface Entity {
   gender?: string | null;
   imageUrls?: string[];
   attributes?: Record<string, any>;
+  statBlock?: string;
+  dndStats?: DndStats;
+  dmNotes?: string;
   createdAt: string;
   updatedAt: string;
 }

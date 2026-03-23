@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
-import { Search, Users, Map as MapIcon, Castle, BookOpen, Package, LogOut, X, QrCode, ArrowLeftRight, Globe, Home, MapPin, Building, Flag, FileText } from 'lucide-react';
+import { Search, Users, Map as MapIcon, Castle, BookOpen, Package, LogOut, X, QrCode, ArrowLeftRight, Globe, Home, MapPin, Building, Flag, FileText, Scroll, Wrench, Skull } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import clsx from 'clsx';
 
@@ -16,16 +16,23 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
 
   const navItems = [
     { to: '/search', icon: Search, label: 'Global Search' },
-    { to: '/entities/npc', icon: Users, label: 'NPCs' },
-    { to: '/entities/settlement', icon: Castle, label: 'Settlements' },
-    { to: '/entities/landmark', icon: MapPin, label: 'Landmarks' },
-    { to: '/entities/country', icon: Globe, label: 'Countries' },
-    { to: '/entities/faction', icon: Flag, label: 'Factions' },
-    { to: '/entities/shop', icon: Building, label: 'Shops' },
-    { to: '/entities/item', icon: Package, label: 'Items' },
+    { to: '/map', icon: MapIcon, label: 'World Map' },
+    { to: '/entities/quest', icon: Scroll, label: 'Quests' },
     { to: '/entities/note', icon: FileText, label: 'Notes' },
+    { to: '/entities/item', icon: Package, label: 'Items' },
+    { to: '/entities/npc', icon: Users, label: 'NPCs' },
+    { to: '/entities/monster', icon: Skull, label: 'Monsters' },
+    { to: '/entities/shop', icon: Building, label: 'Shops' },
+    { to: '/entities/landmark', icon: MapPin, label: 'Landmarks' },
+    { to: '/entities/faction', icon: Flag, label: 'Factions' },
+    { to: '/entities/settlement', icon: Castle, label: 'Settlements' },
+    { to: '/entities/country', icon: Globe, label: 'Countries' },
     { to: '/players', icon: Users, label: 'Players' },
   ];
+
+  if (isDM) {
+    navItems.push({ to: '/tools', icon: Wrench, label: 'DM Tools' });
+  }
 
   const handleLinkClick = () => {
     setIsOpen(false);
@@ -142,7 +149,7 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
             </p>
             
             <div className="flex justify-center mb-8 p-4 bg-white rounded-xl">
-              <QRCodeSVG value={`${window.location.origin}/join/${currentCampaign.joinCode}`} size={200} />
+              <QRCodeSVG value={`${window.location.origin}${import.meta.env.BASE_URL}join/${currentCampaign.joinCode}`} size={200} />
             </div>
             
             <div className="text-center">

@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { collection, query, where, onSnapshot, or } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, or, and } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Entity, OperationType } from '../types';
 import { handleFirestoreError } from '../utils/firebaseUtils';
 import { useAuth } from '../AuthContext';
 import { Plus, Search, Map, Castle, Users, BookOpen, Package, FileText, Globe, MapPin, Building, Flag } from 'lucide-react';
+import AutoExpandingTextarea from '../components/AutoExpandingTextarea';
 
 const iconMap: Record<string, any> = {
   npc: Users,
@@ -39,12 +40,14 @@ export default function EntityList() {
     } else {
       const q = query(
         collection(db, 'entities'),
-        where('campaignId', '==', currentCampaign.id),
-        where('type', '==', type),
-        or(
-          where('isPublic', '==', true),
-          where('allowedPlayers', 'array-contains', user.uid),
-          where('ownerId', '==', user.uid)
+        and(
+          where('campaignId', '==', currentCampaign.id),
+          where('type', '==', type),
+          or(
+            where('isPublic', '==', true),
+            where('allowedPlayers', 'array-contains', user.uid),
+            where('ownerId', '==', user.uid)
+          )
         )
       );
       const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -80,18 +83,18 @@ export default function EntityList() {
 
   return (
     <div className="max-w-5xl mx-auto">
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-3xl font-display font-bold text-amber-500 mb-2 capitalize flex items-center gap-3">
-            <Icon className="text-amber-400" size={32} />
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 mb-8">
+        <div className="min-w-0">
+          <h1 className="text-3xl font-display font-bold text-amber-500 mb-2 capitalize flex items-center gap-3 truncate">
+            <Icon className="text-amber-400 shrink-0" size={32} />
             {type}s
           </h1>
-          <p className="text-stone-400">Browse and manage all {type}s in the database.</p>
+          <p className="text-stone-400 text-sm md:text-base">Browse and manage all {type}s in the database.</p>
         </div>
         {(isDM || type === 'note') && (
           <Link
             to={`/entity/new?type=${type}`}
-            className="flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-500 text-stone-950 rounded-lg font-bold transition-colors"
+            className="flex items-center justify-center gap-2 px-6 py-3 sm:py-2 bg-amber-600 hover:bg-amber-500 text-stone-950 rounded-xl font-bold transition-all shadow-lg shadow-amber-900/20 active:scale-95 shrink-0"
           >
             <Plus size={20} />
             New {type}
@@ -103,12 +106,11 @@ export default function EntityList() {
         <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
           <Search className="h-5 w-5 text-stone-500" />
         </div>
-        <input
-          type="text"
+        <AutoExpandingTextarea
           placeholder={`Search ${type}s...`}
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full pl-10 pr-4 py-3 bg-stone-900/60 backdrop-blur-sm border border-stone-800/50 rounded-xl text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
+          className="pl-10 pr-4 py-3 bg-stone-900/60 backdrop-blur-sm border border-stone-800/50 rounded-xl text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all min-h-[52px]"
         />
       </div>
 

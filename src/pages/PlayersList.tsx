@@ -1,15 +1,16 @@
 import { useState, useEffect } from 'react';
-import { collection, query, onSnapshot, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, onSnapshot, doc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { db } from '../firebase';
 import { User, OperationType } from '../types';
 import { handleFirestoreError } from '../utils/firebaseUtils';
-import { Users, Shield, User as UserIcon, Edit2, X, Save } from 'lucide-react';
+import { Users, Shield, User as UserIcon, Edit2, X, Save, ArrowUpCircle, ArrowDownCircle } from 'lucide-react';
 import { useAuth } from '../AuthContext';
+import AutoExpandingTextarea from '../components/AutoExpandingTextarea';
 
 export default function PlayersList() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
-  const { currentCampaign, user: currentUser } = useAuth();
+  const { currentCampaign, user: currentUser, isOwner } = useAuth();
   
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [photoURLInput, setPhotoURLInput] = useState('');
@@ -43,6 +44,17 @@ export default function PlayersList() {
     }
   };
 
+  const toggleCoDM = async (userId: string, isCurrentlyCoDM: boolean) => {
+    if (!currentCampaign || !isOwner) return;
+    try {
+      await updateDoc(doc(db, 'campaigns', currentCampaign.id), {
+        coDms: isCurrentlyCoDM ? arrayRemove(userId) : arrayUnion(userId)
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `campaigns/${currentCampaign.id}`);
+    }
+  };
+
   const openProfileEdit = () => {
     setPhotoURLInput(currentUser?.photoURL || '');
     setIsEditingProfile(true);
@@ -61,42 +73,63 @@ export default function PlayersList() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {users.map(user => (
-          <div key={user.uid} className="bg-stone-900/80 backdrop-blur-md border border-stone-800/50 rounded-2xl p-6 flex items-center gap-5 shadow-xl relative group">
-            {user.photoURL ? (
-              <img src={user.photoURL} alt={user.displayName} className="w-16 h-16 rounded-full object-cover border border-amber-900/50 shrink-0" referrerPolicy="no-referrer" />
-            ) : (
-              <div className="w-16 h-16 rounded-full bg-stone-800 border border-stone-700 flex items-center justify-center text-amber-500 font-bold text-2xl shrink-0">
-                {user.displayName?.[0] || '?'}
+        {users.map(user => {
+          const isUserOwner = currentCampaign?.dmId === user.uid;
+          const isUserCoDM = currentCampaign?.coDms?.includes(user.uid) ?? false;
+          
+          return (
+            <div key={user.uid} className="bg-stone-900/80 backdrop-blur-md border border-stone-800/50 rounded-2xl p-6 flex items-center gap-5 shadow-xl relative group">
+              {user.photoURL ? (
+                <img src={user.photoURL} alt={user.displayName} className="w-16 h-16 rounded-full object-cover border border-amber-900/50 shrink-0" referrerPolicy="no-referrer" />
+              ) : (
+                <div className="w-16 h-16 rounded-full bg-stone-800 border border-stone-700 flex items-center justify-center text-amber-500 font-bold text-2xl shrink-0">
+                  {user.displayName?.[0] || '?'}
+                </div>
+              )}
+              <div className="flex-1 min-w-0 pr-10">
+                <div className="flex items-center gap-2 mb-1">
+                  <h3 className="text-lg font-bold text-stone-100 truncate">{user.displayName}</h3>
+                  {isUserOwner ? (
+                    <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-950/30 text-amber-500 border border-amber-900/30 uppercase tracking-wider shrink-0">
+                      <Shield size={10} /> Owner
+                    </span>
+                  ) : isUserCoDM ? (
+                    <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-950/30 text-amber-400 border border-amber-900/30 uppercase tracking-wider shrink-0">
+                      <Shield size={10} /> Co-DM
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-stone-800 text-stone-400 border border-stone-700 uppercase tracking-wider shrink-0">
+                      <UserIcon size={10} /> Player
+                    </span>
+                  )}
+                </div>
+                <p className="text-stone-500 text-sm truncate">{user.email}</p>
+                <p className="text-stone-600 text-xs mt-2">Joined {new Date(user.createdAt).toLocaleDateString()}</p>
               </div>
-            )}
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-1">
-                <h3 className="text-lg font-bold text-stone-100 truncate">{user.displayName}</h3>
-                {currentCampaign?.dmId === user.uid ? (
-                  <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-950/30 text-amber-500 border border-amber-900/30 uppercase tracking-wider shrink-0">
-                    <Shield size={10} /> DM
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-stone-800 text-stone-400 border border-stone-700 uppercase tracking-wider shrink-0">
-                    <UserIcon size={10} /> Player
-                  </span>
+              
+              <div className="absolute top-4 right-4 flex items-center gap-2 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                {isOwner && !isUserOwner && (
+                  <button
+                    onClick={() => toggleCoDM(user.uid, isUserCoDM)}
+                    className="p-2 text-stone-500 hover:text-amber-400 hover:bg-stone-800/50 rounded-lg transition-colors"
+                    title={isUserCoDM ? "Demote to Player" : "Promote to Co-DM"}
+                  >
+                    {isUserCoDM ? <ArrowDownCircle size={16} /> : <ArrowUpCircle size={16} />}
+                  </button>
+                )}
+                {currentUser?.uid === user.uid && (
+                  <button 
+                    onClick={openProfileEdit}
+                    className="p-2 text-stone-500 hover:text-amber-400 hover:bg-stone-800/50 rounded-lg transition-colors"
+                    title="Edit Profile"
+                  >
+                    <Edit2 size={16} />
+                  </button>
                 )}
               </div>
-              <p className="text-stone-500 text-sm truncate">{user.email}</p>
-              <p className="text-stone-600 text-xs mt-2">Joined {new Date(user.createdAt).toLocaleDateString()}</p>
             </div>
-            {currentUser?.uid === user.uid && (
-              <button 
-                onClick={openProfileEdit}
-                className="absolute top-4 right-4 p-2 text-stone-500 hover:text-amber-400 hover:bg-stone-800/50 rounded-lg transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
-                title="Edit Profile"
-              >
-                <Edit2 size={16} />
-              </button>
-            )}
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {isEditingProfile && (
@@ -112,12 +145,11 @@ export default function PlayersList() {
             
             <div className="mb-6">
               <label className="block text-sm font-medium text-stone-400 mb-2">Profile Picture URL</label>
-              <input
-                type="text"
+              <AutoExpandingTextarea
                 value={photoURLInput}
                 onChange={(e) => setPhotoURLInput(e.target.value)}
                 placeholder="https://example.com/image.png"
-                className="w-full px-4 py-3 bg-stone-950 border border-stone-800 rounded-xl text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50 transition-all placeholder:text-stone-700"
+                className="min-h-[52px] placeholder:text-stone-700"
               />
               <p className="text-xs text-stone-500 mt-2">Paste a direct link to an image to use as your profile picture.</p>
             </div>
