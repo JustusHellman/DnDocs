@@ -357,7 +357,7 @@ export default function EntityDetail() {
             </div>
             <h1 className="text-3xl md:text-4xl font-black text-white tracking-tight mb-4 break-words">{entity.name}</h1>
             
-            {entity.type === 'npc' && entity.statBlock && canViewField('statBlock') && (
+            {(entity.type === 'npc' || entity.type === 'monster') && entity.statBlock && canViewField('statBlock') && (
               <div className="mb-4">
                 <button
                   onClick={() => setIsStatBlockModalOpen(true)}

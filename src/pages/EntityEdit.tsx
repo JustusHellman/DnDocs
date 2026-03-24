@@ -303,6 +303,13 @@ export default function EntityEdit() {
         updatedAt: now,
       };
 
+      // Remove undefined values to prevent Firestore errors
+      Object.keys(entityData).forEach(key => {
+        if ((entityData as any)[key] === undefined) {
+          delete (entityData as any)[key];
+        }
+      });
+
       await setDoc(doc(db, 'entities', entityId), entityData);
 
       // Save pending relationships
@@ -685,6 +692,20 @@ export default function EntityEdit() {
                   {formData.statBlock ? 'Edit Stat Block' : 'Add Stat Block'}
                 </button>
               </div>
+            </div>
+          )}
+
+          {formData.type === 'monster' && (
+            <div className="mb-6">
+              {renderLabel('statBlock', 'Stat Block')}
+              <button
+                type="button"
+                onClick={() => setIsStatBlockModalOpen(true)}
+                className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-stone-950/50 border border-stone-800 rounded-xl text-stone-300 hover:text-amber-400 hover:border-amber-900/50 transition-all font-medium"
+              >
+                <BookOpen size={18} />
+                {formData.statBlock ? 'Edit Stat Block' : 'Add Stat Block'}
+              </button>
             </div>
           )}
 
