@@ -26,6 +26,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [currentCampaign, setCurrentCampaign] = useState<Campaign | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+
+  // Persist current campaign to localStorage
+  useEffect(() => {
+    if (currentCampaign) {
+      localStorage.setItem('currentCampaignId', currentCampaign.id);
+    } else if (isAuthReady && !restoring) {
+      // Only remove if we are actually ready and not currently trying to restore
+      localStorage.removeItem('currentCampaignId');
+    }
+  }, [currentCampaign, isAuthReady, restoring]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (fUser) => {
@@ -35,18 +47,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const userRef = doc(db, 'users', fUser.uid);
           const userSnap = await getDoc(userRef);
           
+          let userData: User;
           if (!userSnap.exists()) {
-            // Create new user
-            const newUser: User = {
+            userData = {
               uid: fUser.uid,
               displayName: fUser.displayName || fUser.email?.split('@')[0] || 'Unknown Player',
               email: fUser.email || '',
               createdAt: new Date().toISOString(),
             };
-            await setDoc(userRef, newUser);
-            setUser(newUser);
+            await setDoc(userRef, userData);
           } else {
-            setUser(userSnap.data() as User);
+            userData = userSnap.data() as User;
+          }
+          setUser(userData);
+
+          // Restore campaign from localStorage
+          const savedCampaignId = localStorage.getItem('currentCampaignId');
+          if (savedCampaignId) {
+            setRestoring(true);
+            try {
+              const campSnap = await getDoc(doc(db, 'campaigns', savedCampaignId));
+              if (campSnap.exists()) {
+                setCurrentCampaign(campSnap.data() as Campaign);
+              }
+            } catch (e) {
+              console.error("Failed to restore campaign:", e);
+            } finally {
+              setRestoring(false);
+            }
           }
 
           // Listen to user changes
@@ -56,15 +84,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             }
           }, (err) => handleFirestoreError(err, OperationType.GET, `users/${fUser.uid}`));
 
+          setIsAuthReady(true);
           setLoading(false);
           return () => unsubUser();
         } catch (error) {
           handleFirestoreError(error, OperationType.GET, `users/${fUser.uid}`);
+          setIsAuthReady(true);
           setLoading(false);
         }
       } else {
         setUser(null);
         setCurrentCampaign(null);
+        setIsAuthReady(true);
         setLoading(false);
       }
     });

@@ -62,7 +62,7 @@ export default function EntityEdit() {
       const prompt = `A high quality fantasy digital art illustration of a ${formData.type} named ${formData.name}. ${descriptionPart} D&D style, high detail.`;
       
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
+        model: 'gemini-3.1-flash-image-preview',
         contents: {
           parts: [{ text: prompt }],
         },
@@ -113,11 +113,12 @@ export default function EntityEdit() {
         }
       }
     } catch (err: any) {
-      console.error("Error generating image:", err);
+      console.error("Full image generation error object:", JSON.stringify(err, null, 2));
+      console.error("Error message:", err.message);
       if (err.message && (err.message.includes("429") || err.message.toLowerCase().includes("quota") || err.message.toLowerCase().includes("exhausted"))) {
-        setImageError("You have reached your daily image generation limit. Please try again tomorrow!");
+        setImageError("Quota Exceeded (429): Your API key has hit its daily limit for image generation. Try again tomorrow or check your Google AI Studio quota.");
       } else {
-        setImageError(err.message || "Failed to generate image. Please try again.");
+        setImageError(`Generation Failed: ${err.message || "Unknown error"}. (Check browser console for details)`);
       }
     } finally {
       setGeneratingImage(false);
