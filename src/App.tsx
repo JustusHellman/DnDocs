@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, HashRouter } from 'react-router-dom';
 import { AuthProvider, useAuth } from './AuthContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import Sidebar from './components/Sidebar';
@@ -198,7 +198,7 @@ export default function App() {
   return (
     <ErrorBoundary>
       <AuthProvider>
-        <Router basename={import.meta.env.BASE_URL}>
+        <HashRouter>
           <Routes>
             <Route path="/" element={<AuthRoute><CampaignRoute><Navigate to="/search" replace /></CampaignRoute></AuthRoute>} />
             <Route path="/search" element={<AuthRoute><CampaignRoute><GlobalSearch /></CampaignRoute></AuthRoute>} />
@@ -211,7 +211,7 @@ export default function App() {
             <Route path="/map" element={<AuthRoute><CampaignRoute><WorldMap /></CampaignRoute></AuthRoute>} />
             <Route path="/join/:code" element={<AuthRoute><JoinCampaign /></AuthRoute>} />
           </Routes>
-        </Router>
+        </HashRouter>
       </AuthProvider>
     </ErrorBoundary>
   );

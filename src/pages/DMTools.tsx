@@ -41,7 +41,15 @@ export default function DMTools() {
     setImageError('');
     setGeneratedImageUrl('');
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+      
+      if (!apiKey) {
+        setImageError("Gemini API Key is missing. Please check your GitHub Secrets and workflow configuration.");
+        setGeneratingImage(false);
+        return;
+      }
+
+      const ai = new GoogleGenAI({ apiKey });
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash-image',
         contents: {

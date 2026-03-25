@@ -47,10 +47,10 @@ export default function EntityEdit() {
     setGeneratingImage(true);
     setImageError('');
     try {
-      const apiKey = process.env.GEMINI_API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY;
+      const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
       
       if (!apiKey) {
-        setImageError("Gemini API Key is missing. Please check your environment variables.");
+        setImageError("Gemini API Key is missing. Please check your GitHub Secrets and workflow configuration.");
         setGeneratingImage(false);
         return;
       }
