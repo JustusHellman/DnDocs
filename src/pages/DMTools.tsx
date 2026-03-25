@@ -5,7 +5,7 @@ import { collection, setDoc, doc } from 'firebase/firestore';
 import { generateUniqueId } from '../utils/slugify';
 import { Entity } from '../types';
 import { useNavigate } from 'react-router-dom';
-import { Dice5, Save, RefreshCw, Image as ImageIcon, Download } from 'lucide-react';
+import { Dice5, Save, RefreshCw, Image as ImageIcon, Download, ShieldCheck, AlertCircle, List } from 'lucide-react';
 import { GoogleGenAI } from '@google/genai';
 
 const TAVERN_NAMES_1 = ['The Prancing', 'The Rusty', 'The Golden', 'The Sleeping', 'The Laughing', 'The Drunken', 'The Blind', 'The Black', 'The White', 'The Red'];
@@ -31,9 +31,65 @@ export default function DMTools() {
   const [imageError, setImageError] = useState('');
   const [imagePrompt, setImagePrompt] = useState('');
 
+  // API Debugger State
+  const [checkingApi, setCheckingApi] = useState(false);
+  const [apiStatus, setApiStatus] = useState<{
+    keyFound: boolean;
+    textOk: boolean;
+    models: string[];
+    error?: string;
+  } | null>(null);
+
   if (!isDM || !currentCampaign || !user) {
     return <div className="text-stone-400">You must be a DM to access these tools.</div>;
   }
+
+  const checkApiStatus = async () => {
+    setCheckingApi(true);
+    setApiStatus(null);
+    try {
+      const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        setApiStatus({ keyFound: false, textOk: false, models: [], error: "No API Key found in environment." });
+        return;
+      }
+
+      const ai = new GoogleGenAI({ apiKey });
+      
+      // 1. Test Text Generation
+      let textOk = false;
+      try {
+        const textRes = await ai.models.generateContent({
+          model: 'gemini-2.0-flash',
+          contents: "Say 'API OK'",
+        });
+        textOk = textRes.text?.includes('API OK') || false;
+      } catch (e) {
+        console.error("Text test failed:", e);
+      }
+
+      // 2. List Models
+      let models: string[] = [];
+      try {
+        const modelList = await ai.models.list();
+        // The SDK returns a Pager, we access the models array via type assertion to avoid lint errors
+        const modelsArray = (modelList as any).models || [];
+        models = modelsArray.map((m: any) => m.name.replace('models/', ''));
+      } catch (e) {
+        console.error("Model list failed:", e);
+      }
+
+      setApiStatus({
+        keyFound: true,
+        textOk,
+        models,
+      });
+    } catch (err: any) {
+      setApiStatus({ keyFound: true, textOk: false, models: [], error: err.message });
+    } finally {
+      setCheckingApi(false);
+    }
+  };
 
   const generateImage = async () => {
     if (!imagePrompt.trim()) return;
@@ -316,6 +372,76 @@ export default function DMTools() {
                   <li>You can upload it to any entity (NPC, Item, Location) via the "Edit" page.</li>
                   <li>To use it as a link preview, upload it to the <code className="text-amber-500 bg-amber-900/20 px-1 rounded">public</code> folder in the code editor and name it <code className="text-amber-500 bg-amber-900/20 px-1 rounded">og-image.png</code>.</li>
                 </ol>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* API Debugger Section */}
+        <div className="bg-stone-900/80 backdrop-blur-md border border-stone-800 rounded-2xl p-6 shadow-xl md:col-span-2">
+          <h2 className="text-xl font-bold text-amber-500 mb-4 font-cinzel flex items-center gap-2">
+            <ShieldCheck size={24} /> API Status & Model Discovery
+          </h2>
+          <p className="text-sm text-stone-400 mb-6">
+            If image generation is failing with "Quota Exceeded (429)", use this tool to see exactly what models your API key is allowed to use.
+          </p>
+
+          <button 
+            onClick={checkApiStatus} 
+            disabled={checkingApi}
+            className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-stone-800 hover:bg-stone-700 text-stone-200 rounded-xl font-medium transition-all disabled:opacity-50 mb-6"
+          >
+            {checkingApi ? (
+              <><RefreshCw size={18} className="animate-spin" /> Checking API Status...</>
+            ) : (
+              <><ShieldCheck size={18} /> Check API Status</>
+            )}
+          </button>
+
+          {apiStatus && (
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className={`p-4 rounded-xl border ${apiStatus.keyFound ? 'bg-emerald-900/20 border-emerald-900/50 text-emerald-400' : 'bg-red-900/20 border-red-900/50 text-red-400'} flex items-center gap-3`}>
+                  {apiStatus.keyFound ? <ShieldCheck size={20} /> : <AlertCircle size={20} />}
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-wider">API Key</p>
+                    <p className="text-sm">{apiStatus.keyFound ? 'Found in Environment' : 'Missing'}</p>
+                  </div>
+                </div>
+                <div className={`p-4 rounded-xl border ${apiStatus.textOk ? 'bg-emerald-900/20 border-emerald-900/50 text-emerald-400' : 'bg-red-900/20 border-red-900/50 text-red-400'} flex items-center gap-3`}>
+                  {apiStatus.textOk ? <ShieldCheck size={20} /> : <AlertCircle size={20} />}
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-wider">Text Generation</p>
+                    <p className="text-sm">{apiStatus.textOk ? 'Working (Gemini 2.0)' : 'Failed'}</p>
+                  </div>
+                </div>
+              </div>
+
+              {apiStatus.error && (
+                <div className="p-4 bg-red-900/20 border border-red-900/50 text-red-400 rounded-xl text-sm flex items-start gap-3">
+                  <AlertCircle size={20} className="shrink-0" />
+                  <p>{apiStatus.error}</p>
+                </div>
+              )}
+
+              <div>
+                <h3 className="text-sm font-bold text-stone-300 mb-3 flex items-center gap-2 uppercase tracking-wider">
+                  <List size={16} /> Available Models ({apiStatus.models.length})
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {apiStatus.models.length > 0 ? (
+                    apiStatus.models.map(m => (
+                      <div key={m} className={`p-2 rounded-lg border text-xs font-mono ${m.includes('image') ? 'bg-amber-900/20 border-amber-900/50 text-amber-400 font-bold' : 'bg-stone-950 border-stone-800 text-stone-400'}`}>
+                        {m}
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-stone-500 text-sm italic">No models found or list failed.</p>
+                  )}
+                </div>
+                <p className="text-[10px] text-stone-500 mt-4 italic">
+                  Note: If you see models in this list but they still return 429 errors, it means Google has restricted your account's quota for those specific models (often due to regional restrictions or billing status).
+                </p>
               </div>
             </div>
           )}
