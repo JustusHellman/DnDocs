@@ -163,7 +163,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const isDM = isOwner || (currentCampaign?.coDms?.includes(user?.uid || '') ?? false);
 
   return (
-    <AuthContext.Provider value={{ user, firebaseUser, loading, login, loginWithEmail, registerWithEmail, logout, currentCampaign, setCurrentCampaign, isDM, isOwner }}>
+    <AuthContext.Provider value={{ 
+      user, 
+      firebaseUser, 
+      loading: loading || restoring, // Keep loading true while restoring campaign
+      login, 
+      loginWithEmail, 
+      registerWithEmail, 
+      logout, 
+      currentCampaign, 
+      setCurrentCampaign, 
+      isDM, 
+      isOwner 
+    }}>
       {children}
     </AuthContext.Provider>
   );
