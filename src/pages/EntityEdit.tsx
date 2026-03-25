@@ -47,7 +47,15 @@ export default function EntityEdit() {
     setGeneratingImage(true);
     setImageError('');
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const apiKey = process.env.GEMINI_API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY;
+      
+      if (!apiKey) {
+        setImageError("Gemini API Key is missing. Please check your environment variables.");
+        setGeneratingImage(false);
+        return;
+      }
+
+      const ai = new GoogleGenAI({ apiKey });
       const descriptionPart = customImagePrompt.trim() 
         ? customImagePrompt.trim() 
         : (formData.content ? formData.content.substring(0, 300) : '');
@@ -669,30 +677,32 @@ export default function EntityEdit() {
 
   return (
     <div className="max-w-4xl mx-auto pb-12">
-      <div className="sticky top-0 z-40 -mx-6 px-6 md:-mx-10 md:px-10 -mt-6 md:-mt-10 pt-6 md:pt-10 pb-4 bg-stone-950/90 backdrop-blur-md border-b border-stone-800/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 shadow-xl">
-        <button 
-          onClick={() => {
-            if (window.history.state && window.history.state.idx > 0) {
-              navigate(-1);
-            } else if (id && id !== 'new') {
-              navigate(`/entity/${id}`, { replace: true });
-            } else {
-              navigate(`/entities/${formData.type}`, { replace: true });
-            }
-          }} 
-          className="flex items-center justify-center gap-2 px-4 py-2 text-stone-400 hover:text-stone-100 transition-colors text-sm font-medium bg-stone-900/50 border border-stone-800 rounded-lg sm:bg-transparent sm:border-0"
-        >
-          <ArrowLeft size={16} />
-          Cancel
-        </button>
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="flex items-center justify-center gap-2 px-6 py-3 sm:py-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded-lg font-bold sm:font-medium transition-all shadow-lg shadow-amber-900/20 active:scale-95"
-        >
-          <Save size={18} />
-          {saving ? 'Saving...' : 'Save Entity'}
-        </button>
+      <div className="sticky top-0 z-40 -mx-6 px-6 md:-mx-10 md:px-10 -mt-6 md:-mt-10 pt-6 md:pt-10 pb-0 bg-stone-950/90 backdrop-blur-md border-b border-stone-800/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8 shadow-xl">
+        <div className="flex items-center justify-between w-full pb-4">
+          <button 
+            onClick={() => {
+              if (window.history.state && window.history.state.idx > 0) {
+                navigate(-1);
+              } else if (id && id !== 'new') {
+                navigate(`/entity/${id}`, { replace: true });
+              } else {
+                navigate(`/entities/${formData.type}`, { replace: true });
+              }
+            }} 
+            className="flex items-center justify-center gap-2 px-4 py-2 text-stone-400 hover:text-stone-100 transition-colors text-sm font-medium bg-stone-900/50 border border-stone-800 rounded-lg sm:bg-transparent sm:border-0"
+          >
+            <ArrowLeft size={16} />
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex items-center justify-center gap-2 px-6 py-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded-lg font-bold sm:font-medium transition-all shadow-lg shadow-amber-900/20 active:scale-95"
+          >
+            <Save size={18} />
+            {saving ? 'Saving...' : 'Save Entity'}
+          </button>
+        </div>
       </div>
 
       <form onSubmit={handleSave} className="space-y-8">
