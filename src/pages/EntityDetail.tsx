@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { doc, onSnapshot, deleteDoc, collection, getDocs, query, where, getDoc, setDoc, or, and } from 'firebase/firestore';
+import { doc, onSnapshot, deleteDoc, collection, getDocs, query, where, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Entity, User, OperationType, Relationship, DndStats } from '../types';
 import { ENTITY_SCHEMAS } from '../utils/entitySchemas';
 import { handleFirestoreError } from '../utils/firebaseUtils';
 import { useAuth } from '../AuthContext';
+import { useEntities } from '../hooks/useEntities';
 import { Edit, Trash2, ArrowLeft, Lock, Globe, Users, BookOpen, MapPin, Plus, X, ChevronRight, ChevronDown, Info } from 'lucide-react';
 import MDEditor from '@uiw/react-md-editor';
 import CollapsibleSection from '../components/CollapsibleSection';
@@ -17,6 +18,7 @@ export default function EntityDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { isDM, user, currentCampaign } = useAuth();
+  const { entities: allEntitiesData, loading: entitiesLoading } = useEntities();
   const [entity, setEntity] = useState<Entity | null>(null);
   const [players, setPlayers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -41,6 +43,22 @@ export default function EntityDetail() {
 
   // Expanded nodes for LocationTree
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [isZoomed, setIsZoomed] = useState(false);
+
+  useEffect(() => {
+    if (selectedImage) {
+      setIsZoomed(false);
+    }
+  }, [selectedImage]);
+
+  useEffect(() => {
+    if (!entitiesLoading) {
+      setAllCampaignEntities(allEntitiesData);
+      setAllEntities(allEntitiesData);
+      setLocatedHere(allEntitiesData.filter(e => e.locationId === id));
+    }
+  }, [allEntitiesData, entitiesLoading, id]);
 
   const toggleNode = (nodeId: string) => {
     setExpandedNodes(prev => {
@@ -107,30 +125,6 @@ export default function EntityDetail() {
             } else {
               setLocationEntity(null);
             }
-
-            // Fetch all campaign entities for the location tree
-            let allEntQ;
-            if (isDM) {
-              allEntQ = query(collection(db, 'entities'), where('campaignId', '==', currentCampaign.id));
-            } else {
-              allEntQ = query(
-                collection(db, 'entities'),
-                and(
-                  where('campaignId', '==', currentCampaign.id),
-                  or(
-                    where('isPublic', '==', true),
-                    where('allowedPlayers', 'array-contains', user.uid),
-                    where('ownerId', '==', user.uid)
-                  )
-                )
-              );
-            }
-            const allEntSnap = await getDocs(allEntQ);
-            const allEnts = allEntSnap.docs.map(d => d.data() as Entity);
-            setAllCampaignEntities(allEnts);
-
-            // Set located here for a quick check if it has children
-            setLocatedHere(allEnts.filter(e => e.locationId === id));
 
             // Fetch relationships
             const relsQ = query(collection(db, 'relationships'), where('campaignId', '==', currentCampaign.id), where('sourceId', '==', id));
@@ -357,7 +351,7 @@ export default function EntityDetail() {
             </div>
             <h1 className="text-3xl md:text-4xl font-black text-white tracking-tight mb-4 break-words">{entity.name}</h1>
             
-            {(entity.type === 'npc' || entity.type === 'monster') && entity.statBlock && canViewField('statBlock') && (
+            {(entity.type === 'npc' || entity.type === 'monster') && (entity.statBlock || entity.dndStats) && canViewField('statBlock') && (
               <div className="mb-4">
                 <button
                   onClick={() => setIsStatBlockModalOpen(true)}
@@ -445,9 +439,13 @@ export default function EntityDetail() {
               <CollapsibleSection title="Images & Maps">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {entity.imageUrls.map((url, index) => (
-                    <a key={index} href={url} target="_blank" rel="noopener noreferrer" className="block rounded-xl overflow-hidden border border-stone-800 bg-stone-950 aspect-video hover:border-amber-500/50 transition-colors">
+                    <button 
+                      key={index} 
+                      onClick={() => setSelectedImage(url)}
+                      className="block w-full rounded-xl overflow-hidden border border-stone-800 bg-stone-950 aspect-video hover:border-amber-500/50 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500/50"
+                    >
                       <img src={url} alt={`${entity.name} image ${index + 1}`} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                    </a>
+                    </button>
                   ))}
                 </div>
               </CollapsibleSection>
@@ -796,6 +794,35 @@ export default function EntityDetail() {
                 Close
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {selectedImage && (
+        <div 
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 p-4 backdrop-blur-md overflow-hidden"
+          onClick={() => setSelectedImage(null)}
+        >
+          <button 
+            className="absolute top-4 right-4 z-10 p-2 text-stone-400 hover:text-white bg-stone-900/50 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500"
+            onClick={() => setSelectedImage(null)}
+            aria-label="Close image"
+          >
+            <X size={24} />
+          </button>
+          <div 
+            className={`w-full h-full overflow-auto flex ${isZoomed ? 'items-start justify-start cursor-zoom-out' : 'items-center justify-center cursor-zoom-in'}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsZoomed(!isZoomed);
+            }}
+          >
+            <img 
+              src={selectedImage} 
+              alt="Fullscreen view" 
+              className={`transition-all duration-300 origin-top-left ${isZoomed ? 'w-[200vw] md:w-[150vw] max-w-none h-auto' : 'max-w-full max-h-full object-contain rounded-lg shadow-2xl'}`}
+              referrerPolicy="no-referrer"
+            />
           </div>
         </div>
       )}

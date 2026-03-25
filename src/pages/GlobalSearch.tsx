@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, or, and } from 'firebase/firestore';
-import { db } from '../firebase';
 import { Entity, OperationType, EntityType } from '../types';
 import { handleFirestoreError } from '../utils/firebaseUtils';
 import { useAuth } from '../AuthContext';
+import { useEntities } from '../hooks/useEntities';
 import { Search, Map, Castle, Users, BookOpen, Package, FileText, Globe, MapPin, Building, Flag, X as XIcon, Scroll, Skull } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import clsx from 'clsx';
@@ -30,42 +29,10 @@ export default function GlobalSearch() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedTypes, setSelectedTypes] = useState<EntityType[]>([]);
   const [selectedLocationId, setSelectedLocationId] = useState<string>('');
-  const [entities, setEntities] = useState<Entity[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { entities, loading, error } = useEntities();
+  const [retryCount, setRetryCount] = useState(0);
 
   const entityTypes: EntityType[] = ENTITY_TYPES_ORDERED.map(t => t.value as EntityType);
-
-  useEffect(() => {
-    if (!user || !currentCampaign) return;
-
-    if (isDM) {
-      const q = query(collection(db, 'entities'), where('campaignId', '==', currentCampaign.id));
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const data = snapshot.docs.map(doc => doc.data() as Entity);
-        setEntities(data);
-        setLoading(false);
-      }, (error) => handleFirestoreError(error, OperationType.LIST, 'entities'));
-      return () => unsubscribe();
-    } else {
-      const q = query(
-        collection(db, 'entities'),
-        and(
-          where('campaignId', '==', currentCampaign.id),
-          or(
-            where('isPublic', '==', true),
-            where('allowedPlayers', 'array-contains', user.uid),
-            where('ownerId', '==', user.uid)
-          )
-        )
-      );
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const data = snapshot.docs.map(doc => doc.data() as Entity);
-        setEntities(data);
-        setLoading(false);
-      }, (error) => handleFirestoreError(error, OperationType.LIST, 'entities'));
-      return () => unsubscribe();
-    }
-  }, [user, isDM, currentCampaign]);
 
   const canViewField = (entity: Entity, field: string) => {
     if (isDM) return true;
@@ -176,12 +143,25 @@ export default function GlobalSearch() {
       </div>
 
       {loading ? (
-        <div className="text-center py-12 text-stone-500">Loading database...</div>
+        <div className="flex flex-col items-center justify-center py-24 text-stone-500">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-amber-500 mb-4"></div>
+          <p className="text-lg font-medium">Consulting the archives...</p>
+        </div>
+      ) : error ? (
+        <div className="text-center py-12 px-6 bg-red-950/20 border border-red-900/30 rounded-xl">
+          <p className="text-red-400 mb-4">{error}</p>
+          <button
+            onClick={() => setRetryCount(prev => prev + 1)}
+            className="px-4 py-2 bg-stone-800 hover:bg-stone-700 text-stone-200 rounded-lg transition-colors"
+          >
+            Retry Connection
+          </button>
+        </div>
       ) : (
         <div className="space-y-4">
           {filteredEntities.length === 0 ? (
             <div className="text-center py-12 text-stone-500 bg-stone-900/40 backdrop-blur-sm rounded-xl border border-stone-800/50">
-              No results found for "{searchTerm}"
+              Nothing to see here
             </div>
           ) : (
             filteredEntities.map(entity => {

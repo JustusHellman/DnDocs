@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { collection, query, where, onSnapshot, or, and } from 'firebase/firestore';
-import { db } from '../firebase';
 import { Entity, OperationType } from '../types';
 import { handleFirestoreError } from '../utils/firebaseUtils';
 import { useAuth } from '../AuthContext';
+import { useEntities } from '../hooks/useEntities';
 import { Plus, Search, Map, Castle, Users, BookOpen, Package, FileText, Globe, MapPin, Building, Flag } from 'lucide-react';
 import AutoExpandingTextarea from '../components/AutoExpandingTextarea';
 
@@ -22,42 +21,14 @@ const iconMap: Record<string, any> = {
 export default function EntityList() {
   const { type } = useParams<{ type: string }>();
   const { user, isDM, currentCampaign } = useAuth();
+  const { entities: allEntities, loading } = useEntities();
   const [entities, setEntities] = useState<Entity[]>([]);
-  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
-    if (!type || !user || !currentCampaign) return;
-    
-    if (isDM) {
-      const q = query(collection(db, 'entities'), where('campaignId', '==', currentCampaign.id));
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const data = snapshot.docs.map(doc => doc.data() as Entity);
-        setEntities(data.filter(e => e.type === type));
-        setLoading(false);
-      }, (error) => handleFirestoreError(error, OperationType.LIST, 'entities'));
-      return () => unsubscribe();
-    } else {
-      const q = query(
-        collection(db, 'entities'),
-        and(
-          where('campaignId', '==', currentCampaign.id),
-          where('type', '==', type),
-          or(
-            where('isPublic', '==', true),
-            where('allowedPlayers', 'array-contains', user.uid),
-            where('ownerId', '==', user.uid)
-          )
-        )
-      );
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const data = snapshot.docs.map(doc => doc.data() as Entity);
-        setEntities(data);
-        setLoading(false);
-      }, (error) => handleFirestoreError(error, OperationType.LIST, 'entities'));
-      return () => unsubscribe();
-    }
-  }, [type, user, isDM, currentCampaign]);
+    if (loading || !type) return;
+    setEntities(allEntities.filter(e => e.type === type));
+  }, [allEntities, type, loading]);
 
   const canViewField = (entity: Entity, field: string) => {
     if (isDM) return true;

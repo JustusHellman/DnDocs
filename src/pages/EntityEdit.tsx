@@ -1,13 +1,15 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { doc, getDoc, setDoc, collection, getDocs, query, where, or, and } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Entity, EntityType, User, OperationType, FieldPermission } from '../types';
+import { Entity, EntityType, User, OperationType, FieldPermission, DndStats } from '../types';
 import { ENTITY_SCHEMAS, ENTITY_HIERARCHY, ENTITY_TYPES_ORDERED } from '../utils/entitySchemas';
 import { handleFirestoreError } from '../utils/firebaseUtils';
 import { generateUniqueId } from '../utils/slugify';
 import { useAuth } from '../AuthContext';
-import { ArrowLeft, Save, Globe, Lock, Users, Image as ImageIcon, X, Link as LinkIcon, BookOpen } from 'lucide-react';
+import { useEntities } from '../hooks/useEntities';
+import { ArrowLeft, Save, Globe, Lock, Users, Image as ImageIcon, X, Link as LinkIcon, BookOpen, RefreshCw, Upload } from 'lucide-react';
+import { GoogleGenAI } from '@google/genai';
 import clsx from 'clsx';
 import SearchableDropdown from '../components/SearchableDropdown';
 import FieldPermissionToggle from '../components/FieldPermissionToggle';
@@ -23,6 +25,7 @@ export default function EntityEdit() {
   
   const navigate = useNavigate();
   const { user, isDM, currentCampaign } = useAuth();
+  const { entities: allEntities, loading: entitiesLoading } = useEntities();
   
   const [loading, setLoading] = useState(id ? true : false);
   const [saving, setSaving] = useState(false);
@@ -31,6 +34,91 @@ export default function EntityEdit() {
   const [isQuickCreateOpen, setIsQuickCreateOpen] = useState(false);
   const [isStatBlockModalOpen, setIsStatBlockModalOpen] = useState(false);
   const [quickCreateName, setQuickCreateName] = useState('');
+  
+  const [generatingImage, setGeneratingImage] = useState(false);
+  const [imageError, setImageError] = useState('');
+  const [customImagePrompt, setCustomImagePrompt] = useState('');
+
+  const generateImage = async () => {
+    if (!formData.name) {
+      setImageError("Please enter a name first to generate an image.");
+      return;
+    }
+    setGeneratingImage(true);
+    setImageError('');
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const descriptionPart = customImagePrompt.trim() 
+        ? customImagePrompt.trim() 
+        : (formData.content ? formData.content.substring(0, 300) : '');
+      const prompt = `A high quality fantasy digital art illustration of a ${formData.type} named ${formData.name}. ${descriptionPart} D&D style, high detail.`;
+      
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-image',
+        contents: {
+          parts: [{ text: prompt }],
+        },
+        config: {
+          imageConfig: {
+            aspectRatio: "1:1"
+          }
+        },
+      });
+
+      for (const part of response.candidates?.[0]?.content?.parts || []) {
+        if (part.inlineData) {
+          const base64Data = `data:image/png;base64,${part.inlineData.data}`;
+          
+          // Compress the image to avoid Firestore 1MB limit
+          const compressedBase64 = await new Promise<string>((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => {
+              const canvas = document.createElement('canvas');
+              const maxWidth = 512;
+              let width = img.width;
+              let height = img.height;
+
+              if (width > maxWidth) {
+                height = Math.round((height * maxWidth) / width);
+                width = maxWidth;
+              }
+
+              canvas.width = width;
+              canvas.height = height;
+              const ctx = canvas.getContext('2d');
+              if (!ctx) {
+                resolve(base64Data);
+                return;
+              }
+              ctx.drawImage(img, 0, 0, width, height);
+              resolve(canvas.toDataURL('image/jpeg', 0.8));
+            };
+            img.onerror = reject;
+            img.src = base64Data;
+          });
+
+          setFormData(prev => ({
+            ...prev,
+            imageUrls: [...(prev.imageUrls || []), compressedBase64]
+          }));
+          break;
+        }
+      }
+    } catch (err: any) {
+      console.error("Error generating image:", err);
+      if (err.message && (err.message.includes("429") || err.message.toLowerCase().includes("quota") || err.message.toLowerCase().includes("exhausted"))) {
+        setImageError("You have reached your daily image generation limit. Please try again tomorrow!");
+      } else {
+        setImageError(err.message || "Failed to generate image. Please try again.");
+      }
+    } finally {
+      setGeneratingImage(false);
+    }
+  };
+
+  useEffect(() => {
+    setAvailableLocations(allEntities.filter(e => e.id !== id));
+  }, [allEntities, id]);
 
   const handleQuickCreate = (newEntity: Entity) => {
     setAvailableLocations(prev => [...prev, newEntity]);
@@ -38,18 +126,30 @@ export default function EntityEdit() {
     setIsQuickCreateOpen(false);
   };
   
-  const [formData, setFormData] = useState<Partial<Entity>>({
-    type: defaultType,
-    name: '',
-    content: '',
-    tags: [],
-    isPublic: false,
-    playerKnowledge: {},
-    locationId: searchParams.get('locationId') || '',
-    gender: '',
-    imageUrls: [],
-    attributes: {},
-    fieldPermissions: {},
+  const [formData, setFormData] = useState<Partial<Entity>>(() => {
+    // Initialize with default values from schema
+    const initialAttributes: Record<string, any> = {};
+    if (ENTITY_SCHEMAS[defaultType]) {
+      ENTITY_SCHEMAS[defaultType].forEach(field => {
+        if (field.defaultValue !== undefined) {
+          initialAttributes[field.key] = field.defaultValue;
+        }
+      });
+    }
+
+    return {
+      type: defaultType,
+      name: '',
+      content: '',
+      tags: [],
+      isPublic: false,
+      playerKnowledge: {},
+      locationId: searchParams.get('locationId') || '',
+      gender: '',
+      imageUrls: [],
+      attributes: initialAttributes,
+      fieldPermissions: {},
+    };
   });
   
   const [tagInput, setTagInput] = useState('');
@@ -93,15 +193,17 @@ export default function EntityEdit() {
   };
 
   const typePriority: Record<EntityType, EntityType[]> = {
-    npc: ['settlement', 'landmark', 'faction', 'country', 'geography', 'shop', 'note', 'npc', 'item'],
-    item: ['npc', 'shop', 'settlement', 'landmark', 'faction', 'country', 'geography', 'note', 'item'],
-    settlement: ['country', 'geography', 'landmark', 'faction', 'note', 'settlement', 'npc', 'shop', 'item'],
-    landmark: ['country', 'geography', 'settlement', 'faction', 'note', 'landmark', 'npc', 'shop', 'item'],
-    country: ['geography', 'note', 'country', 'settlement', 'landmark', 'faction', 'npc', 'shop', 'item'],
-    faction: ['settlement', 'country', 'geography', 'landmark', 'note', 'faction', 'npc', 'shop', 'item'],
-    shop: ['settlement', 'landmark', 'country', 'geography', 'faction', 'note', 'shop', 'npc', 'item'],
-    note: ['note', 'npc', 'settlement', 'landmark', 'country', 'geography', 'faction', 'shop', 'item'],
-    geography: ['geography', 'country', 'note', 'settlement', 'landmark', 'faction', 'npc', 'shop', 'item'],
+    npc: ['settlement', 'landmark', 'faction', 'country', 'geography', 'shop', 'note', 'npc', 'item', 'monster', 'quest'],
+    item: ['npc', 'shop', 'settlement', 'landmark', 'faction', 'country', 'geography', 'note', 'item', 'monster', 'quest'],
+    settlement: ['country', 'geography', 'landmark', 'faction', 'note', 'settlement', 'npc', 'shop', 'item', 'monster', 'quest'],
+    landmark: ['country', 'geography', 'settlement', 'faction', 'note', 'landmark', 'npc', 'shop', 'item', 'monster', 'quest'],
+    country: ['geography', 'note', 'country', 'settlement', 'landmark', 'faction', 'npc', 'shop', 'item', 'monster', 'quest'],
+    faction: ['settlement', 'country', 'geography', 'landmark', 'note', 'faction', 'npc', 'shop', 'item', 'monster', 'quest'],
+    shop: ['settlement', 'landmark', 'country', 'geography', 'faction', 'note', 'shop', 'npc', 'item', 'monster', 'quest'],
+    note: ['note', 'npc', 'settlement', 'landmark', 'country', 'geography', 'faction', 'shop', 'item', 'monster', 'quest'],
+    geography: ['geography', 'country', 'note', 'settlement', 'landmark', 'faction', 'npc', 'shop', 'item', 'monster', 'quest'],
+    monster: ['monster', 'npc', 'settlement', 'landmark', 'faction', 'country', 'geography', 'shop', 'note', 'item', 'quest'],
+    quest: ['quest', 'npc', 'settlement', 'landmark', 'faction', 'country', 'geography', 'shop', 'note', 'item', 'monster'],
   };
 
   const dropdownOptions = availableLocations
@@ -185,33 +287,6 @@ export default function EntityEdit() {
       }
     };
     fetchLabels();
-
-    const fetchLocations = async () => {
-      try {
-        let q;
-        if (isDM) {
-          q = query(collection(db, 'entities'), where('campaignId', '==', currentCampaign.id));
-        } else {
-          q = query(
-            collection(db, 'entities'),
-            and(
-              where('campaignId', '==', currentCampaign.id),
-              or(
-                where('isPublic', '==', true),
-                where('allowedPlayers', 'array-contains', user.uid),
-                where('ownerId', '==', user.uid)
-              )
-            )
-          );
-        }
-        const snap = await getDocs(q);
-        const locs = snap.docs.map(d => d.data() as Entity).filter(e => e.id !== id);
-        setAvailableLocations(locs);
-      } catch (error) {
-        handleFirestoreError(error, OperationType.LIST, 'entities');
-      }
-    };
-    fetchLocations();
 
     if (id && id !== 'new') {
       const fetchEntity = async () => {
@@ -399,6 +474,59 @@ export default function EntityEdit() {
     setImageUrlInput('');
   };
 
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const base64Data = event.target?.result as string;
+      if (!base64Data) return;
+
+      try {
+        // Compress the image to avoid Firestore 1MB limit
+        const compressedBase64 = await new Promise<string>((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const maxWidth = 800;
+            let width = img.width;
+            let height = img.height;
+
+            if (width > maxWidth) {
+              height = Math.round((height * maxWidth) / width);
+              width = maxWidth;
+            }
+
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+              resolve(base64Data);
+              return;
+            }
+            ctx.drawImage(img, 0, 0, width, height);
+            resolve(canvas.toDataURL('image/jpeg', 0.8));
+          };
+          img.onerror = reject;
+          img.src = base64Data;
+        });
+
+        setFormData(prev => ({
+          ...prev,
+          imageUrls: [...(prev.imageUrls || []), compressedBase64]
+        }));
+      } catch (err) {
+        console.error("Error processing image:", err);
+        setImageError("Failed to process the uploaded image.");
+      }
+    };
+    reader.readAsDataURL(file);
+    
+    // Reset the input so the same file can be uploaded again if needed
+    e.target.value = '';
+  };
+
   const handleFieldPermissionChange = (field: string, permission: FieldPermission) => {
     setFormData(prev => {
       // If a field is shared with specific players, ensure they can also see the entity itself
@@ -485,7 +613,7 @@ export default function EntityEdit() {
 
   return (
     <div className="max-w-4xl mx-auto pb-12">
-      <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="sticky top-0 z-40 -mx-6 px-6 md:-mx-10 md:px-10 -mt-6 md:-mt-10 pt-6 md:pt-10 pb-4 bg-stone-950/90 backdrop-blur-md border-b border-stone-800/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 shadow-xl">
         <button 
           onClick={() => {
             if (window.history.state && window.history.state.idx > 0) {
@@ -785,15 +913,26 @@ export default function EntityEdit() {
                     />
                   )}
                   {field.type === 'boolean' && (
-                    <label className="flex items-center gap-3 p-3 bg-stone-950/50 border border-stone-800 rounded-xl cursor-pointer hover:border-amber-500/50 transition-colors">
-                      <input
-                        type="checkbox"
-                        checked={formData.attributes?.[field.key] || false}
-                        onChange={e => setFormData({ ...formData, attributes: { ...formData.attributes, [field.key]: e.target.checked } })}
-                        className="w-5 h-5 rounded border-stone-700 text-amber-500 focus:ring-amber-500 focus:ring-offset-stone-900 bg-stone-900"
-                      />
+                    <div className="flex items-center justify-between p-4 bg-stone-950/50 border border-stone-800 rounded-xl hover:border-amber-500/50 transition-colors">
                       <span className="text-stone-100 font-medium">{field.label}</span>
-                    </label>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={formData.attributes?.[field.key] ?? field.defaultValue ?? false}
+                        onClick={() => setFormData({ ...formData, attributes: { ...formData.attributes, [field.key]: !(formData.attributes?.[field.key] ?? field.defaultValue ?? false) } })}
+                        className={clsx(
+                          "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-stone-900",
+                          (formData.attributes?.[field.key] ?? field.defaultValue ?? false) ? "bg-amber-500" : "bg-stone-700"
+                        )}
+                      >
+                        <span
+                          className={clsx(
+                            "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
+                            (formData.attributes?.[field.key] ?? field.defaultValue ?? false) ? "translate-x-6" : "translate-x-1"
+                          )}
+                        />
+                      </button>
+                    </div>
                   )}
                 </div>
               ))}
@@ -835,7 +974,7 @@ export default function EntityEdit() {
               <AutoExpandingTextarea
                 value={imageUrlInput}
                 onChange={(e) => setImageUrlInput(e.target.value)}
-                placeholder="Or paste a direct image URL (e.g., from Discord, Imgur)..."
+                placeholder="Paste a direct image URL (e.g., from Discord, Imgur)..."
                 className="flex-1 text-sm min-h-[42px]"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
@@ -852,6 +991,61 @@ export default function EntityEdit() {
               >
                 Add URL
               </button>
+              <label className="flex items-center justify-center px-4 py-2 bg-stone-800 hover:bg-stone-700 text-stone-100 rounded-xl text-sm font-medium transition-colors cursor-pointer">
+                <Upload size={16} className="mr-2" />
+                Upload
+                <input 
+                  type="file" 
+                  accept="image/*" 
+                  className="hidden" 
+                  onChange={handleFileUpload} 
+                />
+              </label>
+            </div>
+
+            <div className="mt-4 flex flex-col items-start gap-4 p-4 bg-stone-900/50 border border-stone-800 rounded-xl">
+              <div className="w-full flex items-center justify-between">
+                <div>
+                  <h4 className="text-sm font-medium text-stone-200 flex items-center gap-2">
+                    <ImageIcon size={16} className="text-amber-500" />
+                    AI Image Generation
+                  </h4>
+                  <p className="text-xs text-stone-400 mt-1">
+                    Generates an image based on the entity's Name, Type, and Content description.
+                  </p>
+                </div>
+              </div>
+              
+              <div className="w-full flex flex-col sm:flex-row gap-2">
+                <AutoExpandingTextarea
+                  value={customImagePrompt}
+                  onChange={(e) => setCustomImagePrompt(e.target.value)}
+                  placeholder="Optional: Override description (e.g., 'A bustling street at night')"
+                  className="flex-1 text-sm min-h-[42px]"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      generateImage();
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={generateImage}
+                  disabled={generatingImage || !formData.name}
+                  className="flex items-center justify-center gap-2 px-4 py-2 bg-amber-600/20 hover:bg-amber-600/30 text-amber-500 border border-amber-500/30 rounded-xl text-sm font-medium transition-colors disabled:opacity-50 whitespace-nowrap"
+                >
+                  {generatingImage ? (
+                    <><RefreshCw size={16} className="animate-spin" /> Generating...</>
+                  ) : (
+                    <><ImageIcon size={16} /> Generate</>
+                  )}
+                </button>
+              </div>
+
+              {imageError && (
+                <p className="text-red-400 text-xs">{imageError}</p>
+              )}
             </div>
           </div>
 

@@ -7,6 +7,7 @@ export interface FieldSchema {
   options?: string[];
   description?: string;
   targetType?: string; // For entity-select
+  defaultValue?: any;
 }
 
 export const ENTITY_TYPES_ORDERED = [
@@ -36,7 +37,7 @@ export const ENTITY_SCHEMAS: Record<string, FieldSchema[]> = {
     { key: 'specifics', label: 'Specifics', type: 'textarea', description: 'Physical appearance, personality traits, etc.' },
     { key: 'partyInteraction', label: 'Party Interaction', type: 'textarea', description: 'How they have interacted with the party so far.' },
     { key: 'characterSheetLink', label: 'Character Sheet Link', type: 'text', description: 'URL to D&D Beyond or other character sheet.' },
-    { key: 'isAlive', label: 'Is Alive?', type: 'boolean' },
+    { key: 'isAlive', label: 'Is Alive?', type: 'boolean', defaultValue: true },
     { key: 'codeOfConduct', label: 'Code of Conduct', type: 'textarea', description: 'Personal rules or moral compass.' },
   ],
   settlement: [
@@ -138,7 +139,7 @@ export const ENTITY_SCHEMAS: Record<string, FieldSchema[]> = {
     { key: 'range', label: 'Range', type: 'text', description: 'e.g. 5ft, 30/120' },
     { key: 'statOfUse', label: 'Stat of Use', type: 'text', description: 'e.g. Dex, Str, Int' },
     { key: 'specialProperties', label: 'Special Properties', type: 'textarea', description: 'Finesse, Light, Heavy, etc.' },
-    { key: 'attunement', label: 'Requires Attunement?', type: 'boolean' },
+    { key: 'attunement', label: 'Requires Attunement?', type: 'boolean', defaultValue: false },
   ],
   note: [
     { key: 'sessionNumber', label: 'Session Number', type: 'text', description: 'Which game session does this note belong to?' },
@@ -163,7 +164,7 @@ export const ENTITY_SCHEMAS: Record<string, FieldSchema[]> = {
     { key: 'environment', label: 'Environment', type: 'text', description: 'e.g. Forest, Underdark, Urban, Swamp' },
     { key: 'tactics', label: 'Combat Tactics', type: 'textarea', description: 'How does it behave in combat? Does it ambush, flee, or fight to the death?' },
     { key: 'harvestableLoot', label: 'Harvestable Loot', type: 'textarea', description: 'What can be gathered from its remains? (e.g. Venom, Scales, Pelts)' },
-    { key: 'isUnique', label: 'Is Unique Boss?', type: 'boolean', description: 'Is this a named, unique monster or a generic species?' }
+    { key: 'isUnique', label: 'Is Unique Boss?', type: 'boolean', description: 'Is this a named, unique monster or a generic species?', defaultValue: false }
   ]
 };
 

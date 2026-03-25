@@ -116,7 +116,7 @@ service cloud.firestore {
       return data.keys().hasAll(['id', 'campaignId', 'type', 'name', 'content', 'tags', 'ownerId', 'isPublic', 'allowedPlayers', 'createdAt', 'updatedAt']) &&
              data.id is string && data.id.size() > 0 && data.id.size() < 100 &&
              data.campaignId is string && data.campaignId.size() > 0 &&
-             data.type in ['npc', 'settlement', 'landmark', 'country', 'faction', 'shop', 'item', 'note'] &&
+             data.type in ['npc', 'settlement', 'landmark', 'country', 'faction', 'shop', 'item', 'note', 'geography', 'monster', 'quest'] &&
              data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
              data.content is string && data.content.size() < 100000 &&
              data.tags is list && data.tags.size() <= 100 &&
@@ -131,7 +131,9 @@ service cloud.firestore {
              (!('gender' in data) || data.gender == null || data.gender is string) &&
              (!('imageUrls' in data) || data.imageUrls is list) &&
              (!('attributes' in data) || data.attributes is map) &&
-             (!('statBlock' in data) || data.statBlock is string);
+             (!('statBlock' in data) || data.statBlock is string) &&
+             (!('dndStats' in data) || data.dndStats is map) &&
+             (!('dmNotes' in data) || data.dmNotes is string);
     }
 
     function isValidRelationship() {
@@ -167,7 +169,7 @@ service cloud.firestore {
         resource.data.isPublic == true || 
         resource.data.ownerId == request.auth.uid || 
         request.auth.uid in resource.data.allowedPlayers || 
-        (isCampaignDM(resource.data.campaignId) && resource.data.type != 'note')
+        isCampaignDM(resource.data.campaignId)
       )));
       allow create: if isAuthenticated() && (isAdmin() || (isCampaignMember(request.resource.data.campaignId) && isValidEntity() && request.resource.data.ownerId == request.auth.uid && request.resource.data.id == entityId && (isCampaignDM(request.resource.data.campaignId) || request.resource.data.type == 'note')));
       allow update: if isAuthenticated() && (isAdmin() || (isCampaignMember(resource.data.campaignId) && isValidEntity() && request.resource.data.ownerId == resource.data.ownerId && request.resource.data.id == resource.data.id && (isCampaignDM(resource.data.campaignId) || (resource.data.type == 'note' && resource.data.ownerId == request.auth.uid))));

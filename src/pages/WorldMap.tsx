@@ -1,8 +1,7 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { useAuth } from '../AuthContext';
-import { db } from '../firebase';
-import { collection, query, where, getDocs, and, or } from 'firebase/firestore';
-import { Entity, OperationType } from '../types';
+import { useEntities } from '../hooks/useEntities';
+import { Entity } from '../types';
 import { Link } from 'react-router-dom';
 import { ChevronRight, Map as MapIcon, Globe, Castle, MapPin, Building, Users, Flag, Package, FileText, Scroll, Skull, ArrowLeft, ExternalLink } from 'lucide-react';
 
@@ -21,45 +20,9 @@ const ENTITY_ICONS: Record<string, React.ElementType> = {
 };
 
 export default function WorldMap() {
-  const { currentCampaign, user, isDM } = useAuth();
-  const [entities, setEntities] = useState<Entity[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { isDM } = useAuth();
+  const { entities, loading } = useEntities();
   const [currentParentId, setCurrentParentId] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!currentCampaign || !user) return;
-
-    const fetchEntities = async () => {
-      try {
-        let q;
-        if (isDM) {
-          q = query(collection(db, 'entities'), where('campaignId', '==', currentCampaign.id));
-        } else {
-          q = query(
-            collection(db, 'entities'),
-            and(
-              where('campaignId', '==', currentCampaign.id),
-              or(
-                where('isPublic', '==', true),
-                where('allowedPlayers', 'array-contains', user.uid),
-                where('ownerId', '==', user.uid)
-              )
-            )
-          );
-        }
-        
-        const snapshot = await getDocs(q);
-        const fetchedEntities = snapshot.docs.map(doc => doc.data() as Entity);
-        setEntities(fetchedEntities);
-      } catch (error) {
-        console.error('Error fetching entities for map:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchEntities();
-  }, [currentCampaign, user, isDM]);
 
   const entityMap = useMemo(() => {
     const map = new Map<string, Entity>();

@@ -125,17 +125,6 @@ function AuthRoute({ children }: { children: React.ReactNode }) {
               {isRegistering ? 'Sign In' : 'Register'}
             </button>
           </div>
-          
-          <div className="mt-6 p-4 bg-stone-950/50 rounded-xl border border-stone-800 text-xs text-stone-400 text-left">
-            <p className="font-semibold text-stone-300 mb-1">Note to DM:</p>
-            <p>If you wish to use Email/Password login, you must enable it in your Firebase Console:</p>
-            <ol className="list-decimal list-inside mt-1 space-y-1">
-              <li>Go to Firebase Console &gt; Authentication</li>
-              <li>Click "Sign-in method"</li>
-              <li>Add new provider &gt; Email/Password</li>
-              <li>Enable it and save</li>
-            </ol>
-          </div>
         </div>
       </div>
     );
