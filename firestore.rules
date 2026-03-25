@@ -56,6 +56,16 @@ service cloud.firestore {
     //   - reverseId: string
     //   - createdAt: string
     //
+    // Collection: media
+    // Document ID: {mediaId}
+    // Fields:
+    //   - id: string
+    //   - entityId: string
+    //   - campaignId: string
+    //   - data: string (base64)
+    //   - ownerId: string
+    //   - createdAt: string
+    //
     // ===============================================================
 
     // ===============================================================
@@ -145,6 +155,15 @@ service cloud.firestore {
              data.reverseId is string && data.createdAt is string;
     }
 
+    function isValidMedia() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['id', 'entityId', 'campaignId', 'data', 'ownerId', 'createdAt']) &&
+             data.id is string && data.entityId is string && data.campaignId is string &&
+             data.data is string && data.data.size() < 1048576 &&
+             data.ownerId is string && data.createdAt is string &&
+             (!('mimeType' in data) || data.mimeType is string);
+    }
+
     match /users/{userId} {
       allow read: if isAuthenticated();
       allow create, update: if isAuthenticated() && isValidUser() && request.resource.data.uid == userId && isOwner(userId);
@@ -181,6 +200,13 @@ service cloud.firestore {
       allow create: if isAuthenticated() && (isAdmin() || (isCampaignDM(request.resource.data.campaignId) && isValidRelationship()));
       allow update: if isAuthenticated() && (isAdmin() || (isCampaignDM(resource.data.campaignId) && isValidRelationship()));
       allow delete: if isAuthenticated() && (isAdmin() || isCampaignDM(resource.data.campaignId));
+    }
+
+    match /media/{mediaId} {
+      allow read: if isAuthenticated() && (isAdmin() || isCampaignMember(resource.data.campaignId));
+      allow create: if isAuthenticated() && (isAdmin() || (isCampaignMember(request.resource.data.campaignId) && isValidMedia() && request.resource.data.ownerId == request.auth.uid));
+      allow update: if isAuthenticated() && (isAdmin() || (isCampaignMember(resource.data.campaignId) && isValidMedia() && resource.data.ownerId == request.auth.uid));
+      allow delete: if isAuthenticated() && (isAdmin() || (isCampaignMember(resource.data.campaignId) && (resource.data.ownerId == request.auth.uid || isCampaignDM(resource.data.campaignId))));
     }
   }
 }

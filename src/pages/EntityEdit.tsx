@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { doc, getDoc, setDoc, collection, getDocs, query, where } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, getDocs, query, where, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Entity, EntityType, User, OperationType, FieldPermission, DndStats } from '../types';
 import { ENTITY_SCHEMAS, ENTITY_HIERARCHY, ENTITY_TYPES_ORDERED } from '../utils/entitySchemas';
@@ -298,7 +298,21 @@ export default function EntityEdit() {
               navigate('/');
               return;
             }
-            setFormData(data);
+            
+            // Resolve media URLs to base64 for preview
+            const resolvedImageUrls = [...(data.imageUrls || [])];
+            for (let i = 0; i < resolvedImageUrls.length; i++) {
+              const url = resolvedImageUrls[i];
+              if (url.startsWith('media:')) {
+                const mediaId = url.replace('media:', '');
+                const mediaSnap = await getDoc(doc(db, 'media', mediaId));
+                if (mediaSnap.exists()) {
+                  resolvedImageUrls[i] = mediaSnap.data().data;
+                }
+              }
+            }
+            
+            setFormData({ ...data, imageUrls: resolvedImageUrls });
           } else {
             navigate('/');
           }
@@ -336,6 +350,48 @@ export default function EntityEdit() {
       }
       const now = new Date().toISOString();
       
+      // Handle media offloading to avoid Firestore 1MB limit
+      const finalImageUrls: string[] = [];
+      const mediaPromises = [];
+      
+      for (const url of (formData.imageUrls || [])) {
+        if (url.startsWith('data:')) {
+          // It's a base64 image, save to media collection
+          const mediaRef = doc(collection(db, 'media'));
+          const mediaId = mediaRef.id;
+          const mediaDoc = {
+            id: mediaId,
+            entityId: entityId,
+            campaignId: currentCampaign.id,
+            data: url,
+            ownerId: user.uid,
+            createdAt: now
+          };
+          mediaPromises.push(setDoc(mediaRef, mediaDoc));
+          finalImageUrls.push(`media:${mediaId}`);
+        } else {
+          // It's an external URL or already a media reference
+          finalImageUrls.push(url);
+        }
+      }
+
+      // Cleanup orphaned media if updating
+      if (id && id !== 'new') {
+        const oldEntityDoc = await getDoc(doc(db, 'entities', id));
+        if (oldEntityDoc.exists()) {
+          const oldImageUrls = oldEntityDoc.data().imageUrls || [];
+          const removedMediaIds = oldImageUrls
+            .filter((url: string) => url.startsWith('media:') && !finalImageUrls.includes(url))
+            .map((url: string) => url.replace('media:', ''));
+          
+          for (const mediaId of removedMediaIds) {
+            mediaPromises.push(deleteDoc(doc(db, 'media', mediaId)));
+          }
+        }
+      }
+      
+      await Promise.all(mediaPromises);
+      
       const allAllowedPlayers = new Set<string>();
       
       Object.keys(formData.playerKnowledge || {}).forEach(k => {
@@ -368,7 +424,7 @@ export default function EntityEdit() {
         playerKnowledge: formData.playerKnowledge || {},
         locationId: formData.locationId || null,
         gender: formData.gender || null,
-        imageUrls: formData.imageUrls || [],
+        imageUrls: finalImageUrls,
         attributes: formData.attributes || {},
         fieldPermissions: formData.fieldPermissions || {},
         statBlock: formData.statBlock,

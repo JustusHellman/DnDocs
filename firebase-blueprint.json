@@ -29,6 +29,11 @@
         },
         "ownerId": { "type": "string", "description": "UID of the DM who created this." },
         "isPublic": { "type": "boolean", "description": "If true, all players can read the main content." },
+        "imageUrls": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of image URLs or media references (media:ID)."
+        },
         "playerKnowledge": {
           "type": "object",
           "description": "Map of player UID to a string describing what they know about this entity."
@@ -37,6 +42,21 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "type", "name", "content", "tags", "ownerId", "isPublic", "createdAt", "updatedAt"]
+    },
+    "Media": {
+      "title": "Media",
+      "description": "Stores heavy media assets like base64 images separately from entities.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "entityId": { "type": "string", "description": "The ID of the entity this media belongs to." },
+        "campaignId": { "type": "string", "description": "The ID of the campaign this media belongs to." },
+        "data": { "type": "string", "description": "The base64 encoded image data." },
+        "mimeType": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "entityId", "campaignId", "data", "ownerId", "createdAt"]
     }
   },
   "firestore": {
@@ -47,6 +67,10 @@
     "/entities/{entityId}": {
       "schema": { "$ref": "#/entities/Entity" },
       "description": "Stores all DnD world entities."
+    },
+    "/media/{mediaId}": {
+      "schema": { "$ref": "#/entities/Media" },
+      "description": "Stores base64 image data to avoid document size limits."
     }
   }
 }

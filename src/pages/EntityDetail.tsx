@@ -114,7 +114,27 @@ export default function EntityDetail() {
     const unsubscribe = onSnapshot(doc(db, 'entities', id), async (docSnap) => {
       if (docSnap.exists()) {
         const entityData = docSnap.data() as Entity;
-        setEntity(entityData);
+        
+        // Resolve media URLs to base64 for display
+        const resolvedImageUrls = [...(entityData.imageUrls || [])];
+        let hasMedia = false;
+        for (let i = 0; i < resolvedImageUrls.length; i++) {
+          const url = resolvedImageUrls[i];
+          if (url.startsWith('media:')) {
+            hasMedia = true;
+            const mediaId = url.replace('media:', '');
+            const mediaSnap = await getDoc(doc(db, 'media', mediaId));
+            if (mediaSnap.exists()) {
+              resolvedImageUrls[i] = mediaSnap.data().data;
+            }
+          }
+        }
+        
+        if (hasMedia) {
+          setEntity({ ...entityData, imageUrls: resolvedImageUrls });
+        } else {
+          setEntity(entityData);
+        }
 
         if (currentCampaign) {
           try {
@@ -164,6 +184,21 @@ export default function EntityDetail() {
   const handleDelete = async () => {
     if (!id || !window.confirm('Are you sure you want to delete this entity?')) return;
     try {
+      // Delete associated media to avoid orphaned data
+      if (entity && entity.imageUrls) {
+        const mediaIds = entity.imageUrls
+          .filter(url => url.startsWith('media:'))
+          .map(url => url.replace('media:', ''));
+        
+        for (const mediaId of mediaIds) {
+          try {
+            await deleteDoc(doc(db, 'media', mediaId));
+          } catch (err) {
+            console.error(`Error deleting media ${mediaId}`, err);
+          }
+        }
+      }
+
       await deleteDoc(doc(db, 'entities', id));
       navigate(-1);
     } catch (error) {
