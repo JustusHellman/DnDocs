@@ -58,9 +58,9 @@ export interface Entity {
   gender?: string | null;
   imageUrls?: string[];
   attributes?: Record<string, any>;
-  statBlock?: string;
-  dndStats?: DndStats;
-  dmNotes?: string;
+  statBlock?: string | null;
+  dndStats?: DndStats | null;
+  dmNotes?: string | null;
   createdAt: string;
   updatedAt: string;
 }

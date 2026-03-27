@@ -17,10 +17,19 @@ export async function generateUniqueId(name: string): Promise<string> {
   
   while (true) {
     const docRef = doc(db, 'entities', slug);
-    const docSnap = await getDoc(docRef);
-    
-    if (!docSnap.exists()) {
-      return slug;
+    try {
+      const docSnap = await getDoc(docRef);
+      if (!docSnap.exists()) {
+        return slug;
+      }
+    } catch (error: any) {
+      // If we get a permission error, it means the document exists but we don't have access to it.
+      // We should treat this as the document existing and try the next slug.
+      if (error.code === 'permission-denied' || (error.message && error.message.includes('Missing or insufficient permissions'))) {
+        // Document exists, continue to next slug
+      } else {
+        throw error;
+      }
     }
     
     slug = `${baseSlug}-${counter}`;

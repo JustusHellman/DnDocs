@@ -30,10 +30,11 @@ export default function QuickCreateModal({
   sourceEntityName,
   initialLocationId
 }: QuickCreateModalProps) {
-  const { user, currentCampaign } = useAuth();
+  const { user, isDM, currentCampaign } = useAuth();
   const [name, setName] = useState(initialName);
-  const [type, setType] = useState<EntityType>('npc');
+  const [type, setType] = useState<EntityType>(isDM ? 'npc' : 'note');
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   if (!isOpen) return null;
 
@@ -41,7 +42,13 @@ export default function QuickCreateModal({
     e.preventDefault();
     if (!user || !currentCampaign || !name.trim()) return;
 
+    if (!isDM && type !== 'note') {
+      setSaveError("Only DMs can create entities other than Notes.");
+      return;
+    }
+
     setSaving(true);
+    setSaveError('');
     try {
       const entityId = await generateUniqueId(name);
       const now = new Date().toISOString();
@@ -74,7 +81,9 @@ export default function QuickCreateModal({
       await setDoc(doc(db, 'entities', entityId), entityData);
       onCreated(entityData);
       onClose();
-    } catch (error) {
+    } catch (error: any) {
+      console.error("Quick create error:", error);
+      setSaveError(error.message || "Failed to create entity. Check permissions.");
       handleFirestoreError(error, OperationType.WRITE, 'entities/quick-new');
     } finally {
       setSaving(false);
@@ -95,6 +104,11 @@ export default function QuickCreateModal({
         </div>
 
         <form onSubmit={handleSave} className="p-6 space-y-4">
+          {saveError && (
+            <div className="p-3 bg-red-950/50 border border-red-900/50 rounded-xl text-red-400 text-sm">
+              {saveError}
+            </div>
+          )}
           <div>
             <label className="block text-xs font-medium text-stone-500 uppercase tracking-wider mb-1.5">Entity Name</label>
             <AutoExpandingTextarea
@@ -112,7 +126,8 @@ export default function QuickCreateModal({
             <select
               value={type}
               onChange={e => setType(e.target.value as EntityType)}
-              className="w-full px-4 py-2.5 bg-stone-950 border border-stone-800 rounded-xl text-stone-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all text-sm appearance-none"
+              disabled={!isDM}
+              className="w-full px-4 py-2.5 bg-stone-950 border border-stone-800 rounded-xl text-stone-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all text-sm appearance-none disabled:opacity-50"
             >
               {ENTITY_TYPES_ORDERED.map(t => (
                 <option key={t.value} value={t.value}>{t.label}</option>
@@ -130,7 +145,7 @@ export default function QuickCreateModal({
             </button>
             <button
               type="submit"
-              disabled={saving || !name.trim()}
+              disabled={saving || !name.trim() || (!isDM && type !== 'note')}
               className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl font-bold transition-all shadow-lg shadow-emerald-900/20 text-sm"
             >
               <Save size={16} />

@@ -80,18 +80,19 @@ service cloud.firestore {
     }
 
     function isCampaignDM(campaignId) {
-      let campaign = get(/databases/$(database)/documents/campaigns/$(campaignId)).data;
-      return exists(/databases/$(database)/documents/campaigns/$(campaignId)) && 
-             (campaign.dmId == request.auth.uid || 
-              ('coDms' in campaign && request.auth.uid in campaign.coDms));
+      let campaignPath = /databases/$(database)/documents/campaigns/$(campaignId);
+      return exists(campaignPath) && (
+        get(campaignPath).data.dmId == request.auth.uid || 
+        ('coDms' in get(campaignPath).data && get(campaignPath).data.coDms is list && request.auth.uid in get(campaignPath).data.coDms)
+      );
     }
 
     function isCampaignMember(campaignId) {
-      let campaign = get(/databases/$(database)/documents/campaigns/$(campaignId)).data;
-      return exists(/databases/$(database)/documents/campaigns/$(campaignId)) && (
-        campaign.dmId == request.auth.uid || 
-        ('coDms' in campaign && request.auth.uid in campaign.coDms) ||
-        request.auth.uid in campaign.players
+      let campaignPath = /databases/$(database)/documents/campaigns/$(campaignId);
+      return exists(campaignPath) && (
+        get(campaignPath).data.dmId == request.auth.uid || 
+        ('coDms' in get(campaignPath).data && get(campaignPath).data.coDms is list && request.auth.uid in get(campaignPath).data.coDms) ||
+        ('players' in get(campaignPath).data && get(campaignPath).data.players is list && request.auth.uid in get(campaignPath).data.players)
       );
     }
 
@@ -141,9 +142,9 @@ service cloud.firestore {
              (!('gender' in data) || data.gender == null || data.gender is string) &&
              (!('imageUrls' in data) || data.imageUrls is list) &&
              (!('attributes' in data) || data.attributes is map) &&
-             (!('statBlock' in data) || data.statBlock is string) &&
-             (!('dndStats' in data) || data.dndStats is map) &&
-             (!('dmNotes' in data) || data.dmNotes is string);
+             (!('statBlock' in data) || data.statBlock == null || data.statBlock is string) &&
+             (!('dndStats' in data) || data.dndStats == null || data.dndStats is map) &&
+             (!('dmNotes' in data) || data.dmNotes == null || data.dmNotes is string);
     }
 
     function isValidRelationship() {
@@ -184,26 +185,41 @@ service cloud.firestore {
     }
 
     match /entities/{entityId} {
-      allow read: if isAuthenticated() && (isAdmin() || (isCampaignMember(resource.data.campaignId) && (
+      allow read: if isAuthenticated() && (resource == null || isAdmin() || (isCampaignMember(resource.data.campaignId) && (
         resource.data.isPublic == true || 
         resource.data.ownerId == request.auth.uid || 
         request.auth.uid in resource.data.allowedPlayers || 
         isCampaignDM(resource.data.campaignId)
       )));
-      allow create: if isAuthenticated() && (isAdmin() || (isCampaignMember(request.resource.data.campaignId) && isValidEntity() && request.resource.data.ownerId == request.auth.uid && request.resource.data.id == entityId && (isCampaignDM(request.resource.data.campaignId) || request.resource.data.type == 'note')));
-      allow update: if isAuthenticated() && (isAdmin() || (isCampaignMember(resource.data.campaignId) && isValidEntity() && request.resource.data.ownerId == resource.data.ownerId && request.resource.data.id == resource.data.id && (isCampaignDM(resource.data.campaignId) || (resource.data.type == 'note' && resource.data.ownerId == request.auth.uid))));
-      allow delete: if isAuthenticated() && (isAdmin() || (isCampaignMember(resource.data.campaignId) && (isCampaignDM(resource.data.campaignId) || (resource.data.type == 'note' && resource.data.ownerId == request.auth.uid))));
+      allow create: if isAuthenticated() && (isAdmin() || (
+        isCampaignMember(request.resource.data.campaignId) && 
+        isValidEntity() && 
+        request.resource.data.ownerId == request.auth.uid && 
+        request.resource.data.id == entityId &&
+        (isCampaignDM(request.resource.data.campaignId) || request.resource.data.type == 'note')
+      ));
+      allow update: if isAuthenticated() && (isAdmin() || (
+        isCampaignMember(resource.data.campaignId) && 
+        isValidEntity() && 
+        request.resource.data.ownerId == resource.data.ownerId && 
+        request.resource.data.id == resource.data.id &&
+        (isCampaignDM(resource.data.campaignId) || (resource.data.type == 'note' && request.resource.data.type == 'note'))
+      ));
+      allow delete: if isAuthenticated() && (isAdmin() || (
+        isCampaignMember(resource.data.campaignId) && 
+        (isCampaignDM(resource.data.campaignId) || resource.data.ownerId == request.auth.uid)
+      ));
     }
 
     match /relationships/{relId} {
-      allow read: if isAuthenticated() && (isAdmin() || isCampaignMember(resource.data.campaignId));
+      allow read: if isAuthenticated() && (resource == null || isAdmin() || isCampaignMember(resource.data.campaignId));
       allow create: if isAuthenticated() && (isAdmin() || (isCampaignDM(request.resource.data.campaignId) && isValidRelationship()));
       allow update: if isAuthenticated() && (isAdmin() || (isCampaignDM(resource.data.campaignId) && isValidRelationship()));
       allow delete: if isAuthenticated() && (isAdmin() || isCampaignDM(resource.data.campaignId));
     }
 
     match /media/{mediaId} {
-      allow read: if isAuthenticated() && (isAdmin() || isCampaignMember(resource.data.campaignId));
+      allow read: if isAuthenticated() && (resource == null || isAdmin() || isCampaignMember(resource.data.campaignId));
       allow create: if isAuthenticated() && (isAdmin() || (isCampaignMember(request.resource.data.campaignId) && isValidMedia() && request.resource.data.ownerId == request.auth.uid));
       allow update: if isAuthenticated() && (isAdmin() || (isCampaignMember(resource.data.campaignId) && isValidMedia() && resource.data.ownerId == request.auth.uid));
       allow delete: if isAuthenticated() && (isAdmin() || (isCampaignMember(resource.data.campaignId) && (resource.data.ownerId == request.auth.uid || isCampaignDM(resource.data.campaignId))));

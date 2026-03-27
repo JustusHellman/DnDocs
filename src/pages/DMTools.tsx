@@ -36,6 +36,7 @@ export default function DMTools() {
   const [apiStatus, setApiStatus] = useState<{
     keyFound: boolean;
     textOk: boolean;
+    textError?: string;
     models: string[];
     error?: string;
   } | null>(null);
@@ -58,30 +59,32 @@ export default function DMTools() {
       
       // 1. Test Text Generation
       let textOk = false;
+      let textError = "";
       try {
         const textRes = await ai.models.generateContent({
-          model: 'gemini-2.0-flash',
+          model: 'gemini-1.5-flash',
           contents: "Say 'API OK'",
         });
         textOk = textRes.text?.includes('API OK') || false;
-      } catch (e) {
+      } catch (e: any) {
         console.error("Text test failed:", e);
+        textError = e.message || "Unknown text generation error";
       }
 
       // 2. List Models
       let models: string[] = [];
       try {
         const modelList = await ai.models.list();
-        // The SDK returns a Pager, we access the models array via type assertion to avoid lint errors
         const modelsArray = (modelList as any).models || [];
         models = modelsArray.map((m: any) => m.name.replace('models/', ''));
-      } catch (e) {
+      } catch (e: any) {
         console.error("Model list failed:", e);
       }
 
       setApiStatus({
         keyFound: true,
         textOk,
+        textError,
         models,
       });
     } catch (err: any) {
@@ -315,137 +318,151 @@ export default function DMTools() {
           )}
         </div>
 
-        {/* Image Generator */}
-        <div className="bg-stone-900/80 backdrop-blur-md border border-stone-800 rounded-2xl p-6 shadow-xl md:col-span-2">
-          <h2 className="text-xl font-bold text-amber-500 mb-4 font-cinzel flex items-center gap-2">
-            <ImageIcon size={24} /> Image Generator
-          </h2>
-          <p className="text-sm text-stone-400 mb-4">
-            Generate high-quality images for your campaign using Nano Banana (Gemini 2.5 Flash Image). Perfect for NPCs, items, locations, or even a campaign logo!
-          </p>
-          
-          <div className="mb-4">
-            <textarea
-              value={imagePrompt}
-              onChange={(e) => setImagePrompt(e.target.value)}
-              placeholder="Describe the image you want to generate..."
-              className="w-full h-24 bg-stone-950 border border-stone-800 rounded-xl p-3 text-stone-200 placeholder-stone-600 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none resize-none"
-            />
-          </div>
+        {/* Image Generator - DEV ONLY */}
+        {import.meta.env.DEV && (
+          <div className="bg-stone-900/80 backdrop-blur-md border border-stone-800 rounded-2xl p-6 shadow-xl md:col-span-2">
+            <h2 className="text-xl font-bold text-amber-500 mb-4 font-cinzel flex items-center gap-2">
+              <ImageIcon size={24} /> Image Generator (DEV ONLY)
+            </h2>
+            <p className="text-sm text-stone-400 mb-4">
+              Generate high-quality images for your campaign using Nano Banana (Gemini 2.5 Flash Image). Perfect for NPCs, items, locations, or even a campaign logo!
+            </p>
+            
+            <div className="mb-4">
+              <textarea
+                value={imagePrompt}
+                onChange={(e) => setImagePrompt(e.target.value)}
+                placeholder="Describe the image you want to generate..."
+                className="w-full h-24 bg-stone-950 border border-stone-800 rounded-xl p-3 text-stone-200 placeholder-stone-600 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none resize-none"
+              />
+            </div>
 
-          <div className="flex gap-2 mb-4">
-            <button 
-              onClick={generateImage} 
-              disabled={generatingImage || !imagePrompt.trim()}
-              className="flex-1 flex items-center justify-center gap-2 py-3 px-4 bg-stone-800 hover:bg-stone-700 text-stone-200 rounded-xl font-medium transition-all disabled:opacity-50"
-            >
-              {generatingImage ? (
-                <><RefreshCw size={18} className="animate-spin" /> Generating Image...</>
-              ) : (
-                <><ImageIcon size={18} /> Generate Image</>
+            <div className="flex gap-2 mb-4">
+              <button 
+                onClick={generateImage} 
+                disabled={generatingImage || !imagePrompt.trim()}
+                className="flex-1 flex items-center justify-center gap-2 py-3 px-4 bg-stone-800 hover:bg-stone-700 text-stone-200 rounded-xl font-medium transition-all disabled:opacity-50"
+              >
+                {generatingImage ? (
+                  <><RefreshCw size={18} className="animate-spin" /> Generating Image...</>
+                ) : (
+                  <><ImageIcon size={18} /> Generate Image</>
+                )}
+              </button>
+              
+              {generatedImageUrl && (
+                <button 
+                  onClick={handleDownloadImage} 
+                  className="flex items-center justify-center gap-2 py-3 px-6 bg-amber-600 hover:bg-amber-500 text-stone-950 rounded-xl font-medium transition-all"
+                >
+                  <Download size={18} /> Download
+                </button>
               )}
-            </button>
+            </div>
+            
+            {imageError && (
+              <div className="p-3 mb-4 bg-red-900/20 border border-red-900/50 text-red-400 rounded-xl text-sm">
+                {imageError}
+              </div>
+            )}
             
             {generatedImageUrl && (
-              <button 
-                onClick={handleDownloadImage} 
-                className="flex items-center justify-center gap-2 py-3 px-6 bg-amber-600 hover:bg-amber-500 text-stone-950 rounded-xl font-medium transition-all"
-              >
-                <Download size={18} /> Download
-              </button>
+              <div className="mt-4 rounded-xl overflow-hidden border border-stone-800 shadow-2xl">
+                <img src={generatedImageUrl} alt="Generated" className="w-full h-auto object-cover" />
+                <div className="p-4 bg-stone-950 text-sm text-stone-400">
+                  <p className="font-bold text-stone-300 mb-1">How to use this image:</p>
+                  <ol className="list-decimal list-inside space-y-1">
+                    <li>Click Download to save the image to your computer.</li>
+                    <li>You can upload it to any entity (NPC, Item, Location) via the "Edit" page.</li>
+                    <li>To use it as a link preview, upload it to the <code className="text-amber-500 bg-amber-900/20 px-1 rounded">public</code> folder in the code editor and name it <code className="text-amber-500 bg-amber-900/20 px-1 rounded">og-image.png</code>.</li>
+                  </ol>
+                </div>
+              </div>
             )}
           </div>
-          
-          {imageError && (
-            <div className="p-3 mb-4 bg-red-900/20 border border-red-900/50 text-red-400 rounded-xl text-sm">
-              {imageError}
-            </div>
-          )}
-          
-          {generatedImageUrl && (
-            <div className="mt-4 rounded-xl overflow-hidden border border-stone-800 shadow-2xl">
-              <img src={generatedImageUrl} alt="Generated" className="w-full h-auto object-cover" />
-              <div className="p-4 bg-stone-950 text-sm text-stone-400">
-                <p className="font-bold text-stone-300 mb-1">How to use this image:</p>
-                <ol className="list-decimal list-inside space-y-1">
-                  <li>Click Download to save the image to your computer.</li>
-                  <li>You can upload it to any entity (NPC, Item, Location) via the "Edit" page.</li>
-                  <li>To use it as a link preview, upload it to the <code className="text-amber-500 bg-amber-900/20 px-1 rounded">public</code> folder in the code editor and name it <code className="text-amber-500 bg-amber-900/20 px-1 rounded">og-image.png</code>.</li>
-                </ol>
-              </div>
-            </div>
-          )}
-        </div>
+        )}
 
-        {/* API Debugger Section */}
-        <div className="bg-stone-900/80 backdrop-blur-md border border-stone-800 rounded-2xl p-6 shadow-xl md:col-span-2">
-          <h2 className="text-xl font-bold text-amber-500 mb-4 font-cinzel flex items-center gap-2">
-            <ShieldCheck size={24} /> API Status & Model Discovery
-          </h2>
-          <p className="text-sm text-stone-400 mb-6">
-            If image generation is failing with "Quota Exceeded (429)", use this tool to see exactly what models your API key is allowed to use.
-          </p>
+        {/* API Debugger Section - DEV ONLY */}
+        {import.meta.env.DEV && (
+          <div className="bg-stone-900/80 backdrop-blur-md border border-stone-800 rounded-2xl p-6 shadow-xl md:col-span-2">
+            <h2 className="text-xl font-bold text-amber-500 mb-4 font-cinzel flex items-center gap-2">
+              <ShieldCheck size={24} /> API Status & Model Discovery (DEV ONLY)
+            </h2>
+            <p className="text-sm text-stone-400 mb-6">
+              If image generation is failing with "Quota Exceeded (429)", use this tool to see exactly what models your API key is allowed to use.
+            </p>
 
-          <button 
-            onClick={checkApiStatus} 
-            disabled={checkingApi}
-            className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-stone-800 hover:bg-stone-700 text-stone-200 rounded-xl font-medium transition-all disabled:opacity-50 mb-6"
-          >
-            {checkingApi ? (
-              <><RefreshCw size={18} className="animate-spin" /> Checking API Status...</>
-            ) : (
-              <><ShieldCheck size={18} /> Check API Status</>
-            )}
-          </button>
-
-          {apiStatus && (
-            <div className="space-y-6">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className={`p-4 rounded-xl border ${apiStatus.keyFound ? 'bg-emerald-900/20 border-emerald-900/50 text-emerald-400' : 'bg-red-900/20 border-red-900/50 text-red-400'} flex items-center gap-3`}>
-                  {apiStatus.keyFound ? <ShieldCheck size={20} /> : <AlertCircle size={20} />}
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-wider">API Key</p>
-                    <p className="text-sm">{apiStatus.keyFound ? 'Found in Environment' : 'Missing'}</p>
-                  </div>
-                </div>
-                <div className={`p-4 rounded-xl border ${apiStatus.textOk ? 'bg-emerald-900/20 border-emerald-900/50 text-emerald-400' : 'bg-red-900/20 border-red-900/50 text-red-400'} flex items-center gap-3`}>
-                  {apiStatus.textOk ? <ShieldCheck size={20} /> : <AlertCircle size={20} />}
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-wider">Text Generation</p>
-                    <p className="text-sm">{apiStatus.textOk ? 'Working (Gemini 2.0)' : 'Failed'}</p>
-                  </div>
-                </div>
-              </div>
-
-              {apiStatus.error && (
-                <div className="p-4 bg-red-900/20 border border-red-900/50 text-red-400 rounded-xl text-sm flex items-start gap-3">
-                  <AlertCircle size={20} className="shrink-0" />
-                  <p>{apiStatus.error}</p>
-                </div>
+            <button 
+              onClick={checkApiStatus} 
+              disabled={checkingApi}
+              className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-stone-800 hover:bg-stone-700 text-stone-200 rounded-xl font-medium transition-all disabled:opacity-50 mb-6"
+            >
+              {checkingApi ? (
+                <><RefreshCw size={18} className="animate-spin" /> Checking API Status...</>
+              ) : (
+                <><ShieldCheck size={18} /> Check API Status</>
               )}
+            </button>
 
-              <div>
-                <h3 className="text-sm font-bold text-stone-300 mb-3 flex items-center gap-2 uppercase tracking-wider">
-                  <List size={16} /> Available Models ({apiStatus.models.length})
-                </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {apiStatus.models.length > 0 ? (
-                    apiStatus.models.map(m => (
-                      <div key={m} className={`p-2 rounded-lg border text-xs font-mono ${m.includes('image') ? 'bg-amber-900/20 border-amber-900/50 text-amber-400 font-bold' : 'bg-stone-950 border-stone-800 text-stone-400'}`}>
-                        {m}
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-stone-500 text-sm italic">No models found or list failed.</p>
-                  )}
+            {apiStatus && (
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className={`p-4 rounded-xl border ${apiStatus.keyFound ? 'bg-emerald-900/20 border-emerald-900/50 text-emerald-400' : 'bg-red-900/20 border-red-900/50 text-red-400'} flex items-center gap-3`}>
+                    {apiStatus.keyFound ? <ShieldCheck size={20} /> : <AlertCircle size={20} />}
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-wider">API Key</p>
+                      <p className="text-sm">{apiStatus.keyFound ? 'Found in Environment' : 'Missing'}</p>
+                    </div>
+                  </div>
+                  <div className={`p-4 rounded-xl border ${apiStatus.textOk ? 'bg-emerald-900/20 border-emerald-900/50 text-emerald-400' : 'bg-red-900/20 border-red-900/50 text-red-400'} flex items-center gap-3`}>
+                    {apiStatus.textOk ? <ShieldCheck size={20} /> : <AlertCircle size={20} />}
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-wider">Text Generation</p>
+                      <p className="text-sm">{apiStatus.textOk ? 'Working (Gemini 1.5)' : 'Failed'}</p>
+                    </div>
+                  </div>
                 </div>
-                <p className="text-[10px] text-stone-500 mt-4 italic">
-                  Note: If you see models in this list but they still return 429 errors, it means Google has restricted your account's quota for those specific models (often due to regional restrictions or billing status).
-                </p>
+
+                {apiStatus.textError && (
+                  <div className="p-4 bg-red-900/20 border border-red-900/50 text-red-400 rounded-xl text-sm flex items-start gap-3">
+                    <AlertCircle size={20} className="shrink-0" />
+                    <div>
+                      <p className="font-bold mb-1">Text Generation Error:</p>
+                      <p className="font-mono text-[10px] break-all">{apiStatus.textError}</p>
+                    </div>
+                  </div>
+                )}
+
+                {apiStatus.error && (
+                  <div className="p-4 bg-red-900/20 border border-red-900/50 text-red-400 rounded-xl text-sm flex items-start gap-3">
+                    <AlertCircle size={20} className="shrink-0" />
+                    <p>{apiStatus.error}</p>
+                  </div>
+                )}
+
+                <div>
+                  <h3 className="text-sm font-bold text-stone-300 mb-3 flex items-center gap-2 uppercase tracking-wider">
+                    <List size={16} /> Available Models ({apiStatus.models.length})
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {apiStatus.models.length > 0 ? (
+                      apiStatus.models.map(m => (
+                        <div key={m} className={`p-2 rounded-lg border text-xs font-mono ${m.includes('image') ? 'bg-amber-900/20 border-amber-900/50 text-amber-400 font-bold' : 'bg-stone-950 border-stone-800 text-stone-400'}`}>
+                          {m}
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-stone-500 text-sm italic">No models found or list failed.</p>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-stone-500 mt-4 italic">
+                    Note: If you see models in this list but they still return 429 errors, it means Google has restricted your account's quota for those specific models (often due to regional restrictions or billing status).
+                  </p>
+                </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

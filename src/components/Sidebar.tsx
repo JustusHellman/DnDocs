@@ -23,6 +23,7 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
     { to: '/entities/npc', icon: Users, label: 'NPCs' },
     { to: '/entities/monster', icon: Skull, label: 'Monsters' },
     { to: '/entities/shop', icon: Building, label: 'Shops' },
+    { to: '/entities/geography', icon: MapIcon, label: 'Geographies' },
     { to: '/entities/landmark', icon: MapPin, label: 'Landmarks' },
     { to: '/entities/faction', icon: Flag, label: 'Factions' },
     { to: '/entities/settlement', icon: Castle, label: 'Settlements' },

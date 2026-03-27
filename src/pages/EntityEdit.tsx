@@ -29,6 +29,7 @@ export default function EntityEdit() {
   
   const [loading, setLoading] = useState(id ? true : false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
   const [players, setPlayers] = useState<User[]>([]);
   const [availableLocations, setAvailableLocations] = useState<Entity[]>([]);
   const [isQuickCreateOpen, setIsQuickCreateOpen] = useState(false);
@@ -269,11 +270,6 @@ export default function EntityEdit() {
       return;
     }
 
-    if (!isDM && !id && defaultType !== 'note') {
-      navigate('/');
-      return;
-    }
-
     const fetchPlayers = async () => {
       try {
         const snapshot = await getDocs(collection(db, 'users'));
@@ -303,10 +299,6 @@ export default function EntityEdit() {
           const docSnap = await getDoc(doc(db, 'entities', id));
           if (docSnap.exists()) {
             const data = docSnap.data() as Entity;
-            if (!isDM && (data.type !== 'note' || data.ownerId !== user.uid)) {
-              navigate('/');
-              return;
-            }
             
             // Resolve media URLs to base64 for preview
             const resolvedImageUrls = [...(data.imageUrls || [])];
@@ -349,10 +341,14 @@ export default function EntityEdit() {
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !currentCampaign) return;
-    if (!isDM && formData.type !== 'note') return;
     
     setSaving(true);
+    setSaveError('');
     try {
+      if (!isDM && formData.type !== 'note') {
+        throw new Error("Only DMs can create or edit entities other than Notes.");
+      }
+
       let entityId = id;
       if (!entityId || entityId === 'new') {
         entityId = await generateUniqueId(formData.name || 'Untitled');
@@ -417,8 +413,8 @@ export default function EntityEdit() {
         }
       });
 
-      // If a player is saving a note, ensure they are the owner
-      const ownerId = (!isDM && formData.type === 'note') ? user.uid : (formData.ownerId || user.uid);
+      // If a player is saving an entity, ensure they are the owner if it's new
+      const ownerId = formData.ownerId || user.uid;
 
       const entityData: Entity = {
         id: entityId,
@@ -436,9 +432,9 @@ export default function EntityEdit() {
         imageUrls: finalImageUrls,
         attributes: formData.attributes || {},
         fieldPermissions: formData.fieldPermissions || {},
-        statBlock: formData.statBlock,
-        dndStats: formData.dndStats,
-        dmNotes: formData.dmNotes,
+        statBlock: formData.statBlock || null,
+        dndStats: formData.dndStats || null,
+        dmNotes: formData.dmNotes || null,
         createdAt: formData.createdAt || now,
         updatedAt: now,
       };
@@ -490,7 +486,9 @@ export default function EntityEdit() {
       } else {
         navigate(-1);
       }
-    } catch (error) {
+    } catch (error: any) {
+      console.error("Save error:", error);
+      setSaveError(error.message || "Failed to save entity. Please check your permissions.");
       handleFirestoreError(error, OperationType.WRITE, `entities/${id || 'new'}`);
     } finally {
       setSaving(false);
@@ -678,8 +676,8 @@ export default function EntityEdit() {
 
   return (
     <div className="max-w-4xl mx-auto pb-12">
-      <div className="sticky top-0 z-40 -mx-6 px-6 md:-mx-10 md:px-10 -mt-6 md:-mt-10 pt-6 md:pt-10 pb-0 bg-stone-950/90 backdrop-blur-md border-b border-stone-800/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8 shadow-xl">
-        <div className="flex items-center justify-between w-full pb-4">
+      <div className="sticky top-0 z-40 -mx-6 px-6 md:-mx-10 md:px-10 -mt-6 md:-mt-10 pt-6 md:pt-10 pb-4 bg-stone-950 border-b border-stone-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8 shadow-xl">
+        <div className="flex items-center justify-between w-full">
           <button 
             onClick={() => {
               if (window.history.state && window.history.state.idx > 0) {
@@ -697,7 +695,7 @@ export default function EntityEdit() {
           </button>
           <button
             onClick={handleSave}
-            disabled={saving}
+            disabled={saving || (!isDM && formData.type !== 'note')}
             className="flex items-center justify-center gap-2 px-6 py-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded-lg font-bold sm:font-medium transition-all shadow-lg shadow-amber-900/20 active:scale-95"
           >
             <Save size={18} />
@@ -705,6 +703,13 @@ export default function EntityEdit() {
           </button>
         </div>
       </div>
+
+      {saveError && (
+        <div className="mb-8 p-4 bg-red-950/50 border border-red-900/50 rounded-xl text-red-400 text-sm">
+          <strong className="font-bold block mb-1">Error saving entity:</strong>
+          {saveError}
+        </div>
+      )}
 
       <form onSubmit={handleSave} className="space-y-8">
         <div className="bg-stone-900/80 backdrop-blur-md border border-stone-800 rounded-2xl p-8 shadow-xl">
@@ -802,7 +807,7 @@ export default function EntityEdit() {
 
           {!isDM && (
             <div className="mb-8 pb-6 border-b border-stone-800">
-              <label className="block text-sm font-medium text-stone-400 mb-2">Share Note With</label>
+              <label className="block text-sm font-medium text-stone-400 mb-2">Share Entity With</label>
               <select
                 value={(() => {
                   if (formData.isPublic) return 'all';
@@ -1070,50 +1075,53 @@ export default function EntityEdit() {
               </label>
             </div>
 
-            <div className="mt-4 flex flex-col items-start gap-4 p-4 bg-stone-900/50 border border-stone-800 rounded-xl">
-              <div className="w-full flex items-center justify-between">
-                <div>
-                  <h4 className="text-sm font-medium text-stone-200 flex items-center gap-2">
-                    <ImageIcon size={16} className="text-amber-500" />
-                    AI Image Generation
-                  </h4>
-                  <p className="text-xs text-stone-400 mt-1">
-                    Generates an image based on the entity's Name, Type, and Content description.
-                  </p>
+            {/* AI Image Generation - DEV ONLY */}
+            {import.meta.env.DEV && (
+              <div className="mt-4 flex flex-col items-start gap-4 p-4 bg-stone-900/50 border border-stone-800 rounded-xl">
+                <div className="w-full flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-medium text-stone-200 flex items-center gap-2">
+                      <ImageIcon size={16} className="text-amber-500" />
+                      AI Image Generation (DEV ONLY)
+                    </h4>
+                    <p className="text-xs text-stone-400 mt-1">
+                      Generates an image based on the entity's Name, Type, and Content description.
+                    </p>
+                  </div>
                 </div>
-              </div>
-              
-              <div className="w-full flex flex-col sm:flex-row gap-2">
-                <AutoExpandingTextarea
-                  value={customImagePrompt}
-                  onChange={(e) => setCustomImagePrompt(e.target.value)}
-                  placeholder="Optional: Override description (e.g., 'A bustling street at night')"
-                  className="flex-1 text-sm min-h-[42px]"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      generateImage();
-                    }
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={generateImage}
-                  disabled={generatingImage || !formData.name}
-                  className="flex items-center justify-center gap-2 px-4 py-2 bg-amber-600/20 hover:bg-amber-600/30 text-amber-500 border border-amber-500/30 rounded-xl text-sm font-medium transition-colors disabled:opacity-50 whitespace-nowrap"
-                >
-                  {generatingImage ? (
-                    <><RefreshCw size={16} className="animate-spin" /> Generating...</>
-                  ) : (
-                    <><ImageIcon size={16} /> Generate</>
-                  )}
-                </button>
-              </div>
+                
+                <div className="w-full flex flex-col sm:flex-row gap-2">
+                  <AutoExpandingTextarea
+                    value={customImagePrompt}
+                    onChange={(e) => setCustomImagePrompt(e.target.value)}
+                    placeholder="Optional: Override description (e.g., 'A bustling street at night')"
+                    className="flex-1 text-sm min-h-[42px]"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        generateImage();
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={generateImage}
+                    disabled={generatingImage || !formData.name}
+                    className="flex items-center justify-center gap-2 px-4 py-2 bg-amber-600/20 hover:bg-amber-600/30 text-amber-500 border border-amber-500/30 rounded-xl text-sm font-medium transition-colors disabled:opacity-50 whitespace-nowrap"
+                  >
+                    {generatingImage ? (
+                      <><RefreshCw size={16} className="animate-spin" /> Generating...</>
+                    ) : (
+                      <><ImageIcon size={16} /> Generate</>
+                    )}
+                  </button>
+                </div>
 
-              {imageError && (
-                <p className="text-red-400 text-xs">{imageError}</p>
-              )}
-            </div>
+                {imageError && (
+                  <p className="text-red-400 text-xs">{imageError}</p>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="mb-6">
