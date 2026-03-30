@@ -42,6 +42,17 @@ export interface DndStats {
   proficiencyBonus: string;
 }
 
+export interface MapPin {
+  x: number;
+  y: number;
+  targetEntityId: string;
+}
+
+export interface MapConfig {
+  mediaId: string;
+  pins: MapPin[];
+}
+
 export interface Entity {
   id: string;
   campaignId: string;
@@ -55,12 +66,14 @@ export interface Entity {
   fieldPermissions?: Record<string, FieldPermission>;
   playerKnowledge?: Record<string, string>;
   locationId?: string | null;
+  mapConfig?: MapConfig | null;
   gender?: string | null;
   imageUrls?: string[];
   attributes?: Record<string, any>;
   statBlock?: string | null;
   dndStats?: DndStats | null;
   dmNotes?: string | null;
+  lastPushedAt?: number;
   createdAt: string;
   updatedAt: string;
 }

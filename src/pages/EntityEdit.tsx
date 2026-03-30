@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { doc, getDoc, setDoc, collection, getDocs, query, where, deleteDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, getDocs, query, where, deleteDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Entity, EntityType, User, OperationType, FieldPermission, DndStats } from '../types';
 import { ENTITY_SCHEMAS, ENTITY_HIERARCHY, ENTITY_TYPES_ORDERED } from '../utils/entitySchemas';
@@ -8,7 +8,7 @@ import { handleFirestoreError } from '../utils/firebaseUtils';
 import { generateUniqueId } from '../utils/slugify';
 import { useAuth } from '../AuthContext';
 import { useEntities } from '../hooks/useEntities';
-import { ArrowLeft, Save, Globe, Lock, Users, Image as ImageIcon, X, Link as LinkIcon, BookOpen, RefreshCw, Upload } from 'lucide-react';
+import { ArrowLeft, Save, Globe, Lock, Users, Image as ImageIcon, X, Link as LinkIcon, BookOpen, RefreshCw, Upload, Map as MapIcon } from 'lucide-react';
 import { GoogleGenAI } from '@google/genai';
 import clsx from 'clsx';
 import SearchableDropdown from '../components/SearchableDropdown';
@@ -40,6 +40,33 @@ export default function EntityEdit() {
   const [imageError, setImageError] = useState('');
   const [customImagePrompt, setCustomImagePrompt] = useState('');
 
+  const [formData, setFormData] = useState<Partial<Entity>>(() => {
+    // Initialize with default values from schema
+    const initialAttributes: Record<string, any> = {};
+    if (ENTITY_SCHEMAS[defaultType]) {
+      ENTITY_SCHEMAS[defaultType].forEach(field => {
+        if (field.defaultValue !== undefined) {
+          initialAttributes[field.key] = field.defaultValue;
+        }
+      });
+    }
+
+    return {
+      type: defaultType,
+      name: '',
+      content: '',
+      tags: [],
+      isPublic: false,
+      playerKnowledge: {},
+      locationId: searchParams.get('locationId') || '',
+      gender: '',
+      imageUrls: [],
+      attributes: initialAttributes,
+      fieldPermissions: {},
+      mapConfig: null,
+    };
+  });
+
   const generateImage = async () => {
     if (!formData.name) {
       setImageError("Please enter a name first to generate an image.");
@@ -63,7 +90,7 @@ export default function EntityEdit() {
       const prompt = `A high quality fantasy digital art illustration of a ${formData.type} named ${formData.name}. ${descriptionPart} D&D style, high detail.`;
       
       const response = await ai.models.generateContent({
-        model: 'gemini-3.1-flash-image-preview',
+        model: 'gemini-2.5-flash-image',
         contents: {
           parts: [{ text: prompt }],
         },
@@ -130,40 +157,31 @@ export default function EntityEdit() {
     setAvailableLocations(allEntities.filter(e => e.id !== id));
   }, [allEntities, id]);
 
+  useEffect(() => {
+    if (formData.mapConfig?.mediaId) {
+      const fetchMapUrl = async () => {
+        try {
+          const mediaDoc = await getDoc(doc(db, 'media', formData.mapConfig!.mediaId));
+          if (mediaDoc.exists()) {
+            setActiveMapUrl(mediaDoc.data().data);
+          }
+        } catch (error) {
+          console.error("Error fetching map URL:", error);
+        }
+      };
+      fetchMapUrl();
+    }
+  }, [formData.mapConfig?.mediaId]);
+
   const handleQuickCreate = (newEntity: Entity) => {
     setAvailableLocations(prev => [...prev, newEntity]);
     setFormData(prev => ({ ...prev, locationId: newEntity.id }));
     setIsQuickCreateOpen(false);
   };
   
-  const [formData, setFormData] = useState<Partial<Entity>>(() => {
-    // Initialize with default values from schema
-    const initialAttributes: Record<string, any> = {};
-    if (ENTITY_SCHEMAS[defaultType]) {
-      ENTITY_SCHEMAS[defaultType].forEach(field => {
-        if (field.defaultValue !== undefined) {
-          initialAttributes[field.key] = field.defaultValue;
-        }
-      });
-    }
-
-    return {
-      type: defaultType,
-      name: '',
-      content: '',
-      tags: [],
-      isPublic: false,
-      playerKnowledge: {},
-      locationId: searchParams.get('locationId') || '',
-      gender: '',
-      imageUrls: [],
-      attributes: initialAttributes,
-      fieldPermissions: {},
-    };
-  });
-  
   const [tagInput, setTagInput] = useState('');
   const [imageUrlInput, setImageUrlInput] = useState('');
+  const [activeImageIndex, setActiveImageIndex] = useState<number | null>(null);
   const [isLinkModalOpen, setIsLinkModalOpen] = useState(false);
   const [pendingRelationships, setPendingRelationships] = useState<{ targetId: string, label: string, reverseLabel: string, targetName: string }[]>([]);
   const [relSearch, setRelSearch] = useState('');
@@ -171,6 +189,7 @@ export default function EntityEdit() {
   const [relReverseLabel, setRelReverseLabel] = useState('');
   const [otherFields, setOtherFields] = useState<Set<string>>(new Set());
   const [existingLabels, setExistingLabels] = useState<string[]>([]);
+  const [activeMapUrl, setActiveMapUrl] = useState<string | null>(null);
 
   const handleDndStatChange = (field: keyof DndStats, value: any) => {
     setFormData(prev => ({
@@ -349,6 +368,11 @@ export default function EntityEdit() {
         throw new Error("Only DMs can create or edit entities other than Notes.");
       }
 
+      // Restrict editing of notes to the owner
+      if (id && id !== 'new' && formData.type === 'note' && formData.ownerId !== user.uid) {
+        throw new Error("Only the owner of a note can edit it.");
+      }
+
       let entityId = id;
       if (!entityId || entityId === 'new') {
         entityId = await generateUniqueId(formData.name || 'Untitled');
@@ -432,6 +456,7 @@ export default function EntityEdit() {
         imageUrls: finalImageUrls,
         attributes: formData.attributes || {},
         fieldPermissions: formData.fieldPermissions || {},
+        mapConfig: formData.mapConfig || null,
         statBlock: formData.statBlock || null,
         dndStats: formData.dndStats || null,
         dmNotes: formData.dmNotes || null,
@@ -517,6 +542,51 @@ export default function EntityEdit() {
         [playerId]: knowledge
       }
     }));
+  };
+
+  const setAsMap = async (imageUrl: string) => {
+    if (!currentCampaign || !user) return;
+    
+    setSaving(true);
+    try {
+      const mediaId = `map-${Date.now()}`;
+      const now = new Date().toISOString();
+      
+      const mediaData = {
+        id: mediaId,
+        entityId: id === 'new' ? 'pending' : id,
+        campaignId: currentCampaign.id,
+        data: imageUrl,
+        mimeType: imageUrl.startsWith('data:image/png') ? 'image/png' : 'image/jpeg',
+        ownerId: user.uid,
+        createdAt: now,
+      };
+      
+      await setDoc(doc(db, 'media', mediaId), mediaData);
+      
+      const newMapConfig = {
+        ...(formData.mapConfig || { pins: [] }),
+        mediaId: mediaId
+      };
+
+      // If it's an existing entity, update it immediately to ensure persistence
+      if (id && id !== 'new') {
+        await updateDoc(doc(db, 'entities', id), {
+          mapConfig: newMapConfig
+        });
+      }
+
+      setActiveMapUrl(imageUrl);
+      setFormData(prev => ({
+        ...prev,
+        mapConfig: newMapConfig
+      }));
+    } catch (error) {
+      console.error("Error setting map:", error);
+      setSaveError("Failed to set image as map.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const removeImage = (urlToRemove: string) => {
@@ -675,9 +745,10 @@ export default function EntityEdit() {
   if (loading) return <div className="text-center py-12 text-stone-500">Loading...</div>;
 
   return (
-    <div className="max-w-4xl mx-auto pb-12">
-      <div className="sticky top-0 z-40 -mx-6 px-6 md:-mx-10 md:px-10 -mt-6 md:-mt-10 pt-6 md:pt-10 pb-4 bg-stone-950 border-b border-stone-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8 shadow-xl">
-        <div className="flex items-center justify-between w-full">
+    <div className="p-6 md:p-10 pb-12">
+      {/* Sticky Header - Full Width */}
+      <div className="sticky -top-6 md:-top-10 z-40 -mx-6 px-6 md:-mx-10 md:px-10 -mt-6 md:-mt-10 py-3 bg-stone-900/95 backdrop-blur-md border-b border-stone-800 flex items-center justify-between mb-8 shadow-sm">
+        <div className="max-w-4xl mx-auto w-full flex items-center justify-between">
           <button 
             onClick={() => {
               if (window.history.state && window.history.state.idx > 0) {
@@ -688,7 +759,7 @@ export default function EntityEdit() {
                 navigate(`/entities/${formData.type}`, { replace: true });
               }
             }} 
-            className="flex items-center justify-center gap-2 px-4 py-2 text-stone-400 hover:text-stone-100 transition-colors text-sm font-medium bg-stone-900/50 border border-stone-800 rounded-lg sm:bg-transparent sm:border-0"
+            className="flex items-center justify-center gap-2 px-3 py-1.5 text-stone-400 hover:text-stone-100 transition-colors text-sm font-medium rounded-lg hover:bg-stone-800"
           >
             <ArrowLeft size={16} />
             Cancel
@@ -696,15 +767,16 @@ export default function EntityEdit() {
           <button
             onClick={handleSave}
             disabled={saving || (!isDM && formData.type !== 'note')}
-            className="flex items-center justify-center gap-2 px-6 py-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded-lg font-bold sm:font-medium transition-all shadow-lg shadow-amber-900/20 active:scale-95"
+            className="flex items-center justify-center gap-2 px-4 py-1.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-all shadow-md shadow-amber-900/20 active:scale-95"
           >
-            <Save size={18} />
-            {saving ? 'Saving...' : 'Save Entity'}
+            <Save size={16} />
+            {saving ? 'Saving...' : 'Save'}
           </button>
         </div>
       </div>
 
-      {saveError && (
+      <div className="max-w-4xl mx-auto">
+        {saveError && (
         <div className="mb-8 p-4 bg-red-950/50 border border-red-900/50 rounded-xl text-red-400 text-sm">
           <strong className="font-bold block mb-1">Error saving entity:</strong>
           {saveError}
@@ -812,9 +884,17 @@ export default function EntityEdit() {
                 value={(() => {
                   if (formData.isPublic) return 'all';
                   if (!formData.allowedPlayers || formData.allowedPlayers.length === 0) return 'private';
-                  if (formData.allowedPlayers.includes(currentCampaign?.dmId || '')) {
-                    if (formData.allowedPlayers.length > 1) return 'party';
-                    return 'dm';
+                  
+                  const hasDM = formData.allowedPlayers.includes(currentCampaign?.dmId || '');
+                  const hasPlayers = formData.allowedPlayers.some(id => id !== currentCampaign?.dmId);
+                  
+                  if (formData.type === 'note') {
+                    if (hasPlayers && !hasDM) return 'party';
+                    if (hasPlayers && hasDM) return 'party_dm';
+                    if (hasDM) return 'dm';
+                  } else {
+                    if (hasDM && hasPlayers) return 'party';
+                    if (hasDM) return 'dm';
                   }
                   return 'private';
                 })()}
@@ -823,6 +903,12 @@ export default function EntityEdit() {
                   if (val === 'all') {
                     setFormData({ ...formData, isPublic: true, allowedPlayers: [] });
                   } else if (val === 'party') {
+                    // For notes, party means players ONLY. For others, it means players + DM.
+                    const targetPlayers = formData.type === 'note' 
+                      ? players.map(p => p.uid)
+                      : [...players.map(p => p.uid), currentCampaign?.dmId || ''];
+                    setFormData({ ...formData, isPublic: false, allowedPlayers: targetPlayers });
+                  } else if (val === 'party_dm') {
                     setFormData({ ...formData, isPublic: false, allowedPlayers: [...players.map(p => p.uid), currentCampaign?.dmId || ''] });
                   } else if (val === 'dm') {
                     setFormData({ ...formData, isPublic: false, allowedPlayers: [currentCampaign?.dmId || ''] });
@@ -834,7 +920,14 @@ export default function EntityEdit() {
               >
                 <option value="private">Private (Only Me)</option>
                 <option value="dm">DM Only</option>
-                <option value="party">Party (All Players + DM)</option>
+                {formData.type === 'note' ? (
+                  <>
+                    <option value="party">Party (Players Only)</option>
+                    <option value="party_dm">Party & DM</option>
+                  </>
+                ) : (
+                  <option value="party">Party (All Players + DM)</option>
+                )}
                 <option value="all">Public (Everyone)</option>
               </select>
             </div>
@@ -1029,41 +1122,77 @@ export default function EntityEdit() {
             {renderLabel('imageUrls', 'Images & Maps')}
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 mb-4">
               {formData.imageUrls?.map((url, index) => (
-                <div key={index} className="relative aspect-square rounded-xl overflow-hidden bg-stone-950/50 border border-stone-800 group">
+                <div 
+                  key={index} 
+                  className="relative aspect-square rounded-xl overflow-hidden bg-stone-950/50 border border-stone-800 group cursor-pointer"
+                  onClick={() => {
+                    if (activeImageIndex === index) {
+                      setActiveImageIndex(null);
+                    } else {
+                      setActiveImageIndex(index);
+                    }
+                  }}
+                >
                   <img src={url} alt={`Image ${index + 1}`} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                  <button
-                    type="button"
-                    onClick={() => removeImage(url)}
-                    className="absolute top-2 right-2 p-1.5 bg-red-500/80 hover:bg-red-500 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <X size={14} />
-                  </button>
+                  <div className={clsx(
+                    "absolute inset-0 bg-black/40 transition-opacity flex items-center justify-center gap-2",
+                    activeImageIndex === index ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                  )}>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setAsMap(url); }}
+                      disabled={saving}
+                      className={clsx(
+                        "p-2 rounded-lg transition-all",
+                        activeMapUrl === url ? "bg-amber-500 text-stone-950" : "bg-stone-800 text-stone-100 hover:bg-stone-700",
+                        saving && "opacity-50 cursor-not-allowed"
+                      )}
+                      title="Set as Map"
+                    >
+                      {saving && activeMapUrl !== url ? <RefreshCw size={16} className="animate-spin" /> : <MapIcon size={16} />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); removeImage(url); }}
+                      className="p-2 bg-red-500/80 hover:bg-red-500 text-white rounded-lg transition-all"
+                      title="Remove Image"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                  {activeMapUrl === url && (
+                    <div className="absolute top-2 left-2 px-2 py-0.5 bg-amber-500 text-stone-950 text-[10px] font-bold rounded uppercase tracking-wider">
+                      Active Map
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
             
-            <div className="flex gap-2 mt-2">
-              <AutoExpandingTextarea
-                value={imageUrlInput}
-                onChange={(e) => setImageUrlInput(e.target.value)}
-                placeholder="Paste a direct image URL (e.g., from Discord, Imgur)..."
-                className="flex-1 text-sm min-h-[42px]"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    handleAddImageUrl(e as any);
-                  }
-                }}
-              />
-              <button
-                type="button"
-                onClick={handleAddImageUrl}
-                disabled={!imageUrlInput.trim()}
-                className="px-4 py-2 bg-stone-800 hover:bg-stone-700 disabled:opacity-50 text-stone-100 rounded-xl text-sm font-medium transition-colors"
-              >
-                Add URL
-              </button>
-              <label className="flex items-center justify-center px-4 py-2 bg-stone-800 hover:bg-stone-700 text-stone-100 rounded-xl text-sm font-medium transition-colors cursor-pointer">
+            <div className="flex flex-col sm:flex-row gap-2 mt-2">
+              <div className="flex-1 flex gap-2">
+                <AutoExpandingTextarea
+                  value={imageUrlInput}
+                  onChange={(e) => setImageUrlInput(e.target.value)}
+                  placeholder="Paste a direct image URL..."
+                  className="flex-1 text-sm min-h-[42px]"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleAddImageUrl(e as any);
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={handleAddImageUrl}
+                  disabled={!imageUrlInput.trim()}
+                  className="px-4 py-2 bg-stone-800 hover:bg-stone-700 disabled:opacity-50 text-stone-100 rounded-xl text-sm font-medium transition-colors whitespace-nowrap"
+                >
+                  Add URL
+                </button>
+              </div>
+              <label className="flex items-center justify-center px-4 py-2 bg-stone-800 hover:bg-stone-700 text-stone-100 rounded-xl text-sm font-medium transition-colors cursor-pointer whitespace-nowrap">
                 <Upload size={16} className="mr-2" />
                 Upload
                 <input 
@@ -1288,6 +1417,7 @@ export default function EntityEdit() {
           </div>
         )}
       </form>
+      </div>
 
       <LinkModal
         isOpen={isLinkModalOpen}

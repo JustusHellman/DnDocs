@@ -169,15 +169,15 @@ export const ENTITY_SCHEMAS: Record<string, FieldSchema[]> = {
 };
 
 export const ENTITY_HIERARCHY: Record<string, number> = {
-  geography: 6,
-  country: 5,
-  settlement: 4,
-  landmark: 3,
-  faction: 3,
-  shop: 2,
-  npc: 1,
-  monster: 1,
-  item: 1,
+  geography: 10,
+  country: 9,
+  settlement: 8,
+  landmark: 7,
+  faction: 6,
+  shop: 5,
+  npc: 4,
+  monster: 3,
+  item: 2,
   quest: 1,
   note: 0,
 };

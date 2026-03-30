@@ -34,10 +34,30 @@
           "items": { "type": "string" },
           "description": "List of image URLs or media references (media:ID)."
         },
+        "mapConfig": {
+          "type": "object",
+          "properties": {
+            "mediaId": { "type": "string", "description": "The ID of the media asset to use as a map." },
+            "pins": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "x": { "type": "number", "description": "X coordinate as percentage (0-100)" },
+                  "y": { "type": "number", "description": "Y coordinate as percentage (0-100)" },
+                  "targetEntityId": { "type": "string", "description": "The ID of the entity this pin links to." }
+                },
+                "required": ["x", "y", "targetEntityId"]
+              }
+            }
+          }
+        },
+        "locationId": { "type": "string", "description": "The ID of the parent entity (for 'up' navigation)." },
         "playerKnowledge": {
           "type": "object",
           "description": "Map of player UID to a string describing what they know about this entity."
         },
+        "locationId": { "type": "string", "description": "The ID of the parent entity (for 'up' navigation)." },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -71,6 +91,38 @@
     "/media/{mediaId}": {
       "schema": { "$ref": "#/entities/Media" },
       "description": "Stores base64 image data to avoid document size limits."
+    },
+    "/campaigns/{campaignId}": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "dmId": { "type": "string" },
+          "players": { "type": "array", "items": { "type": "string" } },
+          "joinCode": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        },
+        "required": ["id", "name", "dmId", "players", "joinCode", "createdAt"]
+      },
+      "description": "Stores campaign metadata and membership."
+    },
+    "/relationships/{relId}": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "campaignId": { "type": "string" },
+          "sourceId": { "type": "string" },
+          "targetId": { "type": "string" },
+          "targetName": { "type": "string" },
+          "label": { "type": "string" },
+          "reverseId": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        },
+        "required": ["id", "campaignId", "sourceId", "targetId", "targetName", "label", "reverseId", "createdAt"]
+      },
+      "description": "Stores connections between entities."
     }
   }
 }

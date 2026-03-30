@@ -4,8 +4,11 @@ import { Entity, OperationType } from '../types';
 import { handleFirestoreError } from '../utils/firebaseUtils';
 import { useAuth } from '../AuthContext';
 import { useEntities } from '../hooks/useEntities';
+import { usePermissions } from '../hooks/usePermissions';
 import { Plus, Search, Map, Castle, Users, BookOpen, Package, FileText, Globe, MapPin, Building, Flag } from 'lucide-react';
 import AutoExpandingTextarea from '../components/AutoExpandingTextarea';
+import { useTabActions } from '../contexts/TabContext';
+import { useNavigation } from '../hooks/useNavigation';
 
 const iconMap: Record<string, any> = {
   npc: Users,
@@ -21,24 +24,20 @@ const iconMap: Record<string, any> = {
 export default function EntityList() {
   const { type } = useParams<{ type: string }>();
   const { user, isDM, currentCampaign } = useAuth();
+  const { openTab } = useTabActions();
+  const { navigateToEntity } = useNavigation();
   const { entities: allEntities, loading } = useEntities();
+  const { canViewEntity, canViewField } = usePermissions();
   const [entities, setEntities] = useState<Entity[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
     if (loading || !type) return;
-    setEntities(allEntities.filter(e => e.type === type));
-  }, [allEntities, type, loading]);
-
-  const canViewField = (entity: Entity, field: string) => {
-    if (isDM) return true;
-    if (user && entity.ownerId === user.uid) return true;
-    const perm = entity.fieldPermissions?.[field];
-    if (!perm) return entity.isPublic;
-    if (perm.isPublic) return true;
-    if (user && perm.allowedPlayers.includes(user.uid)) return true;
-    return false;
-  };
+    setEntities(allEntities.filter(e => {
+      if (e.type !== type) return false;
+      return canViewEntity(e);
+    }));
+  }, [allEntities, type, loading, canViewEntity]);
 
   const filteredEntities = entities.filter(entity => {
     const term = searchTerm.toLowerCase();
@@ -53,7 +52,7 @@ export default function EntityList() {
   const Icon = type ? iconMap[type] || FileText : FileText;
 
   return (
-    <div className="max-w-5xl mx-auto">
+    <div className="max-w-5xl mx-auto p-6 md:p-10">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 mb-8">
         <div className="min-w-0">
           <h1 className="text-3xl font-display font-bold text-amber-500 mb-2 capitalize flex items-center gap-3 truncate">
@@ -95,10 +94,10 @@ export default function EntityList() {
             </div>
           ) : (
             filteredEntities.map(entity => (
-              <Link
+              <div
                 key={entity.id}
-                to={`/entity/${entity.id}`}
-                className="block p-5 bg-stone-900/60 backdrop-blur-sm border border-stone-800/50 rounded-xl hover:border-amber-500/50 hover:bg-stone-800/60 transition-all group"
+                onClick={() => navigateToEntity(entity)}
+                className="block p-5 bg-stone-900/60 backdrop-blur-sm border border-stone-800/50 rounded-xl hover:border-amber-500/50 hover:bg-stone-800/60 transition-all group cursor-pointer"
               >
                 <div className="flex items-start justify-between mb-3">
                   <h3 className="text-lg font-display font-bold text-stone-100 truncate pr-4">{entity.name}</h3>
@@ -131,7 +130,7 @@ export default function EntityList() {
                     )}
                   </div>
                 )}
-              </Link>
+              </div>
             ))
           )}
         </div>

@@ -3,12 +3,15 @@ import { Entity, OperationType, EntityType } from '../types';
 import { handleFirestoreError } from '../utils/firebaseUtils';
 import { useAuth } from '../AuthContext';
 import { useEntities } from '../hooks/useEntities';
+import { usePermissions } from '../hooks/usePermissions';
 import { Search, Map, Castle, Users, BookOpen, Package, FileText, Globe, MapPin, Building, Flag, X as XIcon, Scroll, Skull } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import clsx from 'clsx';
 import AutoExpandingTextarea from '../components/AutoExpandingTextarea';
 import SearchableDropdown from '../components/SearchableDropdown';
-import { ENTITY_TYPES_ORDERED } from '../utils/entitySchemas';
+import { ENTITY_TYPES_ORDERED, ENTITY_HIERARCHY } from '../utils/entitySchemas';
+import { useTabActions } from '../contexts/TabContext';
+import { useNavigation } from '../hooks/useNavigation';
 
 const iconMap: Record<string, any> = {
   npc: Users,
@@ -26,44 +29,96 @@ const iconMap: Record<string, any> = {
 
 export default function GlobalSearch() {
   const { user, isDM, currentCampaign } = useAuth();
+  const { openTab } = useTabActions();
+  const { navigateToEntity } = useNavigation();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedTypes, setSelectedTypes] = useState<EntityType[]>([]);
   const [selectedLocationId, setSelectedLocationId] = useState<string>('');
   const { entities, loading, error } = useEntities();
+  const { canViewEntity, canViewField } = usePermissions();
   const [retryCount, setRetryCount] = useState(0);
 
   const entityTypes: EntityType[] = ENTITY_TYPES_ORDERED.map(t => t.value as EntityType);
 
-  const canViewField = (entity: Entity, field: string) => {
-    if (isDM) return true;
-    if (user && entity.ownerId === user.uid) return true;
-    const perm = entity.fieldPermissions?.[field];
-    if (!perm) return entity.isPublic;
-    if (perm.isPublic) return true;
-    if (user && perm.allowedPlayers.includes(user.uid)) return true;
-    return false;
+  const isEntityInLocation = (entity: Entity, targetId: string, allEntities: Entity[]): boolean => {
+    if (entity.locationId === targetId) return true;
+    if (!entity.locationId) return false;
+    
+    // Find the parent entity to check its location
+    const parent = allEntities.find(e => e.id === entity.locationId);
+    if (!parent) return false;
+    
+    return isEntityInLocation(parent, targetId, allEntities);
   };
 
   const filteredEntities = entities.filter(entity => {
+    // Check if user can see the entity at all
+    if (!canViewEntity(entity)) return false;
+
     const term = searchTerm.toLowerCase();
-    const canViewContent = canViewField(entity, 'content');
-    const canViewTags = canViewField(entity, 'tags');
     
     // Type filter
     if (selectedTypes.length > 0 && !selectedTypes.includes(entity.type)) {
       return false;
     }
 
-    // Location filter
-    if (selectedLocationId && entity.locationId !== selectedLocationId) {
+    // Location filter (Recursive)
+    if (selectedLocationId && !isEntityInLocation(entity, selectedLocationId, entities)) {
       return false;
     }
+
+    if (!term) return true;
+
+    const canViewContent = canViewField(entity, 'content');
+    const canViewTags = canViewField(entity, 'tags');
 
     return (
       entity.name.toLowerCase().includes(term) ||
       (canViewContent && entity.content.toLowerCase().includes(term)) ||
       (canViewTags && entity.tags.some(tag => tag.toLowerCase().includes(term)))
     );
+  }).sort((a, b) => {
+    const term = searchTerm.toLowerCase();
+    
+    if (!term) {
+      const sizeA = ENTITY_HIERARCHY[a.type] || 0;
+      const sizeB = ENTITY_HIERARCHY[b.type] || 0;
+      if (sizeA !== sizeB) {
+        return sizeB - sizeA; // Descending size
+      }
+      return a.name.localeCompare(b.name);
+    }
+
+    // Relevance sort
+    const getRelevance = (entity: Entity) => {
+      const name = entity.name.toLowerCase();
+      if (name === term) return 100;
+      if (name.startsWith(term)) return 80;
+      if (name.includes(term)) return 60;
+      
+      const canViewContent = canViewField(entity, 'content');
+      if (canViewContent && entity.content.toLowerCase().includes(term)) return 40;
+      
+      const canViewTags = canViewField(entity, 'tags');
+      if (canViewTags && entity.tags.some(tag => tag.toLowerCase().includes(term))) return 20;
+      
+      return 0;
+    };
+
+    const relA = getRelevance(a);
+    const relB = getRelevance(b);
+    
+    if (relA !== relB) {
+      return relB - relA; // Descending relevance
+    }
+    
+    // Fallback to hierarchy then alphabetical if relevance is same
+    const sizeA = ENTITY_HIERARCHY[a.type] || 0;
+    const sizeB = ENTITY_HIERARCHY[b.type] || 0;
+    if (sizeA !== sizeB) {
+      return sizeB - sizeA;
+    }
+    return a.name.localeCompare(b.name);
   });
 
   const locations = entities.filter(e => ['country', 'settlement', 'geography', 'landmark'].includes(e.type));
@@ -78,7 +133,7 @@ export default function GlobalSearch() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto">
+    <div className="max-w-4xl mx-auto p-6 md:p-10">
       <div className="mb-8">
         <h1 className="text-3xl font-display font-bold text-amber-500 mb-2">Global Search</h1>
         <p className="text-stone-400">Search across all NPCs, settlements, landmarks, countries, factions, shops, items, and notes.</p>
@@ -167,10 +222,10 @@ export default function GlobalSearch() {
             filteredEntities.map(entity => {
               const Icon = iconMap[entity.type] || FileText;
               return (
-                <Link
+                <div
                   key={entity.id}
-                  to={`/entity/${entity.id}`}
-                  className="block p-5 bg-stone-900/60 backdrop-blur-sm border border-stone-800/50 rounded-xl hover:border-amber-500/50 hover:bg-stone-800/60 transition-all group"
+                  onClick={() => navigateToEntity(entity)}
+                  className="block p-5 bg-stone-900/60 backdrop-blur-sm border border-stone-800/50 rounded-xl hover:border-amber-500/50 hover:bg-stone-800/60 transition-all group cursor-pointer"
                 >
                   <div className="flex items-start gap-4">
                     <div className="p-3 bg-stone-950/80 rounded-lg text-amber-400 group-hover:text-amber-300 group-hover:bg-amber-950/30 transition-colors">
@@ -208,7 +263,7 @@ export default function GlobalSearch() {
                       )}
                     </div>
                   </div>
-                </Link>
+                </div>
               );
             })
           )}

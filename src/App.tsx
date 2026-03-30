@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, HashRouter } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, HashRouter, Outlet } from 'react-router-dom';
 import { AuthProvider, useAuth } from './AuthContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import Sidebar from './components/Sidebar';
@@ -12,9 +12,9 @@ import PlayersList from './pages/PlayersList';
 import JoinCampaign from './pages/JoinCampaign';
 import DMTools from './pages/DMTools';
 import WorldMap from './pages/WorldMap';
-import { LogIn, Menu } from 'lucide-react';
+import { LogIn, Menu, ChevronUp, ChevronDown } from 'lucide-react';
 
-function AuthRoute({ children }: { children: React.ReactNode }) {
+function AuthRoute({ children }: { children?: React.ReactNode }) {
   const { user, loading, login, loginWithEmail, registerWithEmail } = useAuth();
   const [isRegistering, setIsRegistering] = useState(false);
   const [email, setEmail] = useState('');
@@ -129,11 +129,12 @@ function AuthRoute({ children }: { children: React.ReactNode }) {
       </div>
     );
   }
-  return <>{children}</>;
+  return <>{children || <Outlet />}</>;
 }
 
-function CampaignRoute({ children }: { children: React.ReactNode }) {
+function CampaignRoute({ children }: { children?: React.ReactNode }) {
   const { currentCampaign } = useAuth();
+  const { isTabNavOpen, setIsTabNavOpen } = useTabs();
   const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth >= 768);
   const [touchStart, setTouchStart] = useState<number | null>(null);
   const [touchEnd, setTouchEnd] = useState<number | null>(null);
@@ -156,7 +157,7 @@ function CampaignRoute({ children }: { children: React.ReactNode }) {
     
     // Only handle swipes on mobile
     if (window.innerWidth < 768) {
-      if (isRightSwipe && touchStart < 50) {
+      if (isRightSwipe && touchStart < 150) {
         // Swipe right from the left edge
         setIsSidebarOpen(true);
       }
@@ -177,41 +178,58 @@ function CampaignRoute({ children }: { children: React.ReactNode }) {
       onTouchEnd={onTouchEnd}
     >
       <Sidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} />
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <div className="h-16 bg-stone-900/80 backdrop-blur-md border-b border-stone-800/50 flex items-center px-4 shrink-0">
-          {!isSidebarOpen && (
-            <button onClick={() => setIsSidebarOpen(true)} className="p-2 text-stone-400 hover:text-amber-500 mr-2">
-              <Menu size={24} />
-            </button>
-          )}
-          <h1 className="ml-2 text-lg font-display font-bold text-amber-500 truncate">{currentCampaign.name}</h1>
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
+        <div className="h-16 bg-stone-900/80 backdrop-blur-md border-b border-stone-800/50 flex items-center px-4 shrink-0 justify-between">
+          <div className="flex items-center min-w-0">
+            {!isSidebarOpen && (
+              <button onClick={() => setIsSidebarOpen(true)} className="p-2 text-stone-400 hover:text-amber-500 mr-2 shrink-0">
+                <Menu size={24} />
+              </button>
+            )}
+            <h1 className="ml-2 text-lg font-display font-bold text-amber-500 truncate">{currentCampaign.name}</h1>
+          </div>
+          <button 
+            onClick={() => setIsTabNavOpen(!isTabNavOpen)} 
+            className="md:hidden p-2 text-stone-400 hover:text-amber-500 shrink-0 transition-colors"
+            title={isTabNavOpen ? "Hide Tabs" : "Show Tabs"}
+          >
+            {isTabNavOpen ? <ChevronDown size={24} /> : <ChevronUp size={24} />}
+          </button>
         </div>
-        <main className="flex-1 overflow-y-auto p-6 md:p-10 bg-transparent">
-          {children}
+        <main className="flex-1 overflow-y-auto bg-transparent">
+          {children || <Outlet />}
         </main>
+        <TabContainer />
       </div>
     </div>
   );
 }
 
+import { TabProvider, useTabs } from './contexts/TabContext';
+import TabContainer from './components/TabContainer';
+
 export default function App() {
   return (
     <ErrorBoundary>
       <AuthProvider>
-        <HashRouter>
-          <Routes>
-            <Route path="/" element={<AuthRoute><CampaignRoute><Navigate to="/search" replace /></CampaignRoute></AuthRoute>} />
-            <Route path="/search" element={<AuthRoute><CampaignRoute><GlobalSearch /></CampaignRoute></AuthRoute>} />
-            <Route path="/entities/:type" element={<AuthRoute><CampaignRoute><EntityList /></CampaignRoute></AuthRoute>} />
-            <Route path="/entity/:id" element={<AuthRoute><CampaignRoute><EntityDetail /></CampaignRoute></AuthRoute>} />
-            <Route path="/entity/:id/edit" element={<AuthRoute><CampaignRoute><EntityEdit /></CampaignRoute></AuthRoute>} />
-            <Route path="/entity/new" element={<AuthRoute><CampaignRoute><EntityEdit /></CampaignRoute></AuthRoute>} />
-            <Route path="/players" element={<AuthRoute><CampaignRoute><PlayersList /></CampaignRoute></AuthRoute>} />
-            <Route path="/tools" element={<AuthRoute><CampaignRoute><DMTools /></CampaignRoute></AuthRoute>} />
-            <Route path="/map" element={<AuthRoute><CampaignRoute><WorldMap /></CampaignRoute></AuthRoute>} />
-            <Route path="/join/:code" element={<AuthRoute><JoinCampaign /></AuthRoute>} />
-          </Routes>
-        </HashRouter>
+        <TabProvider>
+          <HashRouter>
+            <Routes>
+              <Route element={<AuthRoute><CampaignRoute /></AuthRoute>}>
+                <Route path="/" element={<Navigate to="/search" replace />} />
+                <Route path="/search" element={<GlobalSearch />} />
+                <Route path="/entities/:type" element={<EntityList />} />
+                <Route path="/entity/:id" element={<EntityDetail />} />
+                <Route path="/entity/:id/edit" element={<EntityEdit />} />
+                <Route path="/entity/new" element={<EntityEdit />} />
+                <Route path="/players" element={<PlayersList />} />
+                <Route path="/tools" element={<DMTools />} />
+                <Route path="/map/:id?" element={<WorldMap />} />
+              </Route>
+              <Route path="/join/:code" element={<AuthRoute><JoinCampaign /></AuthRoute>} />
+            </Routes>
+          </HashRouter>
+        </TabProvider>
       </AuthProvider>
     </ErrorBoundary>
   );

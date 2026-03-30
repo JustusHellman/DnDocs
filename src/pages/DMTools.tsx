@@ -110,7 +110,7 @@ export default function DMTools() {
 
       const ai = new GoogleGenAI({ apiKey });
       const response = await ai.models.generateContent({
-        model: 'gemini-3.1-flash-image-preview',
+        model: 'gemini-2.5-flash-image',
         contents: {
           parts: [
             {
@@ -250,7 +250,7 @@ export default function DMTools() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8">
+    <div className="max-w-4xl mx-auto p-6 md:p-10 space-y-8">
       <div className="flex items-center gap-3 mb-8">
         <Dice5 className="text-amber-500" size={32} />
         <h1 className="text-3xl font-bold text-stone-100 font-cinzel tracking-wider">DM Tools & Generators</h1>

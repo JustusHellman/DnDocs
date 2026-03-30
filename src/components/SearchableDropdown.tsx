@@ -52,7 +52,10 @@ export default function SearchableDropdown({ options, value, onChange, placehold
     <div className="relative" ref={wrapperRef}>
       <div 
         className="w-full px-4 py-3 bg-stone-950/50 border border-stone-800 rounded-xl text-stone-100 focus-within:ring-2 focus-within:ring-amber-500/50 transition-all font-medium flex items-center justify-between cursor-pointer"
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={(e) => {
+          e.stopPropagation();
+          setIsOpen(!isOpen);
+        }}
       >
         <span className={clsx("truncate", !selectedOption && "text-stone-500")}>
           {selectedOption ? `${selectedOption.label} (${selectedOption.type})` : placeholder}
@@ -87,7 +90,10 @@ export default function SearchableDropdown({ options, value, onChange, placehold
               onClick={e => e.stopPropagation()}
             />
           </div>
-          <div className="max-h-60 overflow-y-auto p-2 space-y-2">
+          <div 
+            className="max-h-60 overflow-y-auto p-2 space-y-2"
+            onClick={(e) => e.stopPropagation()}
+          >
             {onCreateNew && searchTerm.trim() && !options.some(o => o.label.toLowerCase() === searchTerm.toLowerCase()) && (
               <button
                 type="button"
@@ -116,7 +122,8 @@ export default function SearchableDropdown({ options, value, onChange, placehold
                           ? "bg-amber-950/50 text-amber-400" 
                           : "text-stone-300 hover:bg-stone-800 hover:text-stone-100"
                       )}
-                      onClick={() => {
+                      onClick={(e) => {
+                        e.stopPropagation();
                         onChange(option.id);
                         setIsOpen(false);
                         setSearchTerm('');

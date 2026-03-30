@@ -15,8 +15,7 @@ export async function generateFavicon() {
       },
       config: {
         imageConfig: {
-          aspectRatio: "1:1",
-          imageSize: "1K"
+          aspectRatio: "1:1"
         },
       },
     });

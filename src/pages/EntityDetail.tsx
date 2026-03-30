@@ -1,24 +1,37 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { doc, onSnapshot, deleteDoc, collection, getDocs, query, where, getDoc, setDoc } from 'firebase/firestore';
+import { doc, onSnapshot, deleteDoc, collection, getDocs, query, where, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Entity, User, OperationType, Relationship, DndStats } from '../types';
 import { ENTITY_SCHEMAS } from '../utils/entitySchemas';
 import { handleFirestoreError } from '../utils/firebaseUtils';
 import { useAuth } from '../AuthContext';
 import { useEntities } from '../hooks/useEntities';
-import { Edit, Trash2, ArrowLeft, Lock, Globe, Users, BookOpen, MapPin, Plus, X, ChevronRight, ChevronDown, Info } from 'lucide-react';
+import { usePermissions } from '../hooks/usePermissions';
+import { useTabActions } from '../contexts/TabContext';
+import { useNavigation } from '../hooks/useNavigation';
+import { Edit, Trash2, ArrowLeft, Lock, Globe, Users, BookOpen, MapPin, Plus, X, ChevronRight, ChevronDown, Info, ExternalLink, Share } from 'lucide-react';
 import MDEditor from '@uiw/react-md-editor';
 import CollapsibleSection from '../components/CollapsibleSection';
 import SearchableDropdown from '../components/SearchableDropdown';
 import QuickCreateModal from '../components/QuickCreateModal';
 import AutoExpandingTextarea from '../components/AutoExpandingTextarea';
+import { EntityHeader } from '../components/EntityHeader';
+import { EntityFields } from '../components/EntityFields';
+import { LocationTree } from '../components/LocationTree';
+import { RelationshipList } from '../components/RelationshipList';
+import { StatBlockModal } from '../components/StatBlockModal';
+import { RelationshipModal } from '../components/RelationshipModal';
 
-export default function EntityDetail() {
-  const { id } = useParams<{ id: string }>();
+export default function EntityDetail({ entityId }: { entityId?: string }) {
+  const params = useParams<{ id: string }>();
+  const id = entityId || params.id;
   const navigate = useNavigate();
   const { isDM, user, currentCampaign } = useAuth();
+  const { openTab, closeTab } = useTabActions();
+  const { navigateToEntity } = useNavigation();
   const { entities: allEntitiesData, loading: entitiesLoading } = useEntities();
+  const { canViewEntity, canViewField } = usePermissions();
   const [entity, setEntity] = useState<Entity | null>(null);
   const [players, setPlayers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -56,9 +69,12 @@ export default function EntityDetail() {
     if (!entitiesLoading) {
       setAllCampaignEntities(allEntitiesData);
       setAllEntities(allEntitiesData);
-      setLocatedHere(allEntitiesData.filter(e => e.locationId === id));
+      setLocatedHere(allEntitiesData.filter(e => {
+        if (e.locationId !== id) return false;
+        return canViewEntity(e);
+      }));
     }
-  }, [allEntitiesData, entitiesLoading, id]);
+  }, [allEntitiesData, entitiesLoading, id, canViewEntity]);
 
   const toggleNode = (nodeId: string) => {
     setExpandedNodes(prev => {
@@ -90,6 +106,20 @@ export default function EntityDetail() {
   const markdownComponents = {
     a: ({ node, ...props }: any) => {
       const href = props.href || '';
+      if (href.startsWith('/entity/')) {
+        const targetId = href.split('/')[2];
+        const targetEntity = allEntitiesData.find(e => e.id === targetId);
+        if (targetEntity) {
+          return (
+            <button 
+              onClick={() => navigateToEntity(targetEntity)} 
+              className="text-amber-400 hover:text-amber-300 underline decoration-amber-500/30 underline-offset-4 inline"
+            >
+              {props.children}
+            </button>
+          );
+        }
+      }
       if (href.startsWith('/')) {
         return <Link to={href} {...props} className="text-amber-400 hover:text-amber-300 underline decoration-amber-500/30 underline-offset-4" />;
       }
@@ -97,16 +127,6 @@ export default function EntityDetail() {
     }
   };
 
-  const canViewField = (field: string) => {
-    if (isDM) return true;
-    if (!entity) return false;
-    if (user && entity.ownerId === user.uid) return true;
-    const perm = entity.fieldPermissions?.[field];
-    if (!perm) return entity.isPublic; // fallback to entity's global isPublic
-    if (perm.isPublic) return true;
-    if (user && perm.allowedPlayers.includes(user.uid)) return true;
-    return false;
-  };
 
   useEffect(() => {
     if (!id) return;
@@ -114,6 +134,12 @@ export default function EntityDetail() {
     const unsubscribe = onSnapshot(doc(db, 'entities', id), async (docSnap) => {
       if (docSnap.exists()) {
         const entityData = docSnap.data() as Entity;
+        
+        // Check if user can see this entity at all
+        if (!canViewEntity(entityData)) {
+          navigate('/');
+          return;
+        }
         
         // Resolve media URLs to base64 for display
         const resolvedImageUrls = [...(entityData.imageUrls || [])];
@@ -293,151 +319,142 @@ export default function EntityDetail() {
     setIsQuickCreateOpen(false);
   };
 
+  const handlePushToPlayers = async () => {
+    if (!id || !entity) return;
+    try {
+      await updateDoc(doc(db, 'entities', id), {
+        lastPushedAt: Date.now()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `entities/${id}`);
+    }
+  };
+
   if (loading) return <div className="text-center py-12 text-stone-500">Loading entity...</div>;
   if (!entity) return <div className="text-center py-12 text-red-500">Entity not found or you don't have permission to view it.</div>;
 
   const playerKnowledge = entity.playerKnowledge || {};
   const myKnowledge = user && !isDM ? playerKnowledge[user.uid] : null;
 
-  const LocationTree = ({ parentId, entities, depth = 0, visited = new Set<string>() }: { parentId: string, entities: Entity[], depth?: number, visited?: Set<string> }) => {
-    if (visited.has(parentId)) return null; // Cycle detection
-    
-    const children = entities.filter(e => e.locationId === parentId);
-    if (children.length === 0) return null;
-
-    const newVisited = new Set(visited);
-    newVisited.add(parentId);
-
-    return (
-      <div className={depth > 0 ? "ml-4 pl-4 border-l border-stone-800 mt-2 space-y-2" : "space-y-2"}>
-        {children.map(child => {
-          const hasChildren = entities.some(e => e.locationId === child.id);
-          const isExpanded = expandedNodes.has(child.id);
-
-          return (
-            <div key={child.id} className="flex flex-col items-start">
-              <div className="flex items-center gap-2">
-                {hasChildren ? (
-                  <button
-                    onClick={() => toggleNode(child.id)}
-                    className="p-1 text-stone-400 hover:text-stone-100 hover:bg-stone-800 rounded transition-colors"
-                  >
-                    {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                  </button>
-                ) : (
-                  <span className="w-6" />
-                )}
-                <Link to={`/entity/${child.id}`} className="inline-flex items-center gap-2 px-3 py-1.5 bg-stone-900/50 border border-stone-800 rounded-lg text-emerald-400 hover:text-emerald-300 hover:bg-stone-800 transition-colors">
-                  <MapPin size={14} />
-                  <span className="font-medium">{child.name}</span>
-                  <span className="text-xs text-stone-500 uppercase tracking-wider">{child.type}</span>
-                </Link>
-              </div>
-              {hasChildren && isExpanded && (
-                <LocationTree parentId={child.id} entities={entities} depth={depth + 1} visited={newVisited} />
-              )}
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
-
   return (
-    <div className="max-w-4xl mx-auto pb-12">
-      <div className="mb-6">
-        <button onClick={() => navigate(-1)} className="flex items-center gap-2 text-stone-400 hover:text-stone-100 transition-colors text-sm font-medium">
-          <ArrowLeft size={16} />
-          Back
-        </button>
-      </div>
+    <div className="max-w-4xl mx-auto p-6 md:p-10 pb-12">
+      {!entityId && (
+        <div className="mb-6">
+          <button onClick={() => navigate(-1)} className="flex items-center gap-2 text-stone-400 hover:text-stone-100 transition-colors text-sm font-medium">
+            <ArrowLeft size={16} />
+            Back
+          </button>
+        </div>
+      )}
 
       <div className="bg-stone-900/80 backdrop-blur-md border border-stone-800 rounded-2xl overflow-hidden shadow-xl mb-8">
-        <div className="p-6 md:p-8 border-b border-stone-800 flex flex-col sm:flex-row sm:items-start justify-between gap-6">
-          <div className="flex-1 min-w-0">
-            <div className="flex flex-wrap items-center gap-3 mb-3">
-              <span className="px-2.5 py-1 rounded-md text-xs font-bold bg-stone-800 text-stone-300 uppercase tracking-widest">
-                {entity.type}
-              </span>
-              {entity.type === 'npc' && entity.gender && canViewField('gender') && (
-                <span className="px-2.5 py-1 rounded-md text-xs font-bold bg-amber-950/30 text-amber-400 border border-amber-900/30 uppercase tracking-widest">
-                  {entity.gender}
-                </span>
-              )}
-              {entity.isPublic ? (
-                <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold bg-emerald-950/30 text-emerald-400 border border-emerald-900/30 uppercase tracking-widest">
-                  <Globe size={12} /> Public
-                </span>
-              ) : (
-                <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold bg-red-950/30 text-red-400 border border-red-900/30 uppercase tracking-widest">
-                  <Lock size={12} /> Secret
-                </span>
-              )}
-              {ownerName && (
-                <div className="group relative flex items-center">
-                  <span className="flex items-center justify-center w-5 h-5 rounded-full bg-stone-800 text-stone-400 cursor-help hover:bg-stone-700 hover:text-stone-200 transition-colors">
-                    <Info size={12} />
-                  </span>
-                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-stone-800 text-stone-200 text-xs rounded-lg shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap border border-stone-700 z-50">
-                    Created by {ownerName}
-                  </div>
-                </div>
-              )}
-            </div>
-            <h1 className="text-3xl md:text-4xl font-black text-white tracking-tight mb-4 break-words">{entity.name}</h1>
+        <div className="p-5 sm:p-6 md:p-8 border-b border-stone-800 flex flex-col gap-4">
+          {/* Top Row: Title and Actions */}
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <h1 className="text-2xl sm:text-3xl md:text-4xl font-black text-white tracking-tight break-words leading-tight flex-1 min-w-[200px] font-cinzel">
+              {entity.name}
+            </h1>
             
-            {(entity.type === 'npc' || entity.type === 'monster') && (entity.statBlock || entity.dndStats) && canViewField('statBlock') && (
-              <div className="mb-4">
-                <button
-                  onClick={() => setIsStatBlockModalOpen(true)}
-                  className="flex items-center gap-2 px-4 py-2 bg-stone-800 hover:bg-stone-700 text-amber-400 hover:text-amber-300 rounded-lg transition-colors text-sm font-medium border border-stone-700"
+            {(isDM || (entity.type === 'note' && entity.ownerId === user?.uid)) && (
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                {isDM && (
+                  <button
+                    onClick={handlePushToPlayers}
+                    className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-amber-900/30 hover:bg-amber-900/50 text-amber-400 hover:text-amber-300 border border-amber-900/30 rounded-lg transition-colors text-xs font-medium"
+                    title="Push to Players"
+                  >
+                    <Share size={14} />
+                    <span className="hidden sm:inline">Push</span>
+                  </button>
+                )}
+                <Link
+                  to={`/entity/${entity.id}/edit`}
+                  onClick={() => {
+                    if (entityId) {
+                      closeTab(entityId);
+                    }
+                  }}
+                  className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-stone-100 rounded-lg transition-colors text-xs font-medium"
+                  title="Edit"
                 >
-                  <BookOpen size={16} />
-                  View Stat Block
+                  <Edit size={14} />
+                  <span className="hidden sm:inline">Edit</span>
+                </Link>
+                <button
+                  onClick={handleDelete}
+                  className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-red-950/30 hover:bg-red-900/50 text-red-400 hover:text-red-300 border border-red-900/30 rounded-lg transition-colors text-xs font-medium"
+                  title="Delete"
+                >
+                  <Trash2 size={14} />
+                  <span className="hidden sm:inline">Delete</span>
                 </button>
               </div>
             )}
+          </div>
 
-            {entity.tags && entity.tags.length > 0 && canViewField('tags') && (
-              <div className="flex flex-wrap gap-2">
+          {/* Bottom Row: Badges and Tags */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="px-2 py-1 rounded-md text-[10px] sm:text-xs font-bold bg-stone-800 text-stone-300 uppercase tracking-widest">
+              {entity.type}
+            </span>
+            {entity.type === 'npc' && entity.gender && canViewField(entity, 'gender') && (
+              <span className="px-2 py-1 rounded-md text-[10px] sm:text-xs font-bold bg-amber-950/30 text-amber-400 border border-amber-900/30 uppercase tracking-widest">
+                {entity.gender}
+              </span>
+            )}
+            {entity.isPublic ? (
+              <span className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] sm:text-xs font-bold bg-emerald-950/30 text-emerald-400 border border-emerald-900/30 uppercase tracking-widest">
+                <Globe size={12} /> Public
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] sm:text-xs font-bold bg-red-950/30 text-red-400 border border-red-900/30 uppercase tracking-widest">
+                <Lock size={12} /> Secret
+              </span>
+            )}
+            {ownerName && (
+              <div className="group relative flex items-center">
+                <span className="flex items-center justify-center w-5 h-5 rounded-full bg-stone-800 text-stone-400 cursor-help hover:bg-stone-700 hover:text-stone-200 transition-colors">
+                  <Info size={12} />
+                </span>
+                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-stone-800 text-stone-200 text-xs rounded-lg shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap border border-stone-700 z-50">
+                  Created by {ownerName}
+                </div>
+              </div>
+            )}
+            
+            {entity.tags && entity.tags.length > 0 && canViewField(entity, 'tags') && (
+              <>
+                <div className="w-px h-4 bg-stone-700 mx-1 hidden sm:block"></div>
                 {entity.tags.map(tag => (
-                  <span key={tag} className="px-3 py-1 rounded-lg text-sm font-medium bg-stone-950 text-amber-300 border border-stone-800">
+                  <span key={tag} className="px-2 py-0.5 rounded-md text-[10px] sm:text-xs font-medium bg-stone-950 text-amber-300 border border-stone-800">
                     #{tag}
                   </span>
                 ))}
-              </div>
+              </>
+            )}
+            
+            {(entity.type === 'npc' || entity.type === 'monster') && (entity.statBlock || entity.dndStats) && canViewField(entity, 'statBlock') && (
+              <>
+                <div className="w-px h-4 bg-stone-700 mx-1 hidden sm:block"></div>
+                <button
+                  onClick={() => setIsStatBlockModalOpen(true)}
+                  className="flex items-center gap-1.5 px-2 py-1 bg-stone-800 hover:bg-stone-700 text-amber-400 hover:text-amber-300 rounded-md transition-colors text-[10px] sm:text-xs font-bold border border-stone-700 uppercase tracking-widest"
+                >
+                  <BookOpen size={12} />
+                  Stat Block
+                </button>
+              </>
             )}
           </div>
-          
-          {(isDM || (entity.type === 'note' && entity.ownerId === user?.uid)) && (
-            <div className="flex items-center gap-3 shrink-0">
-              <Link
-                to={`/entity/${entity.id}/edit`}
-                className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-stone-100 rounded-lg transition-colors text-sm font-medium"
-                title="Edit"
-              >
-                <Edit size={18} />
-                <span className="sm:hidden lg:inline">Edit</span>
-              </Link>
-              <button
-                onClick={handleDelete}
-                className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 bg-red-950/30 hover:bg-red-900/50 text-red-400 hover:text-red-300 border border-red-900/30 rounded-lg transition-colors text-sm font-medium"
-                title="Delete"
-              >
-                <Trash2 size={18} />
-                <span className="sm:hidden lg:inline">Delete</span>
-              </button>
-            </div>
-          )}
         </div>
 
-        <div className="p-8">
+        <div className="p-5 sm:p-6 md:p-8">
           {entity.attributes && Object.keys(entity.attributes).length > 0 && (
             <CollapsibleSection title="Attributes">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {Object.entries(entity.attributes).map(([key, value]) => {
                     if (value === undefined || value === null || value === '') return null;
-                    if (!canViewField(key)) return null;
+                    if (!canViewField(entity, key)) return null;
                     
                     const schema = ENTITY_SCHEMAS[entity.type]?.find(s => s.key === key);
                     const label = schema ? schema.label : key;
@@ -451,9 +468,9 @@ export default function EntityDetail() {
                         <div className="text-stone-300 whitespace-pre-wrap font-medium">
                           {isEntitySelect ? (
                             targetEntity ? (
-                              <Link to={`/entity/${targetEntity.id}`} className="text-amber-400 hover:text-amber-300 underline decoration-amber-500/30 underline-offset-4">
+                              <button onClick={() => navigateToEntity(targetEntity)} className="text-amber-400 hover:text-amber-300 underline decoration-amber-500/30 underline-offset-4">
                                 {targetEntity.name}
-                              </Link>
+                              </button>
                             ) : (
                               <span className="text-stone-600 italic">Unknown Entity</span>
                             )
@@ -470,7 +487,7 @@ export default function EntityDetail() {
               </CollapsibleSection>
             )}
 
-            {entity.imageUrls && entity.imageUrls.length > 0 && canViewField('imageUrls') && (
+            {entity.imageUrls && entity.imageUrls.length > 0 && canViewField(entity, 'imageUrls') && (
               <CollapsibleSection title="Images & Maps">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {entity.imageUrls.map((url, index) => (
@@ -486,15 +503,15 @@ export default function EntityDetail() {
               </CollapsibleSection>
             )}
 
-            {(locationEntity && canViewField('locationId') || locatedHere.length > 0) && (
+            {(locationEntity && canViewField(entity, 'locationId') || locatedHere.length > 0) && (
               <CollapsibleSection title="Location">
-                {locationEntity && canViewField('locationId') && (
+                {locationEntity && canViewField(entity, 'locationId') && (
                   <div className="mb-6">
                     <h3 className="text-sm font-semibold text-stone-500 uppercase tracking-wider mb-2">Located In</h3>
-                    <Link to={`/entity/${locationEntity.id}`} className="inline-flex items-center gap-2 px-3 py-1.5 bg-stone-900 border border-stone-800 rounded-lg text-amber-400 hover:text-amber-300 hover:bg-stone-800 transition-colors">
+                    <button onClick={() => navigateToEntity(locationEntity)} className="inline-flex items-center gap-2 px-3 py-1.5 bg-stone-900 border border-stone-800 rounded-lg text-amber-400 hover:text-amber-300 hover:bg-stone-800 transition-colors">
                       <MapPin size={16} />
                       {locationEntity.name}
-                    </Link>
+                    </button>
                   </div>
                 )}
 
@@ -529,7 +546,13 @@ export default function EntityDetail() {
                         </button>
                       </div>
                     </div>
-                    <LocationTree parentId={entity.id} entities={allCampaignEntities} />
+                    <LocationTree 
+                      parentId={entity.id} 
+                      entities={allCampaignEntities} 
+                      expandedNodes={expandedNodes}
+                      toggleNode={toggleNode}
+                      navigateToEntity={navigateToEntity}
+                    />
                   </div>
                 )}
               </CollapsibleSection>
@@ -547,27 +570,39 @@ export default function EntityDetail() {
             <p className="text-stone-500 text-sm">No relationships defined yet.</p>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {relationships.map(rel => (
-                <div key={rel.id} className="bg-stone-950/50 border border-stone-800 rounded-xl p-3 flex items-center justify-between group">
-                  <div>
-                    <Link to={`/entity/${rel.targetId}`} className="font-medium text-amber-400 hover:text-amber-300">
-                      {rel.targetName}
-                    </Link>
-                    <span className="text-stone-400 text-sm ml-2">({rel.label})</span>
+              {relationships.map(rel => {
+                const targetEntity = allEntitiesData.find(e => e.id === rel.targetId);
+                return (
+                  <div key={rel.id} className="bg-stone-950/50 border border-stone-800 rounded-xl p-3 flex items-center justify-between group">
+                    <div>
+                      <button 
+                        onClick={() => {
+                          if (targetEntity) {
+                            navigateToEntity(targetEntity);
+                          } else {
+                            openTab(rel.targetId, rel.targetName, 'unknown');
+                          }
+                        }} 
+                        className="font-medium text-amber-400 hover:text-amber-300"
+                      >
+                        {rel.targetName}
+                      </button>
+                      <span className="text-stone-400 text-sm ml-2">({rel.label})</span>
+                    </div>
+                    {isDM && (
+                      <button onClick={() => handleDeleteRelationship(rel)} className="text-stone-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <X size={16} />
+                      </button>
+                    )}
                   </div>
-                  {isDM && (
-                    <button onClick={() => handleDeleteRelationship(rel)} className="text-stone-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <X size={16} />
-                    </button>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </CollapsibleSection>
 
         <CollapsibleSection title="Content">
-            {canViewField('content') ? (
+            {canViewField(entity, 'content') ? (
               <div data-color-mode="dark" className="prose prose-invert prose-stone max-w-none bg-transparent">
                 <MDEditor.Markdown source={entity.content} className="!bg-transparent" components={markdownComponents} />
               </div>
@@ -582,7 +617,13 @@ export default function EntityDetail() {
 
           <CollapsibleSection title="Notes">
             <div className="flex items-center justify-end mb-4">
-              <Link to={`/entity/new?type=note&locationId=${entity.id}`} className="text-sm text-amber-400 hover:text-amber-300 flex items-center gap-1">
+              <Link
+                to={`/entity/new?type=note&locationId=${entity.id}`}
+                onClick={() => {
+                  if (entityId) closeTab(entityId);
+                }}
+                className="text-sm text-amber-400 hover:text-amber-300 flex items-center gap-1"
+              >
                 <Plus size={16} /> Add Note
               </Link>
             </div>
@@ -592,9 +633,9 @@ export default function EntityDetail() {
               <div className="grid grid-cols-1 gap-3">
                 {allCampaignEntities.filter(e => e.type === 'note' && e.locationId === entity.id).map(note => (
                   <div key={note.id} className="bg-stone-950/50 border border-stone-800 rounded-xl p-4">
-                    <Link to={`/entity/${note.id}`} className="font-medium text-amber-400 hover:text-amber-300 text-lg block mb-2">
+                    <button onClick={() => navigateToEntity(note)} className="font-medium text-amber-400 hover:text-amber-300 text-lg block mb-2 text-left">
                       {note.name}
-                    </Link>
+                    </button>
                     <div data-color-mode="dark" className="prose prose-invert prose-stone max-w-none text-sm line-clamp-3 bg-transparent">
                       <MDEditor.Markdown source={note.content} className="!bg-transparent" components={markdownComponents} />
                     </div>
@@ -644,7 +685,13 @@ export default function EntityDetail() {
                         </div>
                       )}
                       <div className="mt-3 text-right">
-                        <Link to={`/entity/${entity.id}/edit`} className="text-xs text-amber-400 hover:text-amber-300 font-medium">
+                        <Link
+                          to={`/entity/${entity.id}/edit`}
+                          onClick={() => {
+                            if (entityId) closeTab(entityId);
+                          }}
+                          className="text-xs text-amber-400 hover:text-amber-300 font-medium"
+                        >
                           Edit Knowledge
                         </Link>
                       </div>

@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut, User as FirebaseUser, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, setDoc, onSnapshot, getDocFromServer } from 'firebase/firestore';
 import { auth, db, googleProvider } from './firebase';
 import { User, Campaign, OperationType } from './types';
 import { handleFirestoreError } from './utils/firebaseUtils';
@@ -45,7 +45,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (fUser) {
         try {
           const userRef = doc(db, 'users', fUser.uid);
-          const userSnap = await getDoc(userRef);
+          let userSnap;
+          try {
+            userSnap = await getDocFromServer(userRef);
+          } catch (e) {
+            // Fallback to normal getDoc if server fetch fails (e.g. offline)
+            userSnap = await getDoc(userRef);
+          }
           
           let userData: User;
           if (!userSnap.exists()) {
