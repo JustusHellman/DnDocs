@@ -1,0 +1,11 @@
+{
+  "name": "DnDocs",
+  "short_name": "DnDocs",
+  "description": "Your D&D campaign's shared archive.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#e9dcbc",
+  "theme_color": "#0c0a09",
+  "icons": [{ "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

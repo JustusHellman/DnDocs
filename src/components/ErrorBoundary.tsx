@@ -1,61 +1,46 @@
-import React, { Component, ErrorInfo, ReactNode } from 'react';
-
-interface Props {
-  children?: ReactNode;
-}
+import { Component, type ErrorInfo, type ReactNode } from 'react';
 
 interface State {
-  hasError: boolean;
   error: Error | null;
 }
 
-export class ErrorBoundary extends Component<Props, State> {
-  public state: State = {
-    hasError: false,
-    error: null
-  };
+export class ErrorBoundary extends Component<{ children?: ReactNode }, State> {
+  state: State = { error: null };
 
-  public static getDerivedStateFromError(error: Error): State {
-    return { hasError: true, error };
+  static getDerivedStateFromError(error: Error): State {
+    return { error };
   }
 
-  public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('Uncaught error:', error, errorInfo);
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[DnDocs] Uncaught render error', error, info);
   }
 
-  public render() {
-    if (this.state.hasError) {
-      let errorDetails = this.state.error?.message;
-      try {
-        const parsed = JSON.parse(this.state.error?.message || '{}');
-        if (parsed.error) {
-          errorDetails = parsed.error;
-        }
-      } catch (e) {
-        // Not JSON
-      }
-
-      return (
-        <div className="min-h-screen flex items-center justify-center bg-transparent text-stone-100 p-6">
-          <div className="max-w-md w-full bg-stone-900/80 backdrop-blur-md border border-red-900/50 rounded-xl p-6 shadow-2xl">
-            <h2 className="text-xl font-bold text-red-500 mb-4 font-cinzel">Something went wrong</h2>
-            <p className="text-stone-300 mb-4 text-sm">
-              An error occurred while communicating with the database or rendering the page.
-            </p>
-            <div className="bg-black/50 p-3 rounded-lg overflow-auto text-xs font-mono text-red-400 mb-6">
-              {errorDetails || 'Unknown error'}
-            </div>
-            <button
-              onClick={() => this.setState({ hasError: false, error: null })}
-              className="w-full py-2 px-4 bg-stone-800 hover:bg-stone-700 text-white rounded-lg transition-colors"
-            >
-              Try again
+  render() {
+    if (!this.state.error) return this.props.children;
+    // A new deploy can make old lazy chunks disappear – a reload fixes that.
+    const isChunkError = /Failed to fetch dynamically imported module|Importing a module script failed/i.test(this.state.error.message);
+    return (
+      <div className="flex min-h-dvh items-center justify-center p-6">
+        <div className="card w-full max-w-md p-6">
+          <h2 className="mb-2 font-display text-xl font-semibold text-rose-300">Something went wrong</h2>
+          <p className="mb-4 text-sm text-stone-300">
+            {isChunkError ? 'A new version of DnDocs is available.' : 'The page hit an unexpected error. Your data is safe.'}
+          </p>
+          {!isChunkError && (
+            <pre className="mb-5 max-h-40 overflow-auto rounded-lg bg-black/40 p-3 text-xs whitespace-pre-wrap text-rose-300">{this.state.error.message}</pre>
+          )}
+          <div className="flex gap-2">
+            <button className="btn btn-primary flex-1" onClick={() => window.location.reload()}>
+              Reload
             </button>
+            {!isChunkError && (
+              <button className="btn btn-secondary flex-1" onClick={() => this.setState({ error: null })}>
+                Try again
+              </button>
+            )}
           </div>
         </div>
-      );
-    }
-
-    return this.props.children;
+      </div>
+    );
   }
 }

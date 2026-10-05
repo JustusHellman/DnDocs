@@ -1,236 +1,96 @@
-import { useState } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, HashRouter, Outlet } from 'react-router-dom';
-import { AuthProvider, useAuth } from './AuthContext';
+import { lazy, Suspense } from 'react';
+import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import Sidebar from './components/Sidebar';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { CampaignDataProvider } from './contexts/CampaignDataContext';
+import { PeekProvider } from './contexts/PeekContext';
+import { ToastProvider } from './contexts/ToastContext';
+import { ConfirmProvider } from './contexts/ConfirmContext';
+import { FullPageSpinner } from './components/ui/bits';
+import AppShell from './components/layout/AppShell';
+import Login from './pages/Login';
 import CampaignDashboard from './pages/CampaignDashboard';
+import Home from './pages/Home';
+import EntityPage from './pages/EntityPage';
 import EntityList from './pages/EntityList';
-import EntityDetail from './pages/EntityDetail';
-import EntityEdit from './pages/EntityEdit';
-import GlobalSearch from './pages/GlobalSearch';
-import PlayersList from './pages/PlayersList';
-import JoinCampaign from './pages/JoinCampaign';
-import DMTools from './pages/DMTools';
-import WorldMap from './pages/WorldMap';
-import { LogIn, Menu, ChevronUp, ChevronDown } from 'lucide-react';
 
-function AuthRoute({ children }: { children?: React.ReactNode }) {
-  const { user, loading, login, loginWithEmail, registerWithEmail } = useAuth();
-  const [isRegistering, setIsRegistering] = useState(false);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [displayName, setDisplayName] = useState('');
-  const [authError, setAuthError] = useState('');
+// Heavier / less used pages are split into their own chunks.
+const EntityEdit = lazy(() => import('./pages/EntityEdit'));
+const WorldMap = lazy(() => import('./pages/WorldMap'));
+const Members = lazy(() => import('./pages/Members'));
+const DMTools = lazy(() => import('./pages/DMTools'));
+const Chronicle = lazy(() => import('./pages/Chronicle'));
+const EntryTypes = lazy(() => import('./pages/EntryTypes'));
+const JoinCampaign = lazy(() => import('./pages/JoinCampaign'));
 
-  if (loading) {
-    return <div className="min-h-screen flex items-center justify-center text-stone-400">Loading DnD Database...</div>;
-  }
-
-  const handleEmailAuth = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthError('');
-    try {
-      if (isRegistering) {
-        await registerWithEmail(email, password, displayName);
-      } else {
-        await loginWithEmail(email, password);
-      }
-    } catch (err: any) {
-      setAuthError(err.message || 'Authentication failed');
-    }
-  };
-
-  if (!user) {
-    return (
-      <div className="min-h-screen flex items-center justify-center text-stone-100 p-4">
-        <div className="max-w-md w-full p-8 bg-stone-900/80 backdrop-blur-md rounded-2xl border border-stone-800 shadow-2xl text-center">
-          <h1 className="text-3xl font-bold text-amber-500 mb-2 font-cinzel">DnD World DB</h1>
-          <p className="text-stone-400 mb-6">Sign in to access the campaign database.</p>
-          
-          <button
-            onClick={login}
-            className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-stone-100 hover:bg-stone-200 text-stone-900 rounded-xl font-medium transition-all mb-6"
-          >
-            <LogIn size={20} />
-            Sign in with Google
-          </button>
-
-          <div className="relative flex py-2 items-center mb-6">
-            <div className="flex-grow border-t border-stone-800"></div>
-            <span className="flex-shrink-0 mx-4 text-stone-500 text-sm">Or continue with email</span>
-            <div className="flex-grow border-t border-stone-800"></div>
-          </div>
-
-          <form onSubmit={handleEmailAuth} className="space-y-4 text-left">
-            {isRegistering && (
-              <div>
-                <label className="block text-sm font-medium text-stone-400 mb-1">Display Name</label>
-                <input
-                  type="text"
-                  required
-                  value={displayName}
-                  onChange={e => setDisplayName(e.target.value)}
-                  className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-2.5 text-stone-100 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none"
-                  placeholder="e.g. DungeonMaster99"
-                />
-              </div>
-            )}
-            <div>
-              <label className="block text-sm font-medium text-stone-400 mb-1">Email</label>
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-2.5 text-stone-100 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none"
-                placeholder="your@email.com"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-stone-400 mb-1">Password</label>
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-2.5 text-stone-100 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none"
-                placeholder="••••••••"
-                minLength={6}
-              />
-            </div>
-            
-            {authError && (
-              <div className="text-red-400 text-sm p-3 bg-red-950/30 rounded-lg border border-red-900/50">
-                {authError}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              className="w-full py-3 px-4 bg-amber-600 hover:bg-amber-500 text-stone-950 rounded-xl font-medium transition-all"
-            >
-              {isRegistering ? 'Create Account' : 'Sign In'}
-            </button>
-          </form>
-
-          <div className="mt-6 text-sm text-stone-400">
-            {isRegistering ? 'Already have an account?' : "Don't have an account?"}{' '}
-            <button
-              onClick={() => {
-                setIsRegistering(!isRegistering);
-                setAuthError('');
-              }}
-              className="text-amber-500 hover:text-amber-400 font-medium"
-            >
-              {isRegistering ? 'Sign In' : 'Register'}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-  return <>{children || <Outlet />}</>;
+/** Remount the editor whenever the edited entry (or "new" type) changes. */
+function EditRoute() {
+  const { pathname, search } = useLocation();
+  return <EntityEdit key={pathname + search} />;
 }
 
-function CampaignRoute({ children }: { children?: React.ReactNode }) {
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth();
+  if (loading) return <FullPageSpinner label="Opening the archives…" />;
+  if (!user) return <Login />;
+  return <>{children}</>;
+}
+
+function CampaignGate() {
   const { currentCampaign } = useAuth();
-  const { isTabNavOpen, setIsTabNavOpen } = useTabs();
-  const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth >= 768);
-  const [touchStart, setTouchStart] = useState<number | null>(null);
-  const [touchEnd, setTouchEnd] = useState<number | null>(null);
-
-  // the required distance between touchStart and touchEnd to be detected as a swipe
-  const minSwipeDistance = 50;
-
-  const onTouchStart = (e: React.TouchEvent) => {
-    setTouchEnd(null); // otherwise the swipe is fired even with usual touch events
-    setTouchStart(e.targetTouches[0].clientX);
-  };
-
-  const onTouchMove = (e: React.TouchEvent) => setTouchEnd(e.targetTouches[0].clientX);
-
-  const onTouchEnd = () => {
-    if (!touchStart || !touchEnd) return;
-    const distance = touchStart - touchEnd;
-    const isLeftSwipe = distance > minSwipeDistance;
-    const isRightSwipe = distance < -minSwipeDistance;
-    
-    // Only handle swipes on mobile
-    if (window.innerWidth < 768) {
-      if (isRightSwipe && touchStart < 150) {
-        // Swipe right from the left edge
-        setIsSidebarOpen(true);
-      }
-      if (isLeftSwipe && isSidebarOpen) {
-        setIsSidebarOpen(false);
-      }
-    }
-  };
-
-  if (!currentCampaign) {
-    return <CampaignDashboard />;
-  }
+  if (!currentCampaign) return <CampaignDashboard />;
   return (
-    <div 
-      className="flex h-screen text-stone-100 overflow-hidden bg-transparent"
-      onTouchStart={onTouchStart}
-      onTouchMove={onTouchMove}
-      onTouchEnd={onTouchEnd}
-    >
-      <Sidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} />
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
-        <div className="h-16 bg-stone-900/80 backdrop-blur-md border-b border-stone-800/50 flex items-center px-4 shrink-0 justify-between">
-          <div className="flex items-center min-w-0">
-            {!isSidebarOpen && (
-              <button onClick={() => setIsSidebarOpen(true)} className="p-2 text-stone-400 hover:text-amber-500 mr-2 shrink-0">
-                <Menu size={24} />
-              </button>
-            )}
-            <h1 className="ml-2 text-lg font-display font-bold text-amber-500 truncate">{currentCampaign.name}</h1>
-          </div>
-          <button 
-            onClick={() => setIsTabNavOpen(!isTabNavOpen)} 
-            className="md:hidden p-2 text-stone-400 hover:text-amber-500 shrink-0 transition-colors"
-            title={isTabNavOpen ? "Hide Tabs" : "Show Tabs"}
-          >
-            {isTabNavOpen ? <ChevronDown size={24} /> : <ChevronUp size={24} />}
-          </button>
-        </div>
-        <main className="flex-1 overflow-y-auto bg-transparent">
-          {children || <Outlet />}
-        </main>
-        <TabContainer />
-      </div>
-    </div>
+    <CampaignDataProvider>
+      <PeekProvider>
+        <AppShell />
+      </PeekProvider>
+    </CampaignDataProvider>
   );
 }
-
-import { TabProvider, useTabs } from './contexts/TabContext';
-import TabContainer from './components/TabContainer';
 
 export default function App() {
   return (
     <ErrorBoundary>
-      <AuthProvider>
-        <TabProvider>
-          <HashRouter>
-            <Routes>
-              <Route element={<AuthRoute><CampaignRoute /></AuthRoute>}>
-                <Route path="/" element={<Navigate to="/search" replace />} />
-                <Route path="/search" element={<GlobalSearch />} />
-                <Route path="/entities/:type" element={<EntityList />} />
-                <Route path="/entity/:id" element={<EntityDetail />} />
-                <Route path="/entity/:id/edit" element={<EntityEdit />} />
-                <Route path="/entity/new" element={<EntityEdit />} />
-                <Route path="/players" element={<PlayersList />} />
-                <Route path="/tools" element={<DMTools />} />
-                <Route path="/map/:id?" element={<WorldMap />} />
-              </Route>
-              <Route path="/join/:code" element={<AuthRoute><JoinCampaign /></AuthRoute>} />
-            </Routes>
-          </HashRouter>
-        </TabProvider>
-      </AuthProvider>
+      <ToastProvider>
+        <ConfirmProvider>
+          <AuthProvider>
+            <HashRouter>
+              <Suspense fallback={<FullPageSpinner />}>
+                <Routes>
+                  <Route
+                    path="/join/:code"
+                    element={
+                      <RequireAuth>
+                        <JoinCampaign />
+                      </RequireAuth>
+                    }
+                  />
+                  <Route
+                    element={
+                      <RequireAuth>
+                        <CampaignGate />
+                      </RequireAuth>
+                    }
+                  >
+                    <Route index element={<Navigate to="/search" replace />} />
+                    <Route path="search" element={<Home />} />
+                    <Route path="entities/:type" element={<EntityList />} />
+                    <Route path="entity/new" element={<EditRoute />} />
+                    <Route path="entity/:id" element={<EntityPage />} />
+                    <Route path="entity/:id/edit" element={<EditRoute />} />
+                    <Route path="chronicle" element={<Chronicle />} />
+                    <Route path="types" element={<EntryTypes />} />
+                    <Route path="players" element={<Members />} />
+                    <Route path="tools" element={<DMTools />} />
+                    <Route path="map/:id?" element={<WorldMap />} />
+                    <Route path="*" element={<Navigate to="/search" replace />} />
+                  </Route>
+                </Routes>
+              </Suspense>
+            </HashRouter>
+          </AuthProvider>
+        </ConfirmProvider>
+      </ToastProvider>
     </ErrorBoundary>
   );
 }

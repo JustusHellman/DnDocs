@@ -1,140 +1,182 @@
-import { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { Entity, OperationType } from '../types';
-import { handleFirestoreError } from '../utils/firebaseUtils';
-import { useAuth } from '../AuthContext';
-import { useEntities } from '../hooks/useEntities';
-import { usePermissions } from '../hooks/usePermissions';
-import { Plus, Search, Map, Castle, Users, BookOpen, Package, FileText, Globe, MapPin, Building, Flag } from 'lucide-react';
-import AutoExpandingTextarea from '../components/AutoExpandingTextarea';
-import { useTabActions } from '../contexts/TabContext';
-import { useNavigation } from '../hooks/useNavigation';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, Navigate, useParams } from 'react-router-dom';
+import { LayoutGrid, List, Plus, Search, SearchX } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { useCampaignData, useVisibleEntities } from '../contexts/CampaignDataContext';
+import { isEntityType, typeMeta } from '../lib/entityTypes';
+import { visibilityOf, type Visibility } from '../lib/permissions';
+import { parseQuery, scoreEntity } from '../lib/search';
+import type { Entity } from '../types';
+import EntityCard from '../components/entity/EntityCard';
+import { EmptyState, Page, PageHeader, Segmented, Skeleton, TypeTile } from '../components/ui/bits';
 
-const iconMap: Record<string, any> = {
-  npc: Users,
-  settlement: Castle,
-  landmark: MapPin,
-  country: Globe,
-  faction: Flag,
-  shop: Building,
-  item: Package,
-  note: FileText,
-};
+type Sort = 'name' | 'updated' | 'created';
+type View = 'grid' | 'list';
+
+const QUEST_ORDER = ['Active', 'Rumored', 'On Hold', 'Completed', 'Failed', ''];
+
+function usePref<T extends string>(key: string, initial: T): [T, (v: T) => void] {
+  const [value, setValue] = useState<T>(() => {
+    try {
+      return (localStorage.getItem(key) as T) || initial;
+    } catch {
+      return initial;
+    }
+  });
+  return [
+    value,
+    (v) => {
+      setValue(v);
+      try {
+        localStorage.setItem(key, v);
+      } catch {
+        /* ignore */
+      }
+    },
+  ];
+}
 
 export default function EntityList() {
   const { type } = useParams<{ type: string }>();
-  const { user, isDM, currentCampaign } = useAuth();
-  const { openTab } = useTabActions();
-  const { navigateToEntity } = useNavigation();
-  const { entities: allEntities, loading } = useEntities();
-  const { canViewEntity, canViewField } = usePermissions();
-  const [entities, setEntities] = useState<Entity[]>([]);
-  const [searchTerm, setSearchTerm] = useState('');
+  const { isDM, user } = useAuth();
+  const { loading, canViewField } = useCampaignData();
+  const visible = useVisibleEntities();
+  const [term, setTerm] = useState('');
+  const [sort, setSort] = usePref<Sort>('list:sort', 'name');
+  const [view, setView] = usePref<View>('list:view', 'grid');
+  const [vis, setVis] = useState<'all' | Visibility | 'mine'>('all');
 
   useEffect(() => {
-    if (loading || !type) return;
-    setEntities(allEntities.filter(e => {
-      if (e.type !== type) return false;
-      return canViewEntity(e);
-    }));
-  }, [allEntities, type, loading, canViewEntity]);
+    setTerm('');
+    setVis('all');
+  }, [type]);
 
-  const filteredEntities = entities.filter(entity => {
-    const term = searchTerm.toLowerCase();
-    const canViewName = true; // Name is always visible if entity is visible
-    const canViewTags = canViewField(entity, 'tags');
-    return (
-      entity.name.toLowerCase().includes(term) ||
-      (canViewTags && entity.tags.some(tag => tag.toLowerCase().includes(term)))
-    );
-  });
+  const items = useMemo(() => {
+    if (!isEntityType(type)) return [];
+    const q = parseQuery(term);
+    return visible
+      .filter((e) => e.type === type)
+      .filter((e) => (vis === 'all' ? true : vis === 'mine' ? e.ownerId === user?.uid : visibilityOf(e) === vis))
+      .filter((e) => !term.trim() || scoreEntity(e, q, canViewField) > 0)
+      .sort((a, b) =>
+        sort === 'updated' ? b.updatedAt.localeCompare(a.updatedAt) : sort === 'created' ? b.createdAt.localeCompare(a.createdAt) : a.name.localeCompare(b.name),
+      );
+  }, [visible, type, term, sort, vis, canViewField, user?.uid]);
 
-  const Icon = type ? iconMap[type] || FileText : FileText;
+  if (!isEntityType(type)) return <Navigate to="/search" replace />;
+  const meta = typeMeta(type);
+  const canCreate = isDM || type === 'note';
+
+  const groups: { title: string | null; items: Entity[] }[] =
+    type === 'quest'
+      ? QUEST_ORDER.map((s) => ({
+          title: s || 'No status',
+          items: items.filter((e) => ((canViewField(e, 'status') && (e.attributes?.status as string)) || '') === s),
+        })).filter((g) => g.items.length)
+      : [{ title: null, items }];
+
+  const filterOptions =
+    type === 'note'
+      ? [
+          { value: 'all' as const, label: 'All' },
+          { value: 'mine' as const, label: 'Mine' },
+        ]
+      : isDM
+        ? [
+            { value: 'all' as const, label: 'All' },
+            { value: 'public' as const, label: 'Public' },
+            { value: 'shared' as const, label: 'Shared' },
+            { value: 'secret' as const, label: 'Secret' },
+          ]
+        : null;
 
   return (
-    <div className="max-w-5xl mx-auto p-6 md:p-10">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 mb-8">
-        <div className="min-w-0">
-          <h1 className="text-3xl font-display font-bold text-amber-500 mb-2 capitalize flex items-center gap-3 truncate">
-            <Icon className="text-amber-400 shrink-0" size={32} />
-            {type}s
-          </h1>
-          <p className="text-stone-400 text-sm md:text-base">Browse and manage all {type}s in the database.</p>
-        </div>
-        {(isDM || type === 'note') && (
-          <Link
-            to={`/entity/new?type=${type}`}
-            className="flex items-center justify-center gap-2 px-6 py-3 sm:py-2 bg-amber-600 hover:bg-amber-500 text-stone-950 rounded-xl font-bold transition-all shadow-lg shadow-amber-900/20 active:scale-95 shrink-0"
-          >
-            <Plus size={20} />
-            New {type}
-          </Link>
-        )}
-      </div>
+    <Page wide>
+      <PageHeader
+        icon={<TypeTile type={type} size="lg" />}
+        title={meta.plural}
+        subtitle={loading ? 'Loading…' : `${items.length} ${items.length === 1 ? meta.label.toLowerCase() : meta.plural.toLowerCase()}`}
+        actions={
+          canCreate && (
+            <Link to={`/entity/new?type=${type}`} className="btn btn-primary">
+              <Plus size={16} /> New {meta.label.toLowerCase()}
+            </Link>
+          )
+        }
+      />
 
-      <div className="relative mb-6">
-        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-          <Search className="h-5 w-5 text-stone-500" />
+      <div className="mb-5 flex flex-wrap items-center gap-2">
+        <div className="relative min-w-0 flex-1 basis-full sm:basis-60">
+          <Search size={16} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-stone-500" />
+          <input type="search" value={term} onChange={(e) => setTerm(e.target.value)} placeholder={`Search ${meta.plural.toLowerCase()}…`} className="input pl-9" aria-label="Filter" />
         </div>
-        <AutoExpandingTextarea
-          placeholder={`Search ${type}s...`}
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="pl-10 pr-4 py-3 bg-stone-900/60 backdrop-blur-sm border border-stone-800/50 rounded-xl text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all min-h-[52px]"
+        {filterOptions && <Segmented size="sm" options={filterOptions} value={vis as never} onChange={(v) => setVis(v)} />}
+        <select value={sort} onChange={(e) => setSort(e.target.value as Sort)} className="input w-auto min-h-9 py-1 text-sm" aria-label="Sort">
+          <option value="name">A → Z</option>
+          <option value="updated">Recently updated</option>
+          <option value="created">Newest</option>
+        </select>
+        <Segmented
+          size="sm"
+          value={view}
+          onChange={setView}
+          options={[
+            { value: 'grid', label: '', icon: LayoutGrid },
+            { value: 'list', label: '', icon: List },
+          ]}
         />
       </div>
 
       {loading ? (
-        <div className="text-center py-12 text-stone-500">Loading {type}s...</div>
+        <div className="grid gap-3 @lg:grid-cols-2 @4xl:grid-cols-3">
+          {[0, 1, 2, 3, 4, 5].map((i) => (
+            <Skeleton key={i} className="h-28" />
+          ))}
+        </div>
+      ) : items.length === 0 ? (
+        term || vis !== 'all' ? (
+          <EmptyState icon={SearchX} title="No matches" />
+        ) : (
+          <EmptyState
+            icon={meta.icon}
+            title={`No ${meta.plural.toLowerCase()} yet`}
+            action={
+              canCreate && (
+                <Link to={`/entity/new?type=${type}`} className="btn btn-primary">
+                  <Plus size={16} /> Create one
+                </Link>
+              )
+            }
+          >
+            {isDM || type === 'note' ? undefined : 'Your DM hasn’t shared any yet.'}
+          </EmptyState>
+        )
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredEntities.length === 0 ? (
-            <div className="col-span-full text-center py-12 text-stone-500 bg-stone-900/40 backdrop-blur-sm rounded-xl border border-stone-800/50">
-              No {type}s found.
-            </div>
-          ) : (
-            filteredEntities.map(entity => (
-              <div
-                key={entity.id}
-                onClick={() => navigateToEntity(entity)}
-                className="block p-5 bg-stone-900/60 backdrop-blur-sm border border-stone-800/50 rounded-xl hover:border-amber-500/50 hover:bg-stone-800/60 transition-all group cursor-pointer"
-              >
-                <div className="flex items-start justify-between mb-3">
-                  <h3 className="text-lg font-display font-bold text-stone-100 truncate pr-4">{entity.name}</h3>
-                  {!entity.isPublic && (
-                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-red-950/30 text-red-400 border border-red-900/30 uppercase tracking-wider shrink-0">
-                      Secret
-                    </span>
-                  )}
+        <div className="space-y-8">
+          {groups.map((g) => (
+            <section key={g.title ?? 'all'}>
+              {g.title && (
+                <h2 className="section-title mb-3">
+                  {g.title} <span className="font-sans text-sm text-stone-500">{g.items.length}</span>
+                </h2>
+              )}
+              {view === 'grid' ? (
+                <div className="grid gap-3 @lg:grid-cols-2 @4xl:grid-cols-3">
+                  {g.items.map((e) => (
+                    <EntityCard key={e.id} entity={e} showType={false} />
+                  ))}
                 </div>
-                {canViewField(entity, 'content') ? (
-                  <p className="text-stone-400 text-sm line-clamp-3 mb-4">
-                    {entity.content}
-                  </p>
-                ) : (
-                  <p className="text-stone-600 text-sm italic mb-4">
-                    Content hidden
-                  </p>
-                )}
-                {entity.tags && entity.tags.length > 0 && canViewField(entity, 'tags') && (
-                  <div className="flex flex-wrap gap-1.5 mt-auto">
-                    {entity.tags.slice(0, 3).map(tag => (
-                      <span key={tag} className="px-2 py-0.5 rounded text-xs font-medium bg-stone-800/80 text-stone-300 border border-stone-700/50">
-                        #{tag}
-                      </span>
-                    ))}
-                    {entity.tags.length > 3 && (
-                      <span className="px-2 py-0.5 rounded text-xs font-medium bg-stone-800/80 text-stone-500 border border-stone-700/50">
-                        +{entity.tags.length - 3}
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))
-          )}
+              ) : (
+                <div className="card divide-y divide-stone-800/70 p-1.5">
+                  {g.items.map((e) => (
+                    <EntityCard key={e.id} entity={e} layout="row" showType={false} />
+                  ))}
+                </div>
+              )}
+            </section>
+          ))}
         </div>
       )}
-    </div>
+    </Page>
   );
 }

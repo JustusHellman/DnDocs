@@ -1,78 +1,39 @@
-import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { collection, query, where, getDocs, doc, updateDoc, arrayUnion } from 'firebase/firestore';
-import { db } from '../firebase';
-import { Campaign, OperationType } from '../types';
-import { useAuth } from '../AuthContext';
-import { handleFirestoreError } from '../utils/firebaseUtils';
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import { joinCampaignByCode } from '../lib/entityService';
+import { friendlyError } from '../lib/errors';
+import { FullPageSpinner } from '../components/ui/bits';
 
 export default function JoinCampaign() {
   const { code } = useParams<{ code: string }>();
   const navigate = useNavigate();
   const { user, setCurrentCampaign } = useAuth();
   const [error, setError] = useState('');
-  const [joining, setJoining] = useState(true);
+  const started = useRef(false);
 
   useEffect(() => {
-    if (!user || !code) return;
-
-    const joinCampaign = async () => {
-      try {
-        const q = query(collection(db, 'campaigns'), where('joinCode', '==', code.trim().toUpperCase()));
-        const snap = await getDocs(q);
-        
-        if (snap.empty) {
-          setError('Invalid join code.');
-          setJoining(false);
-          return;
-        }
-
-        const campaignDoc = snap.docs[0];
-        const campaign = campaignDoc.data() as Campaign;
-
-        if (campaign.dmId === user.uid || campaign.players.includes(user.uid)) {
-          setCurrentCampaign(campaign);
-          navigate('/');
-          return;
-        }
-
-        await updateDoc(doc(db, 'campaigns', campaign.id), {
-          players: arrayUnion(user.uid)
-        });
-
-        const updatedCampaign = { ...campaign, players: [...campaign.players, user.uid] };
-        setCurrentCampaign(updatedCampaign);
-        navigate('/');
-      } catch (err) {
-        setError('Failed to join campaign.');
-        handleFirestoreError(err, OperationType.UPDATE, 'campaigns');
-        setJoining(false);
-      }
-    };
-
-    joinCampaign();
+    if (!user || !code || started.current) return;
+    started.current = true;
+    joinCampaignByCode(code, user)
+      .then((campaign) => {
+        setCurrentCampaign(campaign);
+        navigate('/search', { replace: true });
+      })
+      .catch((err) => setError(friendlyError(err, 'Could not join that campaign.')));
   }, [code, user, navigate, setCurrentCampaign]);
 
-  if (error) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-transparent text-stone-100 p-6">
-        <div className="max-w-md w-full p-8 bg-stone-900/80 backdrop-blur-md rounded-2xl border border-stone-800 shadow-2xl text-center">
-          <h1 className="text-2xl font-bold text-red-400 mb-4 font-cinzel">Error Joining Campaign</h1>
-          <p className="text-stone-400 mb-8">{error}</p>
-          <button
-            onClick={() => navigate('/')}
-            className="w-full py-3 bg-amber-600 hover:bg-amber-500 text-stone-950 rounded-xl font-medium transition-colors"
-          >
-            Go to Dashboard
-          </button>
-        </div>
-      </div>
-    );
-  }
+  if (!error) return <FullPageSpinner label="Joining campaign…" />;
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-transparent text-stone-400">
-      Joining Campaign...
+    <div className="flex min-h-dvh items-center justify-center p-6">
+      <div className="card w-full max-w-md p-6 text-center">
+        <h1 className="mb-2 font-display text-xl font-semibold text-rose-300">Couldn’t join</h1>
+        <p className="mb-6 text-sm text-stone-400">{error}</p>
+        <button className="btn btn-primary w-full" onClick={() => navigate('/', { replace: true })}>
+          Go to my campaigns
+        </button>
+      </div>
     </div>
   );
 }

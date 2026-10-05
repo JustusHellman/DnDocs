@@ -1,57 +1,456 @@
-@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=Inter:wght@400;500;600;700&display=swap');
-@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=Spectral:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap');
+@import 'tailwindcss';
 @plugin "@tailwindcss/typography";
 
+/*
+ * THEME — "the adventurer's ledger"
+ * Pages are aged parchment written in iron-gall ink; the frame (sidebar, top bar, bottom nav)
+ * is tooled leather with gilt. Components are written against the stone/amber scales, which are
+ * remapped here: on parchment `stone-950` is the page and `stone-50` the darkest ink; inside
+ * `.leather` the scales flip back so the same classes read as gilt on dark leather.
+ */
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Cinzel", ui-serif, Georgia, serif;
+  --font-sans: 'Spectral', 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+  --font-display: 'Cinzel', 'Trajan Pro', 'Times New Roman', serif;
 
-  /* Map zinc (cool gray) to stone (warm gray/parchment) */
-  --color-zinc-50: var(--color-stone-50);
-  --color-zinc-100: var(--color-stone-100);
-  --color-zinc-200: var(--color-stone-200);
-  --color-zinc-300: var(--color-stone-300);
-  --color-zinc-400: var(--color-stone-400);
-  --color-zinc-500: var(--color-stone-500);
-  --color-zinc-600: var(--color-stone-600);
-  --color-zinc-700: var(--color-stone-700);
-  --color-zinc-800: var(--color-stone-800);
-  --color-zinc-900: var(--color-stone-900);
-  --color-zinc-950: var(--color-stone-950);
+  /* Parchment & ink */
+  --color-stone-50: #1b130c;
+  --color-stone-100: #251a11;
+  --color-stone-200: #33261a;
+  --color-stone-300: #463626;
+  --color-stone-400: #5e4a34;
+  --color-stone-500: #7a6447;
+  --color-stone-600: #98815f;
+  --color-stone-700: #bda77f;
+  --color-stone-800: #d6c49d;
+  --color-stone-900: #f5ecd5;
+  --color-stone-950: #e9dcbc;
 
-  /* Map indigo (tech blue) to amber (gold/magic) */
-  --color-indigo-50: var(--color-amber-50);
-  --color-indigo-100: var(--color-amber-100);
-  --color-indigo-200: var(--color-amber-200);
-  --color-indigo-300: var(--color-amber-300);
-  --color-indigo-400: var(--color-amber-400);
-  --color-indigo-500: var(--color-amber-500);
-  --color-indigo-600: var(--color-amber-600);
-  --color-indigo-700: var(--color-amber-700);
-  --color-indigo-800: var(--color-amber-800);
-  --color-indigo-900: var(--color-amber-900);
-  --color-indigo-950: var(--color-amber-950);
+  /* Oxblood (wax seals, rubrics, primary actions) */
+  --color-amber-50: #2e0907;
+  --color-amber-100: #3f0e0a;
+  --color-amber-200: #52130d;
+  --color-amber-300: #641912;
+  --color-amber-400: #761f16;
+  --color-amber-500: #8b2a1c;
+  --color-amber-600: #a33a28;
+  --color-amber-700: #c46a52;
+  --color-amber-800: #dea48e;
+  --color-amber-900: #efd0bf;
+  --color-amber-950: #f6e4d6;
+
+  /* Gilt, for ornament */
+  --color-gilt: #b08a3e;
+  --color-gilt-light: #d9b866;
+
+  /* Semantic hues, flipped so "light text" classes become readable inks on parchment */
+  --color-emerald-50: oklch(26.2% 0.051 172.552);
+  --color-emerald-100: oklch(37.8% 0.077 168.94);
+  --color-emerald-200: oklch(43.2% 0.095 166.913);
+  --color-emerald-300: oklch(50.8% 0.118 165.612);
+  --color-emerald-400: oklch(59.6% 0.145 163.225);
+  --color-emerald-500: oklch(69.6% 0.17 162.48);
+  --color-emerald-600: oklch(76.5% 0.177 163.223);
+  --color-emerald-700: oklch(84.5% 0.143 164.978);
+  --color-emerald-800: oklch(90.5% 0.093 164.15);
+  --color-emerald-900: oklch(95% 0.052 163.051);
+  --color-emerald-950: oklch(97.9% 0.021 166.113);
+  --color-rose-50: oklch(27.1% 0.105 12.094);
+  --color-rose-100: oklch(41% 0.159 10.272);
+  --color-rose-200: oklch(45.5% 0.188 13.697);
+  --color-rose-300: oklch(51.4% 0.222 16.935);
+  --color-rose-400: oklch(58.6% 0.253 17.585);
+  --color-rose-500: oklch(64.5% 0.246 16.439);
+  --color-rose-600: oklch(71.2% 0.194 13.428);
+  --color-rose-700: oklch(81% 0.117 11.638);
+  --color-rose-800: oklch(89.2% 0.058 10.001);
+  --color-rose-900: oklch(94.1% 0.03 12.58);
+  --color-rose-950: oklch(96.9% 0.015 12.422);
+  --color-sky-50: oklch(29.3% 0.066 243.157);
+  --color-sky-100: oklch(39.1% 0.09 240.876);
+  --color-sky-200: oklch(44.3% 0.11 240.79);
+  --color-sky-300: oklch(50% 0.134 242.749);
+  --color-sky-400: oklch(58.8% 0.158 241.966);
+  --color-sky-500: oklch(68.5% 0.169 237.323);
+  --color-sky-600: oklch(74.6% 0.16 232.661);
+  --color-sky-700: oklch(82.8% 0.111 230.318);
+  --color-sky-800: oklch(90.1% 0.058 230.902);
+  --color-sky-900: oklch(95.1% 0.026 236.824);
+  --color-sky-950: oklch(97.7% 0.013 236.62);
+  --color-yellow-50: oklch(28.6% 0.066 53.813);
+  --color-yellow-100: oklch(42.1% 0.095 57.708);
+  --color-yellow-200: oklch(47.6% 0.114 61.907);
+  --color-yellow-300: oklch(55.4% 0.135 66.442);
+  --color-yellow-400: oklch(68.1% 0.162 75.834);
+  --color-yellow-500: oklch(79.5% 0.184 86.047);
+  --color-yellow-600: oklch(85.2% 0.199 91.936);
+  --color-yellow-700: oklch(90.5% 0.182 98.111);
+  --color-yellow-800: oklch(94.5% 0.129 101.54);
+  --color-yellow-900: oklch(97.3% 0.071 103.193);
+  --color-yellow-950: oklch(98.7% 0.026 102.212);
+  --color-orange-50: oklch(26.6% 0.079 36.259);
+  --color-orange-100: oklch(40.8% 0.123 38.172);
+  --color-orange-200: oklch(47% 0.157 37.304);
+  --color-orange-300: oklch(55.3% 0.195 38.402);
+  --color-orange-400: oklch(64.6% 0.222 41.116);
+  --color-orange-500: oklch(70.5% 0.213 47.604);
+  --color-orange-600: oklch(75% 0.183 55.934);
+  --color-orange-700: oklch(83.7% 0.128 66.29);
+  --color-orange-800: oklch(90.1% 0.076 70.697);
+  --color-orange-900: oklch(95.4% 0.038 75.164);
+  --color-orange-950: oklch(98% 0.016 73.684);
+  --color-lime-50: oklch(27.4% 0.072 132.109);
+  --color-lime-100: oklch(40.5% 0.101 131.063);
+  --color-lime-200: oklch(45.3% 0.124 130.933);
+  --color-lime-300: oklch(53.2% 0.157 131.589);
+  --color-lime-400: oklch(64.8% 0.2 131.684);
+  --color-lime-500: oklch(76.8% 0.233 130.85);
+  --color-lime-600: oklch(84.1% 0.238 128.85);
+  --color-lime-700: oklch(89.7% 0.196 126.665);
+  --color-lime-800: oklch(93.8% 0.127 124.321);
+  --color-lime-900: oklch(96.7% 0.067 122.328);
+  --color-lime-950: oklch(98.6% 0.031 120.757);
+  --color-teal-50: oklch(27.7% 0.046 192.524);
+  --color-teal-100: oklch(38.6% 0.063 188.416);
+  --color-teal-200: oklch(43.7% 0.078 188.216);
+  --color-teal-300: oklch(51.1% 0.096 186.391);
+  --color-teal-400: oklch(60% 0.118 184.704);
+  --color-teal-500: oklch(70.4% 0.14 182.503);
+  --color-teal-600: oklch(77.7% 0.152 181.912);
+  --color-teal-700: oklch(85.5% 0.138 181.071);
+  --color-teal-800: oklch(91% 0.096 180.426);
+  --color-teal-900: oklch(95.3% 0.051 180.801);
+  --color-teal-950: oklch(98.4% 0.014 180.72);
+  --color-violet-50: oklch(28.3% 0.141 291.089);
+  --color-violet-100: oklch(38% 0.189 293.745);
+  --color-violet-200: oklch(43.2% 0.232 292.759);
+  --color-violet-300: oklch(49.1% 0.27 292.581);
+  --color-violet-400: oklch(54.1% 0.281 293.009);
+  --color-violet-500: oklch(60.6% 0.25 292.717);
+  --color-violet-600: oklch(70.2% 0.183 293.541);
+  --color-violet-700: oklch(81.1% 0.111 293.571);
+  --color-violet-800: oklch(89.4% 0.057 293.283);
+  --color-violet-900: oklch(94.3% 0.029 294.588);
+  --color-violet-950: oklch(96.9% 0.016 293.756);
+  --color-indigo-50: oklch(25.7% 0.09 281.288);
+  --color-indigo-100: oklch(35.9% 0.144 278.697);
+  --color-indigo-200: oklch(39.8% 0.195 277.366);
+  --color-indigo-300: oklch(45.7% 0.24 277.023);
+  --color-indigo-400: oklch(51.1% 0.262 276.966);
+  --color-indigo-500: oklch(58.5% 0.233 277.117);
+  --color-indigo-600: oklch(67.3% 0.182 276.935);
+  --color-indigo-700: oklch(78.5% 0.115 274.713);
+  --color-indigo-800: oklch(87% 0.065 274.039);
+  --color-indigo-900: oklch(93% 0.034 272.788);
+  --color-indigo-950: oklch(96.2% 0.018 272.314);
+
+  --animate-toast-in: toast-in 180ms ease-out;
+  --animate-fade-in: fade-in 150ms ease-out;
+  --animate-sheet-up: sheet-up 220ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  --animate-panel-in: panel-in 220ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  --animate-pop-in: pop-in 140ms ease-out;
+  --animate-flash: flash 1.2s ease-in-out 3;
+
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateY(8px) scale(0.98); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes sheet-up {
+    from { transform: translateY(100%); }
+    to { transform: none; }
+  }
+  @keyframes panel-in {
+    from { transform: translateX(24px); opacity: 0; }
+    to { transform: none; opacity: 1; }
+  }
+  @keyframes pop-in {
+    from { opacity: 0; transform: scale(0.97); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes flash {
+    0%, 100% { box-shadow: 0 0 0 0 rgb(139 42 28 / 0); }
+    50% { box-shadow: 0 0 0 4px rgb(139 42 28 / 0.35); }
+  }
+}
+
+/* Leather frame: same class names, gilt-on-leather values. */
+.leather {
+  --color-stone-50: #fbf4e4;
+  --color-stone-100: #f1e5c8;
+  --color-stone-200: #e6d5b0;
+  --color-stone-300: #d4bf96;
+  --color-stone-400: #bba47c;
+  --color-stone-500: #9a8462;
+  --color-stone-600: #7a6448;
+  --color-stone-700: #5a4331;
+  --color-stone-800: #422e21;
+  --color-stone-900: #2f2018;
+  --color-stone-950: #221711;
+  --color-amber-100: #f7e7b5;
+  --color-amber-200: #f0d78f;
+  --color-amber-300: #e6c574;
+  --color-amber-400: #d9b25f;
+  --color-amber-500: #c89b3c;
+  --color-amber-600: #a67f2c;
+  --color-amber-700: #7d5e1f;
+  color: var(--color-stone-200);
+  color-scheme: dark;
+  background-color: #2a1c14;
+  background-image:
+    radial-gradient(120% 80% at 0% 0%, rgb(255 220 160 / 0.06), transparent 60%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.1 0 0 0 0 0.06 0 0 0 0 0.03 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.leather-edge-r { box-shadow: inset -1px 0 0 rgb(217 178 95 / 0.25), inset -5px 0 0 #1a110b, inset -6px 0 0 rgb(217 178 95 / 0.18); }
+.leather-edge-b { box-shadow: inset 0 -1px 0 rgb(217 178 95 / 0.3), 0 2px 8px rgb(40 22 10 / 0.35); }
+.leather-edge-t { box-shadow: inset 0 1px 0 rgb(217 178 95 / 0.3), 0 -2px 8px rgb(40 22 10 / 0.3); }
+
+html.app-locked,
+html.app-locked body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+html.is-dragging,
+html.is-dragging * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+html.is-resizing,
+html.is-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+/* Unlayered so they win over any host page reset. */
+html {
+  -webkit-tap-highlight-color: transparent;
+  color-scheme: light;
+  background: #e2d3b0;
+}
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 16px;
+  color: var(--color-stone-200);
+  background-color: #e6d8b6;
+  background-image:
+    radial-gradient(140% 90% at 50% 0%, transparent 55%, rgb(120 84 40 / 0.18)),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='p'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.55' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.45 0 0 0 0 0.32 0 0 0 0 0.16 0 0 0 .16 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23p)'/%3E%3C/svg%3E");
+  min-height: 100dvh;
+  -webkit-font-smoothing: antialiased;
 }
 
 @layer base {
-  body {
-    background-color: var(--color-stone-950);
-    background-image: radial-gradient(circle at center, rgba(30, 20, 15, 0.4) 0%, rgba(10, 5, 5, 0.8) 100%), 
-                      url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23292524' fill-opacity='0.15'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
-    color: var(--color-stone-200);
-  }
-  h1, h2, h3, h4, h5, h6 {
+  h1, h2, h3 {
     font-family: var(--font-display);
-    letter-spacing: 0.025em;
+    letter-spacing: 0.02em;
+    text-wrap: balance;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-amber-500);
+    outline-offset: 2px;
+  }
+  .leather :focus-visible {
+    outline-color: var(--color-gilt-light);
+  }
+  ::selection {
+    background: rgb(176 138 62 / 0.35);
+  }
+  input, select, textarea, button {
+    font: inherit;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
   }
 }
 
-@layer utilities {
-  .scrollbar-hide::-webkit-scrollbar {
-    display: none;
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-3.5 py-2 text-sm font-semibold whitespace-nowrap transition-colors select-none disabled:cursor-not-allowed disabled:opacity-50 min-h-10;
   }
-  .scrollbar-hide {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
+  .btn-sm {
+    @apply min-h-8 px-2.5 py-1 text-xs;
+  }
+  .btn-primary {
+    @apply bg-amber-500 text-stone-950 hover:bg-amber-400 active:bg-amber-600;
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.18), inset 0 -2px 0 rgb(0 0 0 / 0.18), 0 1px 3px rgb(60 20 10 / 0.35);
+  }
+  .btn-secondary {
+    @apply border border-stone-700 bg-stone-900 text-stone-200 hover:border-stone-600 hover:bg-stone-950;
+    box-shadow: 0 1px 0 rgb(255 255 255 / 0.35) inset, 0 1px 2px rgb(60 40 20 / 0.15);
+  }
+  .btn-ghost {
+    @apply text-stone-300 hover:bg-stone-800/60 hover:text-stone-50;
+  }
+  .btn-danger {
+    @apply border border-rose-800/50 bg-rose-950/60 text-rose-300 hover:bg-rose-900/60 hover:text-rose-100;
+  }
+  .btn-icon {
+    @apply inline-flex size-10 items-center justify-center rounded-md text-stone-400 transition-colors hover:bg-stone-800/60 hover:text-stone-100 disabled:opacity-40;
+  }
+  .btn-icon-sm {
+    @apply inline-flex size-8 items-center justify-center rounded-md text-stone-400 transition-colors hover:bg-stone-800/60 hover:text-stone-100;
+  }
+
+  .input {
+    @apply block w-full rounded-md border border-stone-700 px-3 py-2 text-base text-stone-100 placeholder:text-stone-600 placeholder:italic transition-colors outline-none focus:border-amber-500/70 focus:ring-2 focus:ring-amber-500/15 disabled:opacity-60 sm:text-[15px] min-h-10;
+    background-color: #fbf6e9;
+    box-shadow: inset 0 1px 2px rgb(90 60 30 / 0.12);
+  }
+  select.input {
+    @apply appearance-none bg-no-repeat pr-9;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%237a6447' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-position: right 0.6rem center;
+  }
+  textarea.input {
+    @apply min-h-24 resize-y leading-relaxed;
+  }
+  .label {
+    @apply mb-1.5 block font-display text-[11px] font-semibold tracking-[0.12em] text-stone-500 uppercase;
+  }
+  .hint {
+    @apply mt-1 text-xs text-stone-500 italic;
+  }
+
+  /* A page of the ledger */
+  .card {
+    @apply rounded-lg border border-stone-800 bg-stone-900;
+    box-shadow: inset 0 0 0 1px rgb(255 252 240 / 0.55), 0 1px 2px rgb(70 45 20 / 0.12), 0 10px 24px -14px rgb(70 45 20 / 0.45);
+  }
+  .surface {
+    @apply rounded-md border border-stone-800 bg-stone-950/50;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 font-display text-[10px] font-semibold tracking-[0.1em] uppercase ring-1 ring-inset;
+  }
+  .tag {
+    @apply inline-flex items-center gap-1 rounded-full border border-stone-800 bg-stone-950/60 px-2 py-0.5 text-xs text-stone-400 italic;
+  }
+  /* Rubric heading: oxblood small caps followed by a fading rule */
+  .section-title {
+    @apply flex items-center gap-3 font-display text-[0.95rem] font-semibold tracking-[0.08em] text-amber-400 uppercase;
+  }
+  .section-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    min-width: 1.5rem;
+    background: linear-gradient(to right, color-mix(in oklab, var(--color-amber-500) 45%, transparent), transparent);
+  }
+  .kbd {
+    @apply rounded border border-stone-700 bg-stone-800 px-1.5 py-0.5 font-sans text-[10px] font-semibold text-stone-400;
+  }
+  .link {
+    @apply text-amber-400 underline decoration-amber-500/35 underline-offset-4 hover:text-amber-300 hover:decoration-amber-400;
   }
 }
+
+/* Markdown in ink: explicit prose colours (the typography defaults assume an un-remapped palette). */
+.prose-ledger {
+  --tw-prose-body: var(--color-stone-300);
+  --tw-prose-headings: var(--color-stone-100);
+  --tw-prose-lead: var(--color-stone-300);
+  --tw-prose-links: var(--color-amber-400);
+  --tw-prose-bold: var(--color-stone-100);
+  --tw-prose-counters: var(--color-stone-500);
+  --tw-prose-bullets: var(--color-amber-600);
+  --tw-prose-hr: var(--color-stone-800);
+  --tw-prose-quotes: var(--color-stone-300);
+  --tw-prose-quote-borders: var(--color-amber-600);
+  --tw-prose-captions: var(--color-stone-500);
+  --tw-prose-code: var(--color-stone-100);
+  --tw-prose-pre-code: var(--color-stone-200);
+  --tw-prose-pre-bg: var(--color-stone-950);
+  --tw-prose-th-borders: var(--color-stone-700);
+  --tw-prose-td-borders: var(--color-stone-800);
+}
+.prose-ledger :where(blockquote) { font-style: italic; }
+.dropcap > p:first-child::first-letter {
+  float: left;
+  margin: 0.06em 0.12em 0 0;
+  font-family: var(--font-display);
+  font-size: 3.3em;
+  font-weight: 700;
+  line-height: 0.8;
+  color: var(--color-amber-500);
+  text-shadow: 0 1px 0 rgb(255 250 235 / 0.8);
+}
+
+/* Entity type inks. `.tone` colours text, a light wash and a ring from one --tone value. */
+.tone-quest { --tone: #8a5a10; }
+.tone-note { --tone: #5c4a35; }
+.tone-item { --tone: #2e5b72; }
+.tone-npc { --tone: #2d6a43; }
+.tone-monster { --tone: #8e2020; }
+.tone-shop { --tone: #9a5518; }
+.tone-geography { --tone: #56702a; }
+.tone-landmark { --tone: #2a6a64; }
+.tone-faction { --tone: #5b3a7d; }
+.tone-settlement { --tone: #7a4816; }
+.tone-country { --tone: #2c3f7c; }
+.tone {
+  color: var(--tone);
+  background-color: color-mix(in oklab, var(--tone) 9%, transparent);
+  --tw-ring-color: color-mix(in oklab, var(--tone) 35%, transparent);
+}
+.leather .tone {
+  color: color-mix(in oklab, var(--tone) 35%, #f1e5c8);
+  background-color: color-mix(in oklab, var(--tone) 25%, transparent);
+}
+
+/* Heraldic roundel used for entity type icons */
+.seal-photo {
+  overflow: hidden;
+  padding: 3px;
+}
+.seal-photo img {
+  width: 100%;
+  height: 100%;
+  border-radius: 9999px;
+  object-fit: cover;
+}
+.seal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  color: var(--tone);
+  background: radial-gradient(circle at 35% 30%, #fffaf0, color-mix(in oklab, var(--tone) 14%, #f3e7cb) 70%);
+  box-shadow:
+    inset 0 0 0 1.5px color-mix(in oklab, var(--tone) 55%, transparent),
+    inset 0 0 0 3.5px #fbf5e6,
+    inset 0 0 0 4.5px color-mix(in oklab, var(--tone) 25%, transparent),
+    0 1px 2px rgb(70 45 20 / 0.25);
+}
+
+/* Map pin: a wax seal on a stem */
+.wax-pin {
+  background: radial-gradient(circle at 35% 30%, #c2503c, #8b2a1c 55%, #5e150d);
+  box-shadow: inset 0 0 0 2px rgb(255 220 190 / 0.25), 0 3px 6px rgb(40 10 5 / 0.5);
+  color: #f6e4c8;
+}
+
+@layer utilities {
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-stone-700) transparent;
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+}
+

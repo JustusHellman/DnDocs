@@ -1,698 +1,377 @@
-import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { useAuth } from '../AuthContext';
-import { useEntities } from '../hooks/useEntities';
-import { usePermissions } from '../hooks/usePermissions';
-import { Entity, MapPin as MapPinType } from '../types';
-import { Link, useParams, useNavigate } from 'react-router-dom';
-import { ChevronRight, Map as MapIcon, Globe, Castle, MapPin, Building, Users, Flag, Package, FileText, Scroll, Skull, ArrowLeft, ExternalLink, Plus, Trash2, Save, Maximize, Minimize, Eye, EyeOff } from 'lucide-react';
-import { useTabActions } from '../contexts/TabContext';
-import { useMedia } from '../hooks/useMedia';
-import { db } from '../firebase';
-import { doc, updateDoc } from 'firebase/firestore';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { ArrowUp, ChevronRight, Edit3, Eye, Globe, Info, MapPin, MapPinOff, Plus, Trash2, X } from 'lucide-react';
 import clsx from 'clsx';
-import { ENTITY_HIERARCHY } from '../utils/entitySchemas';
+import { GiTreasureMap } from 'react-icons/gi';
+import { useAuth } from '../contexts/AuthContext';
+import { useAncestors, useCampaignData } from '../contexts/CampaignDataContext';
+import { usePeek } from '../contexts/PeekContext';
+import { useToast } from '../contexts/ToastContext';
+import { useImageSrc } from '../hooks/useImageSrc';
+import { PLACE_TYPES, TYPES_BY_SIZE, typeMeta } from '../lib/entityTypes';
+import { setEntityLocation, updateMapPins } from '../lib/entityService';
+import { visibleToAnyPlayer } from '../lib/permissions';
+import { excerpt } from '../lib/text';
+import type { Entity, MapPin as Pin } from '../types';
+import MapViewer, { type ViewerPin } from '../components/map/MapViewer';
+import { EmptyState, Page, PlayerPreviewBanner, Spinner, TypeBadge, TypeIcon, TypeTile } from '../components/ui/bits';
+import { Modal } from '../components/ui/Modal';
 
-import { polyfill } from "mobile-drag-drop";
-import { scrollBehaviourDragImageTranslateOverride } from "mobile-drag-drop/scroll-behaviour";
-import "mobile-drag-drop/default.css";
+const TOP_LEVEL_TYPES = [...PLACE_TYPES, 'faction'];
 
-const ENTITY_ICONS: Record<string, React.ElementType> = {
-  geography: Globe,
-  country: Globe,
-  settlement: Castle,
-  landmark: MapPin,
-  shop: Building,
-  npc: Users,
-  monster: Skull,
-  faction: Flag,
-  item: Package,
-  note: FileText,
-  quest: Scroll,
-};
+function PinMarker({ entity, selected, editing }: { entity: Entity; selected?: boolean; editing?: boolean }) {
+  const Icon = typeMeta(entity.type).icon;
+  return (
+    <div className="group flex flex-col items-center">
+      <div
+        className={clsx(
+          'mb-1 max-w-40 truncate rounded-md px-1.5 py-0.5 text-[11px] font-semibold whitespace-nowrap shadow transition-opacity',
+          selected ? 'bg-amber-500 text-stone-950' : 'bg-stone-900/90 text-stone-100 ring-1 ring-stone-700',
+          editing || selected ? 'opacity-100' : 'opacity-80 group-hover:opacity-100',
+        )}
+      >
+        {entity.name}
+      </div>
+      <div
+        className={clsx(
+          'flex size-9 items-center justify-center rounded-full border-2 transition-transform',
+          selected ? 'wax-pin scale-110 border-[#f3d27a]' : editing ? 'border-stone-500 bg-stone-900 text-stone-300' : 'wax-pin border-[#e8c77a]/70 group-hover:scale-110',
+        )}
+      >
+        <Icon size={17} />
+      </div>
+      <div className={clsx('-mt-0.5 size-2 rotate-45', editing && !selected ? 'bg-stone-500' : 'bg-[#6b1a10]')} />
+    </div>
+  );
+}
 
 export default function WorldMap() {
-  const { user, isDM } = useAuth();
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
-  const { entities, loading: entitiesLoading } = useEntities();
-  const { canViewEntity } = usePermissions();
-  const { openTab } = useTabActions();
-  const [currentParentId, setCurrentParentId] = useState<string | null>(id || null);
-  const [isEditingPins, setIsEditingPins] = useState(false);
-  const [playerPreview, setPlayerPreview] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [draggedPinIndex, setDraggedPinIndex] = useState<number | null>(null);
-  const [draggedEntityId, setDraggedEntityId] = useState<string | null>(null);
-  const [selectedPinIndex, setSelectedPinIndex] = useState<number | null>(null);
-  const mapRef = useRef<HTMLDivElement>(null);
-  const breadcrumbsRef = useRef<HTMLDivElement>(null);
+  const { isDM } = useAuth();
+  const { entityMap, entities, childrenOf, canView, canViewField, loading } = useCampaignData();
+  const { peek } = usePeek();
+  const toast = useToast();
+  const [preview, setPreview] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [armed, setArmed] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  const current = id ? entityMap.get(id) : undefined;
+  const ancestors = useAncestors(current);
+  const seesAsPlayer = (e: Entity) => canView(e) && (!(isDM && preview) || visibleToAnyPlayer(e));
+  const mapId = current?.mapConfig?.mediaId;
+  const { src: mapSrc, loading: mapLoading } = useImageSrc(mapId ? `media:${mapId}` : null);
 
   useEffect(() => {
-    if (id !== undefined) {
-      setCurrentParentId(id || null);
-      // Scroll to top of map container when navigating
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
+    setEditing(false);
+    setArmed(null);
+    setSelected(null);
   }, [id]);
 
-  useEffect(() => {
-    if (breadcrumbsRef.current) {
-      breadcrumbsRef.current.scrollTo({ left: breadcrumbsRef.current.scrollWidth, behavior: 'smooth' });
-    }
-  }, [currentParentId]);
-
-  const navigateToMap = useCallback((parentId: string | null) => {
-    if (parentId) {
-      navigate(`/map/${parentId}`);
-    } else {
-      navigate('/map');
-    }
-  }, [navigate]);
-
-  const entityMap = useMemo(() => {
-    const map = new Map<string, Entity>();
-    entities.forEach(e => map.set(e.id, e));
-    return map;
-  }, [entities]);
-
-  const currentEntity = currentParentId ? entityMap.get(currentParentId) : null;
-  const { media: mapMedia, loading: mediaLoading } = useMedia(currentEntity?.mapConfig?.mediaId);
-
-  const breadcrumbs = useMemo(() => {
-    const crumbs: Entity[] = [];
-    let current = currentParentId ? entityMap.get(currentParentId) : null;
-    while (current) {
-      crumbs.unshift(current);
-      current = current.locationId ? entityMap.get(current.locationId) : null;
-    }
-    return crumbs;
-  }, [currentParentId, entityMap]);
-
-  const currentChildren = useMemo(() => {
-    return entities.filter(e => {
-      // First, can the user see this entity?
-      if (!canViewEntity(e)) return false;
-
-      // Apply player preview filter if active
-      if (isDM && playerPreview) {
-        const isVisibleToPlayers = e.isPublic || (e.allowedPlayers && e.allowedPlayers.length > 0);
-        if (!isVisibleToPlayers) return false;
-      }
-
-      if (currentParentId === null) {
-        // Top-level logic for the user:
-        // 1. No locationId
-        // 2. OR locationId points to an entity the user CANNOT see
-        const parent = e.locationId ? entityMap.get(e.locationId) : null;
-        return !e.locationId || !parent || !canViewEntity(parent);
-      }
-      
-      // If we are inside a location, only show direct children
-      return e.locationId === currentParentId;
-    }).sort((a, b) => {
-      const typeOrder = ['geography', 'country', 'settlement', 'landmark', 'faction', 'shop', 'npc', 'monster', 'item', 'quest', 'note'];
-      const typeDiff = typeOrder.indexOf(a.type) - typeOrder.indexOf(b.type);
-      if (typeDiff !== 0) return typeDiff;
-      return a.name.localeCompare(b.name);
-    });
-  }, [entities, currentParentId, entityMap, canViewEntity]);
-
-  // Auto-navigate to the single top-level location if it has a map
-  useEffect(() => {
-    if (!entitiesLoading && currentParentId === null && currentChildren.length === 1) {
-      const singleTop = currentChildren[0];
-      if (singleTop.mapConfig?.mediaId) {
-        navigateToMap(singleTop.id);
-      }
-    }
-  }, [entitiesLoading, currentParentId, currentChildren, navigateToMap]);
-
-  useEffect(() => {
-    polyfill({
-      dragImageTranslateOverride: scrollBehaviourDragImageTranslateOverride,
-      holdToDrag: 300, // 300ms long press to drag
-    });
-
-    const preventScroll = (e: TouchEvent) => {
-      // Prevent scrolling while dragging
-      if (document.body.classList.contains('dnd-poly-active')) {
-        e.preventDefault();
-      }
-    };
-    window.addEventListener('touchmove', preventScroll, { passive: false });
-
-    return () => {
-      window.removeEventListener('touchmove', preventScroll);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isEditingPins) {
-      setSelectedPinIndex(null);
-      setDraggedPinIndex(null);
-      setDraggedEntityId(null);
-    }
-  }, [isEditingPins]);
-
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-    };
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, []);
-
-  const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      mapRef.current?.requestFullscreen().catch(err => {
-        console.error(`Error attempting to enable fullscreen: ${err.message}`);
-      });
-    } else {
-      document.exitFullscreen();
-    }
-  };
-
-  const handleDropOnMap = async (e: React.DragEvent) => {
-    e.preventDefault();
-    if (!isEditingPins || !mapRef.current || !currentEntity) return;
-
-    const rect = mapRef.current.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * 100;
-    const y = ((e.clientY - rect.top) / rect.height) * 100;
-
-    if (draggedPinIndex !== null) {
-      // Move existing pin
-      const updatedPins = [...(currentEntity.mapConfig?.pins || [])];
-      updatedPins[draggedPinIndex] = { ...updatedPins[draggedPinIndex], x, y };
-      
-      try {
-        await updateDoc(doc(db, 'entities', currentEntity.id), {
-          'mapConfig.pins': updatedPins
+  const children = useMemo(() => {
+    const list = id
+      ? (childrenOf.get(id) ?? []).filter((e) => e.type !== 'note')
+      : entities.filter((e) => {
+          if (!TOP_LEVEL_TYPES.includes(e.type)) return false;
+          const parent = e.locationId ? entityMap.get(e.locationId) : undefined;
+          return !parent || !seesAsPlayer(parent);
         });
-      } catch (err) {
-        console.error('Error moving pin:', err);
-      }
-      setDraggedPinIndex(null);
-    } else if (draggedEntityId !== null) {
-      // Add new pin
-      const newPinData: MapPinType = {
-        targetEntityId: draggedEntityId,
-        x,
-        y
-      };
+    return list.filter(seesAsPlayer).sort((a, b) => TYPES_BY_SIZE.indexOf(a.type) - TYPES_BY_SIZE.indexOf(b.type) || a.name.localeCompare(b.name));
+  }, [id, childrenOf, entities, entityMap, preview, canView]); // eslint-disable-line react-hooks/exhaustive-deps
 
-      const updatedPins = [...(currentEntity.mapConfig?.pins || []), newPinData];
-      
-      try {
-        await updateDoc(doc(db, 'entities', currentEntity.id), {
-          'mapConfig.pins': updatedPins
-        });
+  // A world with a single top-level map opens straight into it.
+  useEffect(() => {
+    if (!loading && !id && children.length === 1 && children[0].mapConfig?.mediaId) navigate(`/map/${children[0].id}`, { replace: true });
+  }, [loading, id, children, navigate]);
 
-        // Update locationId if needed
-        const targetEntity = entityMap.get(draggedEntityId);
-        if (targetEntity && !targetEntity.locationId) {
-          await updateDoc(doc(db, 'entities', draggedEntityId), {
-            locationId: currentEntity.id
-          });
-        }
-      } catch (err) {
-        console.error('Error adding pin from drag:', err);
-      }
-      setDraggedEntityId(null);
-    }
-  };
+  const pins: Pin[] = current?.mapConfig?.pins ?? [];
+  const pinnedIds = new Set(pins.map((p) => p.targetEntityId));
 
-  const handleDropOffMap = async (e: React.DragEvent) => {
-    e.preventDefault();
-    if (!isEditingPins || !currentEntity || draggedPinIndex === null) return;
-
-    const updatedPins = currentEntity.mapConfig?.pins.filter((_, i) => i !== draggedPinIndex) || [];
-    
-    try {
-      await updateDoc(doc(db, 'entities', currentEntity.id), {
-        'mapConfig.pins': updatedPins
-      });
-    } catch (err) {
-      console.error('Error removing pin via drag:', err);
-    }
-    setDraggedPinIndex(null);
-  };
-
-  const handleDeletePin = async (index: number) => {
-    if (!currentEntity || !currentEntity.mapConfig) return;
-
-    const updatedPins = currentEntity.mapConfig.pins.filter((_, i) => i !== index);
-    
-    try {
-      await updateDoc(doc(db, 'entities', currentEntity.id), {
-        'mapConfig.pins': updatedPins
-      });
-    } catch (err) {
-      console.error('Error deleting pin:', err);
-    }
-  };
-
-  const handlePinClick = (pin: MapPinType) => {
-    const target = entityMap.get(pin.targetEntityId);
-    if (!target) return;
-
-    navigateToMap(target.id);
-  };
-
-  const unmappedEntities = useMemo(() => {
-    if (!currentEntity || !isEditingPins) return [];
-    
-    const existingPinTargetIds = new Set(currentEntity.mapConfig?.pins.map(p => p.targetEntityId) || []);
-    const currentLevel = ENTITY_HIERARCHY[currentEntity.type] || 0;
-
+  const candidates = useMemo(() => {
+    if (!current || !editing) return [];
+    const level = typeMeta(current.type).level;
     return entities
-      .filter(e => {
-        const eLevel = ENTITY_HIERARCHY[e.type] || 0;
-        const isLowerHierarchy = eLevel < currentLevel;
-        const isAlreadyPinned = existingPinTargetIds.has(e.id);
-        
-        const isEligible = (e.locationId === currentEntity.id) || (!e.locationId && isLowerHierarchy);
-        
-        return isEligible && !isAlreadyPinned && canViewEntity(e);
-      })
-      .sort((a, b) => {
-        const aLocatedHere = a.locationId === currentEntity.id;
-        const bLocatedHere = b.locationId === currentEntity.id;
-        if (aLocatedHere && !bLocatedHere) return -1;
-        if (!aLocatedHere && bLocatedHere) return 1;
+      .filter((e) => e.id !== current.id && !pinnedIds.has(e.id) && canView(e))
+      .filter((e) => e.locationId === current.id || (!e.locationId && typeMeta(e.type).level < level && e.type !== 'note'))
+      .sort((a, b) => Number(b.locationId === current.id) - Number(a.locationId === current.id) || TYPES_BY_SIZE.indexOf(a.type) - TYPES_BY_SIZE.indexOf(b.type) || a.name.localeCompare(b.name));
+  }, [current, editing, entities, canView, pins]); // eslint-disable-line react-hooks/exhaustive-deps
 
-        const levelA = ENTITY_HIERARCHY[a.type] || 0;
-        const levelB = ENTITY_HIERARCHY[b.type] || 0;
-        if (levelA !== levelB) return levelB - levelA;
-        return a.name.localeCompare(b.name);
-      });
-  }, [entities, currentEntity, isEditingPins, canViewEntity]);
+  const savePins = async (next: Pin[]) => {
+    if (!current) return;
+    try {
+      await updateMapPins(current.id, next);
+    } catch (err) {
+      toast.error(err, 'Update pins');
+    }
+  };
 
-  const CurrentIcon = currentEntity ? (ENTITY_ICONS[currentEntity.type] || MapPin) : Globe;
+  const placeArmed = async (x: number, y: number) => {
+    if (!current || !armed) return;
+    const target = entityMap.get(armed);
+    setArmed(null);
+    await savePins([...pins, { targetEntityId: armed, x, y }]);
+    if (target && !target.locationId) setEntityLocation(target.id, current.id).catch((err) => toast.error(err, 'Set location'));
+  };
 
-  if (entitiesLoading) {
-    return <div className="flex items-center justify-center h-64 text-stone-400">Loading World Map...</div>;
+  const enter = (e: Entity) => {
+    const hasChildren = (childrenOf.get(e.id) ?? []).some((c) => c.type !== 'note' && seesAsPlayer(c));
+    if (e.mapConfig?.mediaId || hasChildren) navigate(`/map/${e.id}`);
+    else peek(e);
+  };
+
+  const viewerPins: ViewerPin[] = pins
+    .map((p, i) => ({ p, i, target: entityMap.get(p.targetEntityId) }))
+    .filter((x): x is { p: Pin; i: number; target: Entity } => !!x.target && seesAsPlayer(x.target))
+    .map(({ p, i, target }) => ({
+      key: String(i),
+      x: p.x,
+      y: p.y,
+      draggable: editing,
+      render: () => <PinMarker entity={target} editing={editing} selected={selected === String(i)} />,
+    }));
+
+  const selectedPin = selected !== null ? pins[Number(selected)] : undefined;
+  const selectedTarget = selectedPin ? entityMap.get(selectedPin.targetEntityId) : undefined;
+  const armedEntity = armed ? entityMap.get(armed) : undefined;
+
+  if (loading) return <Spinner className="py-24" label="Unrolling the map…" />;
+  if (id && (!current || !canView(current))) {
+    return (
+      <Page>
+        <EmptyState icon={MapPinOff} title="Map not found" action={<Link to="/map" className="btn btn-secondary">Back to the world</Link>} />
+      </Page>
+    );
   }
 
-  return (
-    <div className="max-w-6xl mx-auto p-6 md:p-10 pb-20">
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <MapIcon className="text-amber-500" size={32} />
-          <div>
-            <h1 className="text-3xl font-bold text-stone-100 font-cinzel tracking-wider">World Map</h1>
-            <p className="text-stone-400 mt-1">Explore your campaign world.</p>
-          </div>
-        </div>
-        {isDM && currentEntity && currentEntity.mapConfig?.mediaId && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setPlayerPreview(!playerPreview)}
-              className={clsx(
-                "flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all font-medium text-xs border",
-                playerPreview 
-                  ? "bg-emerald-900/30 text-emerald-400 border-emerald-900/50" 
-                  : "bg-stone-800 text-stone-400 border-stone-700 hover:bg-stone-700 hover:text-stone-300"
-              )}
-              title={playerPreview ? "Disable Player Preview" : "Enable Player Preview"}
-            >
-              {playerPreview ? <Eye size={14} /> : <EyeOff size={14} />}
-              {playerPreview ? 'Player View' : 'DM View'}
-            </button>
-            <button
-              onClick={() => setIsEditingPins(!isEditingPins)}
-              className={clsx(
-                "flex items-center gap-2 px-4 py-2 rounded-lg transition-all font-bold text-sm",
-                isEditingPins 
-                  ? "bg-amber-500 text-stone-950 shadow-lg shadow-amber-900/40" 
-                  : "bg-stone-800 text-stone-300 hover:bg-stone-700"
-              )}
-            >
-              {isEditingPins ? <Save size={16} /> : <Plus size={16} />}
-              {isEditingPins ? 'Finish Editing' : 'Edit Pins'}
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Breadcrumbs */}
-      <div 
-        ref={breadcrumbsRef}
-        className="flex items-center flex-nowrap gap-2 mb-6 bg-stone-900/80 backdrop-blur-md p-4 rounded-xl border border-stone-800 shadow-sm overflow-x-auto scrollbar-hide"
-      >
-        <button 
-          onClick={() => navigateToMap(null)}
-          className={`flex items-center gap-1.5 font-medium transition-colors shrink-0 ${currentParentId === null ? 'text-amber-500' : 'text-stone-400 hover:text-stone-200'}`}
-        >
-          <Globe size={16} />
-          World
-        </button>
-        
-        {breadcrumbs.map((crumb, index) => {
-          const isLast = index === breadcrumbs.length - 1;
-          const CrumbIcon = ENTITY_ICONS[crumb.type] || MapPin;
-          return (
-            <div key={crumb.id} className="flex items-center gap-2 shrink-0">
-              <ChevronRight size={16} className="text-stone-600 shrink-0" />
-              <button
-                onClick={() => navigateToMap(crumb.id)}
-                className={`flex items-center gap-1.5 font-medium transition-colors whitespace-nowrap ${isLast ? 'text-amber-500' : 'text-stone-400 hover:text-stone-200'}`}
-              >
-                <CrumbIcon size={16} />
-                <span className="truncate max-w-[150px] sm:max-w-[200px]">{crumb.name}</span>
-              </button>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Visual Map View */}
-      {currentEntity?.mapConfig?.mediaId ? (
-        <div className="mb-8">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-4">
-              <div className="w-10 h-10 rounded-lg bg-amber-900/20 border border-amber-700/30 flex items-center justify-center text-amber-500 shrink-0">
-                <CurrentIcon size={20} />
-              </div>
-              <div>
-                <h2 className="text-xl font-bold text-stone-100 font-cinzel">{currentEntity.name}</h2>
-                <p className="text-xs text-stone-400 capitalize">{currentEntity.type}</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              {currentEntity.locationId && (
-                <button
-                  onClick={() => navigateToMap(currentEntity.locationId || null)}
-                  className="flex items-center gap-2 px-3 py-1.5 bg-stone-800 hover:bg-stone-700 text-stone-200 rounded-lg transition-colors font-medium text-xs"
-                >
-                  <ArrowLeft size={14} />
-                  Go Up
-                </button>
-              )}
-              <button
-                onClick={() => openTab(currentEntity.id, currentEntity.name, currentEntity.type)}
-                className="flex items-center gap-2 px-3 py-1.5 bg-stone-800 hover:bg-stone-700 text-stone-200 rounded-lg transition-colors font-medium text-xs"
-              >
-                <ExternalLink size={14} />
-                Details
-              </button>
-            </div>
-          </div>
-
-          <div className="flex flex-col lg:flex-row gap-6">
-            <div className="flex-1">
-              <div 
-                ref={mapRef}
-                className={clsx(
-                  "relative w-full rounded-2xl border border-stone-800 bg-stone-900 shadow-2xl overflow-hidden group/map",
-                  isEditingPins ? "ring-2 ring-amber-500/50" : "",
-                  isFullscreen ? "h-screen rounded-none border-none" : ""
-                )}
-                onDragOver={(e) => {
-                  if (isEditingPins) e.preventDefault();
-                }}
-                onDrop={handleDropOnMap}
-                onClick={() => {
-                  if (isEditingPins) {
-                    setSelectedPinIndex(null);
-                  }
-                }}
-              >
-                {/* Fullscreen Toggle Button */}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleFullscreen();
-                  }}
-                  className={clsx(
-                    "absolute top-4 right-4 z-50 p-2 bg-stone-900/80 backdrop-blur-md border border-stone-700 rounded-lg text-stone-300 hover:text-amber-400 hover:border-amber-500/50 transition-all opacity-0 group-hover/map:opacity-100 focus:opacity-100",
-                    isFullscreen && "opacity-100"
-                  )}
-                  title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
-                >
-                  {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
-                </button>
-
-                {/* Fullscreen Go Up Button */}
-                {isFullscreen && currentParentId && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      navigateToMap(currentEntity?.locationId || null);
-                    }}
-                    className="absolute top-4 left-4 z-50 flex items-center gap-2 px-3 py-2 bg-stone-900/80 backdrop-blur-md border border-stone-700 rounded-lg text-stone-300 hover:text-amber-400 hover:border-amber-500/50 transition-all"
-                  >
-                    <ArrowLeft size={16} />
-                    <span className="font-medium text-sm">Go Up</span>
-                  </button>
-                )}
-
-                {mediaLoading ? (
-                  <div className="flex items-center justify-center h-[600px] text-stone-500">Loading Map Image...</div>
-                ) : mapMedia ? (
-                  <>
-                    <img 
-                      src={mapMedia.data} 
-                      alt={currentEntity.name} 
-                      className="w-full h-auto block select-none rounded-2xl"
-                      draggable={false}
-                    />
-                    
-                    {/* Existing Pins */}
-                    {currentEntity.mapConfig.pins.map((pin, index) => {
-                      const target = entityMap.get(pin.targetEntityId);
-                      if (!target) return null;
-                      
-                      // Check visibility
-                      let isVisible = canViewEntity(target);
-                      if (isDM && playerPreview) {
-                        isVisible = target.isPublic || (target.allowedPlayers && target.allowedPlayers.length > 0);
-                      }
-                      
-                      if (!isVisible) return null;
-
-                      const PinIcon = (ENTITY_ICONS[target.type] || MapPin);
-                      const isSelected = isEditingPins && selectedPinIndex === index;
-                      
-                      return (
-                        <div
-                          key={`pin-${index}`}
-                          style={{ left: `${pin.x}%`, top: `${pin.y}%` }}
-                          className={clsx(
-                            "absolute -translate-x-1/2 -translate-y-1/2 group flex flex-col items-center",
-                            isEditingPins ? "z-30 cursor-grab active:cursor-grabbing" : "z-10",
-                            isFullscreen ? "scale-150" : ""
-                          )}
-                          draggable={isEditingPins}
-                          onDragStart={(e) => {
-                            if (!isEditingPins) return;
-                            // For Firefox
-                            e.dataTransfer.setData('text/plain', '');
-                            setDraggedPinIndex(index);
-                          }}
-                          onDragEnd={() => setDraggedPinIndex(null)}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (isEditingPins) {
-                              setSelectedPinIndex(isSelected ? null : index);
-                            } else {
-                              handlePinClick(pin);
-                            }
-                          }}
-                        >
-                          {/* Name label - always show in edit mode, or on hover in view mode */}
-                          <div className={clsx(
-                            "mb-1 px-2 py-0.5 bg-stone-950/60 backdrop-blur-[2px] rounded text-[10px] font-bold text-stone-100 whitespace-nowrap pointer-events-none shadow-sm transition-opacity",
-                            isEditingPins ? "opacity-100" : "opacity-60 group-hover:opacity-100"
-                          )}>
-                            {target.name}
-                          </div>
-
-                          <div className="relative">
-                            <div
-                              className={clsx(
-                                "w-8 h-8 rounded-full flex items-center justify-center transition-all shadow-lg border-2",
-                                isEditingPins 
-                                  ? (isSelected ? "bg-amber-400 border-amber-300 text-stone-950 scale-110" : "bg-stone-800 border-stone-600 text-stone-300 hover:bg-stone-700")
-                                  : "bg-amber-500 border-amber-400 text-stone-950 hover:scale-125 hover:z-20"
-                              )}
-                            >
-                              <PinIcon size={16} />
-                            </div>
-
-                            {/* Delete button (only visible when selected in edit mode) */}
-                            {isSelected && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDeletePin(index);
-                                  setSelectedPinIndex(null);
-                                }}
-                                className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 hover:bg-red-400 text-white rounded-full flex items-center justify-center shadow-md border border-red-700 transition-transform hover:scale-110 z-40"
-                                title="Remove Pin"
-                              >
-                                <Trash2 size={12} />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </>
-                ) : (
-                  <div className="flex items-center justify-center h-[400px] text-stone-600 italic">No map image found.</div>
-                )}
-              </div>
-            </div>
-
-            {/* Unmapped Entities Sidebar (Edit Mode Only) */}
-            {isEditingPins && (
-              <div 
-                className="w-full lg:w-80 flex flex-col bg-stone-900/80 border border-stone-800 rounded-2xl p-4 shadow-xl"
-                onDragOver={(e) => {
-                  e.preventDefault(); // Allow dropping here to remove pin
-                }}
-                onDrop={handleDropOffMap}
-              >
-                <h3 className="text-sm font-bold text-stone-300 font-cinzel mb-2 uppercase tracking-wider flex items-center justify-between">
-                  <span>Available Locations</span>
-                  <span className="bg-stone-800 text-stone-400 px-2 py-0.5 rounded-full text-xs">{unmappedEntities.length}</span>
-                </h3>
-                <p className="text-xs text-stone-500 mb-4">
-                  Long-press and drag items onto the map to pin them. Drag pins here to remove them.
-                </p>
-                
-                <div className="flex-1 overflow-y-auto pr-2 space-y-2 max-h-[600px] scrollbar-thin scrollbar-thumb-stone-700 scrollbar-track-transparent">
-                  {unmappedEntities.length === 0 ? (
-                    <div className="text-center py-8 text-stone-600 text-sm italic border border-dashed border-stone-700 rounded-xl">
-                      No available locations to pin.
-                    </div>
-                  ) : (
-                    unmappedEntities.map(entity => {
-                      const EntityIcon = ENTITY_ICONS[entity.type] || MapPin;
-                      const isLocatedHere = entity.locationId === currentEntity.id;
-                      
-                      return (
-                        <div
-                          key={entity.id}
-                          draggable
-                          onDragStart={(e) => {
-                            e.dataTransfer.setData('text/plain', '');
-                            setDraggedEntityId(entity.id);
-                          }}
-                          onDragEnd={() => setDraggedEntityId(null)}
-                          className="flex items-center gap-3 p-3 bg-stone-800 border border-stone-700 hover:border-amber-600/50 rounded-xl cursor-grab active:cursor-grabbing transition-colors group"
-                        >
-                          <div className="w-8 h-8 rounded-lg bg-stone-900 flex items-center justify-center text-stone-400 group-hover:text-amber-500 shrink-0">
-                            <EntityIcon size={16} />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="text-sm font-bold text-stone-200 truncate">{entity.name}</div>
-                            <div className="text-[10px] text-stone-500 uppercase tracking-wider flex items-center gap-1">
-                              {entity.type}
-                              {isLocatedHere && <span className="text-amber-600/80">• Located Here</span>}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+  const candidateList = (
+    <div className="space-y-1">
+      {candidates.length === 0 ? (
+        <p className="py-6 text-center text-sm text-stone-500">Everything here is already on the map.</p>
       ) : (
-        /* Standard List/Grid View */
-        <>
-          {currentEntity && (
-            <div className="mb-8 p-6 bg-stone-900/60 border border-stone-800 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-xl bg-amber-900/20 border border-amber-700/30 flex items-center justify-center text-amber-500 shrink-0">
-                  <CurrentIcon size={24} />
-                </div>
-                <div>
-                  <h2 className="text-2xl font-bold text-stone-100 font-cinzel">{currentEntity.name}</h2>
-                  <p className="text-stone-400 capitalize">{currentEntity.type}</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-3">
-                {currentEntity.locationId && (
-                  <button
-                    onClick={() => navigateToMap(currentEntity.locationId || null)}
-                    className="flex items-center gap-2 px-4 py-2 bg-stone-800 hover:bg-stone-700 text-stone-200 rounded-lg transition-colors font-medium text-sm"
-                  >
-                    <ArrowLeft size={16} />
-                    Go Up
-                  </button>
-                )}
-                <button
-                  onClick={() => openTab(currentEntity.id, currentEntity.name, currentEntity.type)}
-                  className="flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-500 text-stone-950 rounded-lg transition-colors font-bold text-sm shadow-lg shadow-amber-900/20"
-                >
-                  <ExternalLink size={16} />
-                  Open Tab
-                </button>
-              </div>
-            </div>
-          )}
-
-          <div>
-            <h3 className="text-lg font-semibold text-stone-300 mb-4 font-cinzel flex items-center gap-2">
-              {currentParentId === null ? 'Top-Level Locations' : 'Inside this location'}
-              <span className="text-sm font-sans text-stone-500 bg-stone-800 px-2 py-0.5 rounded-full">{currentChildren.length}</span>
-            </h3>
-            
-            {currentChildren.length === 0 ? (
-              <div className="text-center py-16 bg-stone-900/40 border border-stone-800/50 rounded-2xl border-dashed">
-                <MapPin size={48} className="mx-auto mb-4 text-stone-700" />
-                <p className="text-stone-400 text-lg">Nothing is located here yet.</p>
-                {isDM && (
-                  <Link to={`/entity/new?locationId=${currentParentId || ''}`} className="inline-block mt-4 text-amber-500 hover:text-amber-400 font-medium">
-                    + Create something here
-                  </Link>
-                )}
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {currentChildren.map(child => {
-                  const ChildIcon = ENTITY_ICONS[child.type] || MapPin;
-                  return (
-                    <button
-                      key={child.id}
-                      onClick={() => {
-                        if (child.mapConfig?.mediaId) {
-                          navigateToMap(child.id);
-                        } else {
-                          // If it's a leaf node or has no map, maybe we still want to go "into" it in the list view?
-                          // For now, let's just go into it.
-                          navigateToMap(child.id);
-                        }
-                      }}
-                      className="flex flex-col text-left p-4 bg-stone-900 border border-stone-800 hover:border-amber-700/50 hover:bg-stone-800/80 rounded-xl transition-all group shadow-sm"
-                    >
-                      <div className="flex items-start justify-between mb-3">
-                        <div className="w-10 h-10 rounded-lg bg-stone-800 group-hover:bg-amber-900/20 flex items-center justify-center text-stone-400 group-hover:text-amber-500 transition-colors">
-                          <ChildIcon size={20} />
-                        </div>
-                        <span className="text-xs font-medium text-stone-500 uppercase tracking-wider bg-stone-950 px-2 py-1 rounded-md">
-                          {child.type}
-                        </span>
-                      </div>
-                      <h4 className="font-bold text-stone-200 group-hover:text-amber-400 transition-colors truncate w-full text-lg mb-1">
-                        {child.name}
-                      </h4>
-                      <p className="text-sm text-stone-500 line-clamp-2">
-                        {child.content ? child.content.replace(/[#*`_]/g, '').substring(0, 80) + '...' : 'No description available.'}
-                      </p>
-                    </button>
-                  );
-                })}
-              </div>
+        candidates.map((e) => (
+          <button
+            key={e.id}
+            type="button"
+            onClick={() => {
+              setArmed(armed === e.id ? null : e.id);
+              setSelected(null);
+              setPickerOpen(false);
+            }}
+            className={clsx(
+              'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm',
+              armed === e.id ? 'bg-amber-500/15 text-amber-200 ring-1 ring-amber-500/40' : 'text-stone-300 hover:bg-stone-800',
             )}
-          </div>
-        </>
+          >
+            <TypeIcon type={e.type} className="shrink-0 text-stone-500" />
+            <span className="min-w-0 flex-1 truncate">{e.name}</span>
+            {e.locationId === current?.id && <span className="text-[10px] text-stone-500">here</span>}
+          </button>
+        ))
       )}
     </div>
+  );
+
+  return (
+    <Page wide>
+      {isDM && preview && <PlayerPreviewBanner onExit={() => setPreview(false)} />}
+
+      {/* Breadcrumbs */}
+      <nav aria-label="Map location" className="scrollbar-none -mx-4 mb-4 flex items-center gap-1 overflow-x-auto px-4 text-sm">
+        <Link to="/map" className={clsx('flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1', !id ? 'text-amber-300' : 'text-stone-400 hover:text-stone-100')}>
+          <Globe size={15} /> World
+        </Link>
+        {[...ancestors, ...(current ? [current] : [])].map((a) => (
+          <span key={a.id} className="flex shrink-0 items-center gap-1">
+            <ChevronRight size={14} className="text-stone-600" />
+            <Link to={`/map/${a.id}`} className={clsx('flex items-center gap-1.5 rounded-md px-2 py-1', a.id === id ? 'text-amber-300' : 'text-stone-400 hover:text-stone-100')}>
+              <TypeIcon type={a.type} size={14} />
+              <span className="max-w-[12rem] truncate">{a.name}</span>
+            </Link>
+          </span>
+        ))}
+      </nav>
+
+      {/* Title row */}
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        {current ? <TypeTile type={current.type} size="lg" /> : <div className="flex size-12 items-center justify-center rounded-xl bg-amber-500/10 text-amber-300 ring-1 ring-amber-500/25"><GiTreasureMap size={28} /></div>}
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate font-display text-2xl font-semibold text-stone-50 sm:text-3xl">{current?.name ?? 'The World'}</h1>
+          <p className="text-sm text-stone-400">{current ? typeMeta(current.type).label : 'Top-level places in your campaign'}</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {current && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => navigate(current.locationId && entityMap.get(current.locationId) ? `/map/${current.locationId}` : '/map')}>
+              <ArrowUp size={15} /> Up
+            </button>
+          )}
+          {current && (
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => peek(current)}>
+              <Info size={15} /> Details
+            </button>
+          )}
+          {isDM && (
+            <button type="button" className={clsx('btn btn-sm', preview ? 'btn-primary' : 'btn-ghost')} onClick={() => setPreview((p) => !p)} aria-pressed={preview}>
+              <Eye size={15} /> Player view
+            </button>
+          )}
+          {isDM && current && mapId && !preview && (
+            <button type="button" className={clsx('btn btn-sm', editing ? 'btn-primary' : 'btn-secondary')} onClick={() => (setEditing((e) => !e), setArmed(null), setSelected(null))}>
+              <Edit3 size={15} /> {editing ? 'Done' : 'Edit pins'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Map */}
+      {current && mapId ? (
+        <div className={clsx('mb-8 grid gap-4', editing && '@4xl:grid-cols-[minmax(0,1fr)_280px]')}>
+          <div className="min-w-0">
+            {mapLoading || !mapSrc ? (
+              <div className="flex h-80 items-center justify-center rounded-2xl border border-stone-800 bg-stone-950">{mapLoading ? <Spinner label="Loading map…" /> : <span className="text-stone-500">Map image missing.</span>}</div>
+            ) : (
+              <MapViewer
+                src={mapSrc}
+                alt={current.name}
+                pins={viewerPins}
+                crosshair={!!armed}
+                onMapClick={armed ? placeArmed : () => setSelected(null)}
+                onPinClick={(key) => {
+                  if (editing) setSelected(selected === key ? null : key);
+                  else {
+                    const t = entityMap.get(pins[Number(key)]?.targetEntityId);
+                    if (t) setSelected(selected === key ? null : key);
+                  }
+                }}
+                onPinDrop={(key, x, y) => savePins(pins.map((p, i) => (String(i) === key ? { ...p, x, y } : p)))}
+                overlay={
+                  <>
+                    {armedEntity && (
+                      <div className="absolute inset-x-2 top-2 flex items-center gap-2 rounded-lg border border-amber-500/50 bg-stone-950/90 px-3 py-2 text-sm text-amber-100 backdrop-blur">
+                        <MapPin size={16} className="shrink-0 text-amber-400" />
+                        <span className="flex-1">
+                          Tap the map to place <strong>{armedEntity.name}</strong>
+                        </span>
+                        <button type="button" className="btn-icon-sm" aria-label="Cancel" onClick={() => setArmed(null)}>
+                          <X size={15} />
+                        </button>
+                      </div>
+                    )}
+                    {selectedTarget && !armed && (
+                      <div className="absolute inset-x-2 bottom-2 mr-14 flex items-center gap-3 rounded-xl border border-stone-700 bg-stone-950/95 p-3 shadow-2xl backdrop-blur sm:right-auto sm:max-w-sm">
+                        <TypeTile type={selectedTarget.type} size="sm" />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-semibold text-stone-100">{selectedTarget.name}</div>
+                          <div className="text-xs text-stone-500">{typeMeta(selectedTarget.type).label}</div>
+                        </div>
+                        {editing ? (
+                          <button
+                            type="button"
+                            className="btn btn-danger btn-sm"
+                            onClick={() => {
+                              savePins(pins.filter((_, i) => String(i) !== selected));
+                              setSelected(null);
+                            }}
+                          >
+                            <Trash2 size={14} /> Remove
+                          </button>
+                        ) : (
+                          <>
+                            <button type="button" className="btn btn-ghost btn-sm" onClick={() => peek(selectedTarget)}>
+                              Details
+                            </button>
+                            {(selectedTarget.mapConfig?.mediaId || (childrenOf.get(selectedTarget.id)?.length ?? 0) > 0) && (
+                              <button type="button" className="btn btn-primary btn-sm" onClick={() => navigate(`/map/${selectedTarget.id}`)}>
+                                Enter
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </>
+                }
+              />
+            )}
+            {editing && (
+              <p className="mt-2 text-xs text-stone-500">Pick an entry{' '}<span className="@4xl:hidden">(“Add pin”)</span> and tap the map to place it. Drag pins to move them; tap a pin to remove it.</p>
+            )}
+            {editing && (
+              <button type="button" className="btn btn-secondary mt-3 w-full @4xl:hidden" onClick={() => setPickerOpen(true)}>
+                <Plus size={16} /> Add pin
+              </button>
+            )}
+          </div>
+          {editing && (
+            <aside className="card hidden max-h-[72vh] flex-col p-3 @4xl:flex">
+              <h2 className="section-title mb-1 px-1">Add pins</h2>
+              <p className="mb-2 px-1 text-xs text-stone-500">Choose one, then click on the map.</p>
+              <div className="scrollbar-thin -mx-1 flex-1 overflow-y-auto px-1">{candidateList}</div>
+            </aside>
+          )}
+        </div>
+      ) : current ? (
+        <div className="mb-6 rounded-xl border border-dashed border-stone-800 px-4 py-3 text-sm text-stone-500">
+          {isDM ? (
+            <>
+              No map image for {current.name} yet.{' '}
+              <Link to={`/entity/${current.id}/edit`} className="link">
+                Add one in the editor
+              </Link>{' '}
+              (Images &amp; map).
+            </>
+          ) : (
+            'There’s no map of this place yet.'
+          )}
+        </div>
+      ) : null}
+
+      {/* Children */}
+      <section>
+        <h2 className="section-title mb-3">
+          {current ? `In ${current.name}` : 'Places'} <span className="font-sans text-sm text-stone-500">{children.length}</span>
+        </h2>
+        {children.length === 0 ? (
+          <EmptyState
+            icon={MapPin}
+            title="Nothing here yet"
+            action={
+              isDM && (
+                <Link to={`/entity/new?type=${current ? 'settlement' : 'country'}${current ? `&locationId=${encodeURIComponent(current.id)}` : ''}`} className="btn btn-primary">
+                  <Plus size={16} /> Create a place
+                </Link>
+              )
+            }
+          />
+        ) : (
+          <div className="grid gap-3 @lg:grid-cols-2 @4xl:grid-cols-3">
+            {children.map((c) => {
+              const grand = (childrenOf.get(c.id) ?? []).filter((g) => g.type !== 'note' && seesAsPlayer(g)).length;
+              return (
+                <button key={c.id} type="button" onClick={() => enter(c)} className="card group flex gap-3 p-4 text-left hover:border-amber-500/40">
+                  <TypeTile type={c.type} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="min-w-0 flex-1 truncate font-sans text-[15px] font-semibold text-stone-100 group-hover:text-amber-300">{c.name}</h3>
+                      {c.mapConfig?.mediaId && <MapPin size={14} className="shrink-0 text-amber-400" aria-label="Has a map" />}
+                    </div>
+                    <div className="mt-0.5 flex items-center gap-2 text-xs text-stone-500">
+                      <TypeBadge type={c.type} />
+                      {grand > 0 && <span>{grand} inside</span>}
+                    </div>
+                    {canViewField(c, 'content') && c.content && <p className="mt-1.5 line-clamp-2 text-sm text-stone-400">{excerpt(c.content, 120)}</p>}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      <Modal open={pickerOpen} onClose={() => setPickerOpen(false)} title="Add a pin" description="Choose an entry, then tap where it goes on the map.">
+        {candidateList}
+      </Modal>
+    </Page>
   );
 }

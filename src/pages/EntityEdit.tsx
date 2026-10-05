@@ -1,1543 +1,761 @@
-import { useState, useEffect } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { doc, getDoc, setDoc, collection, getDocs, query, where, deleteDoc, updateDoc } from 'firebase/firestore';
-import { db } from '../firebase';
-import { Entity, EntityType, User, OperationType, FieldPermission, DndStats } from '../types';
-import { ENTITY_SCHEMAS, ENTITY_HIERARCHY, ENTITY_TYPES_ORDERED } from '../utils/entitySchemas';
-import { handleFirestoreError } from '../utils/firebaseUtils';
-import { generateUniqueId } from '../utils/slugify';
-import { useAuth } from '../AuthContext';
-import { useEntities } from '../hooks/useEntities';
-import { ArrowLeft, Save, Globe, Lock, Users, Image as ImageIcon, X, Link as LinkIcon, BookOpen, RefreshCw, Upload, Map as MapIcon } from 'lucide-react';
-import { GoogleGenAI } from '@google/genai';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { ArrowLeft, Check, Globe, HelpCircle, Lock, Plus, Save, Users, X } from 'lucide-react';
 import clsx from 'clsx';
-import SearchableDropdown from '../components/SearchableDropdown';
-import FieldPermissionToggle from '../components/FieldPermissionToggle';
-import LinkModal from '../components/LinkModal';
-import QuickCreateModal from '../components/QuickCreateModal';
-import AutoExpandingTextarea from '../components/AutoExpandingTextarea';
-import MDEditor from '@uiw/react-md-editor';
+import { useAuth } from '../contexts/AuthContext';
+import { useCampaignData, useIsDescendant, useVisibleEntities } from '../contexts/CampaignDataContext';
+import { useToast } from '../contexts/ToastContext';
+import { useConfirm } from '../contexts/ConfirmContext';
+import { baseType, menuTypes, ENTITY_TYPES, fieldsFor, isEntityType, permissionKeys, typeMeta, type FieldSchema } from '../lib/entityTypes';
+import { upgradeSharing } from '../lib/permissions';
+import { defaultAttributes, explicitShare, saveEntity, type EntityDraft, type PendingRelationship } from '../lib/entityService';
+import type { Entity, EntityType, FieldPermission, User } from '../types';
+import { Avatar, EmptyState, Page, Segmented, Spinner, Toggle, TypeIcon } from '../components/ui/bits';
+import EntityPicker from '../components/entity/EntityPicker';
+import FieldPermissionToggle from '../components/editor/FieldPermissionToggle';
+import TagInput from '../components/editor/TagInput';
+import MarkdownField from '../components/editor/MarkdownField';
+import ImageManager from '../components/editor/ImageManager';
+import StatBlockEditor from '../components/editor/StatBlockEditor';
+import { RelationshipList, RelationshipModal } from '../components/entity/Relationships';
+import QuickCreateModal from '../components/entity/QuickCreateModal';
+import { Popover } from '../components/ui/Popover';
+
+// ---------------------------------------------------------------------------
+
+function draftFromEntity(e: Entity, players: User[], isDM: boolean): EntityDraft {
+  const images = e.imageUrls ?? [];
+  const mapRef = e.mapConfig?.mediaId ? `media:${e.mapConfig.mediaId}` : null;
+  return {
+    id: e.id,
+    ownerId: e.ownerId,
+    createdAt: e.createdAt,
+    type: e.type,
+    name: e.name,
+    content: e.content ?? '',
+    tags: e.tags ?? [],
+    isPublic: !!e.isPublic,
+    // In the editor this holds the explicit selection; derived access is re-added on save.
+    allowedPlayers: isDM ? explicitShare(e, players) : e.allowedPlayers ?? [],
+    // Older entries: make hidden-by-default fields explicit before the simpler model applies.
+    fieldPermissions: isDM ? upgradeSharing(e, explicitShare(e, players), permissionKeys(e.type)) : e.fieldPermissions ?? {},
+    playerKnowledge: e.playerKnowledge ?? {},
+    locationId: e.locationId ?? '',
+    gender: e.gender ?? '',
+    imageUrls: images,
+    attributes: e.attributes ?? {},
+    statBlock: e.statBlock ?? '',
+    dndStats: e.dndStats ?? null,
+    dmNotes: e.dmNotes ?? '',
+    mapConfig: e.mapConfig ?? null,
+    mapImage: mapRef,
+  };
+}
+
+function newDraft(type: EntityType, locationId: string, dmId: string, isDM: boolean): EntityDraft {
+  return {
+    type,
+    name: '',
+    content: '',
+    tags: [],
+    isPublic: false,
+    // Players' notes are shared with the DM by default.
+    allowedPlayers: !isDM && type === 'note' ? [dmId] : [],
+    fieldPermissions: {},
+    playerKnowledge: {},
+    locationId,
+    gender: '',
+    imageUrls: [],
+    attributes: defaultAttributes(type),
+    statBlock: '',
+    dndStats: null,
+    dmNotes: '',
+    mapConfig: null,
+    mapImage: null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+
+function Card({ title, description, children, className, id }: { title: string; description?: string; children: ReactNode; className?: string; id?: string }) {
+  return (
+    <section id={id} className={clsx('card p-4 sm:p-5', className)}>
+      <h2 className="section-title">{title}</h2>
+      {description && <p className="mt-0.5 text-sm text-stone-500">{description}</p>}
+      <div className="mt-4">{children}</div>
+    </section>
+  );
+}
+
+function Help({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLButtonElement>(null);
+  return (
+    <>
+      <button ref={anchor} type="button" aria-label="Help" onClick={() => setOpen((o) => !o)} className="text-stone-500 hover:text-stone-300">
+        <HelpCircle size={13} />
+      </button>
+      <Popover anchorRef={anchor} open={open} onClose={() => setOpen(false)} align="start" width={240}>
+        <p className="p-2 text-xs text-stone-300">{text}</p>
+      </Popover>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 
 export default function EntityEdit() {
-  const { id } = useParams<{ id: string }>();
-  const [searchParams] = useSearchParams();
-  const defaultType = (searchParams.get('type') as EntityType) || 'npc';
-  
+  const { id: routeId } = useParams<{ id: string }>();
+  const [params] = useSearchParams();
   const navigate = useNavigate();
   const { user, isDM, currentCampaign } = useAuth();
-  const { entities: allEntities, loading: entitiesLoading } = useEntities();
-  
-  const [loading, setLoading] = useState(id ? true : false);
+  const { entityMap, loading, players, canEdit, canViewField } = useCampaignData();
+  const visible = useVisibleEntities();
+  const isDescendant = useIsDescendant();
+  const toast = useToast();
+  const confirm = useConfirm();
+
+  const isNew = !routeId;
+  const existing = routeId ? entityMap.get(routeId) : undefined;
+
+  const [draft, setDraft] = useState<EntityDraft | null>(null);
+  const initialJson = useRef('');
   const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState('');
-  const [players, setPlayers] = useState<User[]>([]);
-  const [availableLocations, setAvailableLocations] = useState<Entity[]>([]);
-  const [isQuickCreateOpen, setIsQuickCreateOpen] = useState(false);
-  const [isStatBlockModalOpen, setIsStatBlockModalOpen] = useState(false);
-  const [quickCreateName, setQuickCreateName] = useState('');
-  
-  const [generatingImage, setGeneratingImage] = useState(false);
-  const [imageError, setImageError] = useState('');
-  const [customImagePrompt, setCustomImagePrompt] = useState('');
+  const [error, setError] = useState('');
+  const [pendingRels, setPendingRels] = useState<PendingRelationship[]>([]);
+  const [relOpen, setRelOpen] = useState(false);
+  const [quickLocation, setQuickLocation] = useState<string | null>(null);
+  const [customSelect, setCustomSelect] = useState<Set<string>>(new Set());
 
-  const [formData, setFormData] = useState<Partial<Entity>>(() => {
-    // Initialize with default values from schema
-    const initialAttributes: Record<string, any> = {};
-    if (ENTITY_SCHEMAS[defaultType]) {
-      ENTITY_SCHEMAS[defaultType].forEach(field => {
-        if (field.defaultValue !== undefined) {
-          initialAttributes[field.key] = field.defaultValue;
-        }
-      });
-    }
-
-    return {
-      type: defaultType,
-      name: '',
-      content: '',
-      tags: [],
-      isPublic: false,
-      playerKnowledge: {},
-      locationId: searchParams.get('locationId') || '',
-      gender: '',
-      imageUrls: [],
-      attributes: initialAttributes,
-      fieldPermissions: {},
-      mapConfig: null,
-    };
-  });
-
-  const generateImage = async () => {
-    if (!formData.name) {
-      setImageError("Please enter a name first to generate an image.");
-      return;
-    }
-    setGeneratingImage(true);
-    setImageError('');
-    try {
-      const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
-      
-      if (!apiKey) {
-        setImageError("Gemini API Key is missing. Please check your GitHub Secrets and workflow configuration.");
-        setGeneratingImage(false);
-        return;
-      }
-
-      const ai = new GoogleGenAI({ apiKey });
-      const descriptionPart = customImagePrompt.trim() 
-        ? customImagePrompt.trim() 
-        : (formData.content ? formData.content.substring(0, 300) : '');
-      const prompt = `A high quality fantasy digital art illustration of a ${formData.type} named ${formData.name}. ${descriptionPart} D&D style, high detail.`;
-      
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
-        contents: {
-          parts: [{ text: prompt }],
-        },
-        config: {
-          imageConfig: {
-            aspectRatio: "1:1"
-          }
-        },
-      });
-
-      for (const part of response.candidates?.[0]?.content?.parts || []) {
-        if (part.inlineData) {
-          const base64Data = `data:image/png;base64,${part.inlineData.data}`;
-          
-          // Compress the image to avoid Firestore 1MB limit
-          const compressedBase64 = await new Promise<string>((resolve, reject) => {
-            const img = new Image();
-            img.onload = () => {
-              const canvas = document.createElement('canvas');
-              const maxWidth = 512;
-              let width = img.width;
-              let height = img.height;
-
-              if (width > maxWidth) {
-                height = Math.round((height * maxWidth) / width);
-                width = maxWidth;
-              }
-
-              canvas.width = width;
-              canvas.height = height;
-              const ctx = canvas.getContext('2d');
-              if (!ctx) {
-                resolve(base64Data);
-                return;
-              }
-              ctx.drawImage(img, 0, 0, width, height);
-              resolve(canvas.toDataURL('image/jpeg', 0.8));
-            };
-            img.onerror = reject;
-            img.src = base64Data;
-          });
-
-          setFormData(prev => ({
-            ...prev,
-            imageUrls: [...(prev.imageUrls || []), compressedBase64]
-          }));
-          break;
-        }
-      }
-    } catch (err: any) {
-      console.error("Full image generation error object:", JSON.stringify(err, null, 2));
-      console.error("Error message:", err.message);
-      if (err.message && (err.message.includes("429") || err.message.toLowerCase().includes("quota") || err.message.toLowerCase().includes("exhausted"))) {
-        setImageError("Quota Exceeded (429): Your API key has hit its daily limit for image generation. Try again tomorrow or check your Google AI Studio quota.");
-      } else {
-        setImageError(`Generation Failed: ${err.message || "Unknown error"}. (Check browser console for details)`);
-      }
-    } finally {
-      setGeneratingImage(false);
-    }
-  };
-
+  // Initialise the form once (later remote updates don't clobber local edits).
   useEffect(() => {
-    setAvailableLocations(allEntities.filter(e => e.id !== id));
-  }, [allEntities, id]);
+    if (draft || !currentCampaign) return;
+    if (isNew) {
+      const t = params.get('type');
+      const type: EntityType = isDM ? (isEntityType(t) ? t : 'npc') : 'note';
+      const d = newDraft(type, params.get('locationId') ?? '', currentCampaign.dmId, isDM);
+      setDraft(d);
+      initialJson.current = JSON.stringify(d);
+    } else if (existing) {
+      // DMs need the member list to tell explicit sharing apart from derived access.
+      if (isDM && currentCampaign.players.length > 0 && players.length === 0) return;
+      const d = draftFromEntity(existing, players, isDM);
+      setDraft(d);
+      initialJson.current = JSON.stringify(d);
+      // Show custom values of select fields in "Other…" mode.
+      const custom = new Set<string>();
+      for (const f of fieldsFor(existing.type)) {
+        const v = existing.attributes?.[f.key];
+        if (f.type === 'select' && v && !f.options?.includes(v)) custom.add(f.key);
+      }
+      setCustomSelect(custom);
+    }
+  }, [isNew, existing, draft, currentCampaign, params, isDM, players]);
 
+  const dirty = !!draft && (JSON.stringify(draft) !== initialJson.current || pendingRels.length > 0);
+
+  // Warn before closing the tab with unsaved changes.
   useEffect(() => {
-    if (formData.mapConfig?.mediaId) {
-      const fetchMapUrl = async () => {
-        try {
-          const mediaDoc = await getDoc(doc(db, 'media', formData.mapConfig!.mediaId));
-          if (mediaDoc.exists()) {
-            setActiveMapUrl(mediaDoc.data().data);
-          }
-        } catch (error) {
-          console.error("Error fetching map URL:", error);
-        }
-      };
-      fetchMapUrl();
-    }
-  }, [formData.mapConfig?.mediaId]);
-
-  const handleQuickCreate = (newEntity: Entity) => {
-    setAvailableLocations(prev => [...prev, newEntity]);
-    setFormData(prev => ({ ...prev, locationId: newEntity.id }));
-    setIsQuickCreateOpen(false);
-  };
-  
-  const [tagInput, setTagInput] = useState('');
-  const [imageUrlInput, setImageUrlInput] = useState('');
-  const [activeImageIndex, setActiveImageIndex] = useState<number | null>(null);
-  const [isLinkModalOpen, setIsLinkModalOpen] = useState(false);
-  const [pendingRelationships, setPendingRelationships] = useState<{ targetId: string, label: string, reverseLabel: string, targetName: string }[]>([]);
-  const [relSearch, setRelSearch] = useState('');
-  const [relLabel, setRelLabel] = useState('');
-  const [relReverseLabel, setRelReverseLabel] = useState('');
-  const [otherFields, setOtherFields] = useState<Set<string>>(new Set());
-  const [existingLabels, setExistingLabels] = useState<string[]>([]);
-  const [activeMapUrl, setActiveMapUrl] = useState<string | null>(null);
-
-  const handleDndStatChange = (field: keyof DndStats, value: any) => {
-    setFormData(prev => ({
-      ...prev,
-      dndStats: {
-        ...(prev.dndStats || {
-          armorClass: '',
-          hitPoints: '',
-          speed: '',
-          str: 10,
-          dex: 10,
-          con: 10,
-          int: 10,
-          wis: 10,
-          cha: 10,
-          skills: '',
-          senses: '',
-          languages: '',
-          challenge: '',
-          proficiencyBonus: ''
-        }),
-        [field]: value
-      }
-    }));
-  };
-
-  const calculateModifier = (score: number) => {
-    const mod = Math.floor((score - 10) / 2);
-    return mod >= 0 ? `+${mod}` : `${mod}`;
-  };
-
-  const typePriority: Record<EntityType, EntityType[]> = {
-    npc: ['settlement', 'landmark', 'faction', 'country', 'geography', 'shop', 'note', 'npc', 'item', 'monster', 'quest'],
-    item: ['npc', 'shop', 'settlement', 'landmark', 'faction', 'country', 'geography', 'note', 'item', 'monster', 'quest'],
-    settlement: ['country', 'geography', 'landmark', 'faction', 'note', 'settlement', 'npc', 'shop', 'item', 'monster', 'quest'],
-    landmark: ['country', 'geography', 'settlement', 'faction', 'note', 'landmark', 'npc', 'shop', 'item', 'monster', 'quest'],
-    country: ['geography', 'note', 'country', 'settlement', 'landmark', 'faction', 'npc', 'shop', 'item', 'monster', 'quest'],
-    faction: ['settlement', 'country', 'geography', 'landmark', 'note', 'faction', 'npc', 'shop', 'item', 'monster', 'quest'],
-    shop: ['settlement', 'landmark', 'country', 'geography', 'faction', 'note', 'shop', 'npc', 'item', 'monster', 'quest'],
-    note: ['note', 'npc', 'settlement', 'landmark', 'country', 'geography', 'faction', 'shop', 'item', 'monster', 'quest'],
-    geography: ['geography', 'country', 'note', 'settlement', 'landmark', 'faction', 'npc', 'shop', 'item', 'monster', 'quest'],
-    monster: ['monster', 'npc', 'settlement', 'landmark', 'faction', 'country', 'geography', 'shop', 'note', 'item', 'quest'],
-    quest: ['quest', 'npc', 'settlement', 'landmark', 'faction', 'country', 'geography', 'shop', 'note', 'item', 'monster'],
-  };
-
-  const dropdownOptions = availableLocations
-    .filter(loc => {
-      const currentType = formData.type as EntityType;
-      const locType = loc.type as EntityType;
-      
-      // Specific filtering based on common D&D hierarchy
-      if (currentType === 'settlement') {
-        return ['country', 'geography'].includes(locType);
-      }
-      if (currentType === 'geography') {
-        return ['geography', 'country'].includes(locType);
-      }
-      if (currentType === 'npc') {
-        return ['settlement', 'shop', 'landmark', 'country', 'geography', 'faction'].includes(locType);
-      }
-      if (currentType === 'shop') {
-        return ['settlement', 'landmark', 'country', 'geography'].includes(locType);
-      }
-      if (currentType === 'landmark') {
-        return ['settlement', 'country', 'geography'].includes(locType);
-      }
-      if (currentType === 'faction') {
-        return ['country', 'settlement', 'geography'].includes(locType);
-      }
-      if (currentType === 'item') {
-        return ['npc', 'shop', 'settlement', 'landmark'].includes(locType);
-      }
-      
-      const currentLevel = ENTITY_HIERARCHY[currentType] || 0;
-      const locLevel = ENTITY_HIERARCHY[locType] || 0;
-      return locLevel > currentLevel || (locLevel === currentLevel && locType === currentType);
-    })
-    .sort((a, b) => {
-      const priorities = typePriority[formData.type as EntityType] || [];
-      const typeAIndex = priorities.indexOf(a.type);
-      const typeBIndex = priorities.indexOf(b.type);
-      
-      if (typeAIndex !== typeBIndex) {
-        return typeAIndex - typeBIndex;
-      }
-      return a.name.localeCompare(b.name);
-    })
-    .map(loc => ({
-      id: loc.id,
-      label: loc.name,
-      type: loc.type
-    }));
-
-  useEffect(() => {
-    if (!currentCampaign || !user) {
-      navigate('/');
-      return;
-    }
-
-    const fetchPlayers = async () => {
-      try {
-        const snapshot = await getDocs(collection(db, 'users'));
-        setPlayers(snapshot.docs.map(doc => doc.data() as User).filter(u => currentCampaign.players.includes(u.uid)));
-      } catch (error) {
-        handleFirestoreError(error, OperationType.LIST, 'users');
-      }
-    };
-    fetchPlayers();
-
-    const fetchLabels = async () => {
-      try {
-        const q = query(collection(db, 'relationships'), where('campaignId', '==', currentCampaign.id));
-        const snap = await getDocs(q);
-        const labels = new Set<string>();
-        snap.docs.forEach(d => labels.add(d.data().label));
-        setExistingLabels(Array.from(labels));
-      } catch (error) {
-        console.error("Error fetching relationship labels", error);
-      }
-    };
-    fetchLabels();
-
-    if (id && id !== 'new') {
-      const fetchEntity = async () => {
-        try {
-          const docSnap = await getDoc(doc(db, 'entities', id));
-          if (docSnap.exists()) {
-            const data = docSnap.data() as Entity;
-            
-            // Resolve media URLs to base64 for preview
-            const resolvedImageUrls = [...(data.imageUrls || [])];
-            for (let i = 0; i < resolvedImageUrls.length; i++) {
-              const url = resolvedImageUrls[i];
-              if (url.startsWith('media:')) {
-                const mediaId = url.replace('media:', '');
-                const mediaSnap = await getDoc(doc(db, 'media', mediaId));
-                if (mediaSnap.exists()) {
-                  resolvedImageUrls[i] = mediaSnap.data().data;
-                }
-              }
-            }
-            
-            setFormData({ ...data, imageUrls: resolvedImageUrls });
-          } else {
-            navigate('/');
-          }
-        } catch (error) {
-          handleFirestoreError(error, OperationType.GET, `entities/${id}`);
-        } finally {
-          setLoading(false);
-        }
-      };
-      fetchEntity();
-    } else if (id === 'new') {
-      if (defaultType === 'note') {
-        setFormData(prev => ({
-          ...prev,
-          attributes: {
-            ...prev.attributes,
-            date: new Date().toISOString().split('T')[0]
-          }
-        }));
-      }
-      setLoading(false);
-    }
-  }, [id, isDM, navigate, currentCampaign, user, defaultType]);
-
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!user || !currentCampaign) return;
-    
-    setSaving(true);
-    setSaveError('');
-    try {
-      if (!isDM && formData.type !== 'note') {
-        throw new Error("Only DMs can create or edit entities other than Notes.");
-      }
-
-      // Restrict editing of notes to the owner
-      if (id && id !== 'new' && formData.type === 'note' && formData.ownerId !== user.uid) {
-        throw new Error("Only the owner of a note can edit it.");
-      }
-
-      let entityId = id;
-      if (!entityId || entityId === 'new') {
-        entityId = await generateUniqueId(formData.name || 'Untitled');
-      }
-      const now = new Date().toISOString();
-      
-      // Handle media offloading to avoid Firestore 1MB limit
-      const finalImageUrls: string[] = [];
-      const mediaPromises = [];
-      
-      for (const url of (formData.imageUrls || [])) {
-        if (url.startsWith('data:')) {
-          // It's a base64 image, save to media collection
-          const mediaRef = doc(collection(db, 'media'));
-          const mediaId = mediaRef.id;
-          const mediaDoc = {
-            id: mediaId,
-            entityId: entityId,
-            campaignId: currentCampaign.id,
-            data: url,
-            ownerId: user.uid,
-            createdAt: now
-          };
-          mediaPromises.push(setDoc(mediaRef, mediaDoc));
-          finalImageUrls.push(`media:${mediaId}`);
-        } else {
-          // It's an external URL or already a media reference
-          finalImageUrls.push(url);
-        }
-      }
-
-      // Cleanup orphaned media if updating
-      if (id && id !== 'new') {
-        const oldEntityDoc = await getDoc(doc(db, 'entities', id));
-        if (oldEntityDoc.exists()) {
-          const oldImageUrls = oldEntityDoc.data().imageUrls || [];
-          const removedMediaIds = oldImageUrls
-            .filter((url: string) => url.startsWith('media:') && !finalImageUrls.includes(url))
-            .map((url: string) => url.replace('media:', ''));
-          
-          for (const mediaId of removedMediaIds) {
-            mediaPromises.push(deleteDoc(doc(db, 'media', mediaId)));
-          }
-        }
-      }
-      
-      await Promise.all(mediaPromises);
-      
-      const allAllowedPlayers = new Set<string>();
-      
-      Object.keys(formData.playerKnowledge || {}).forEach(k => {
-        if (formData.playerKnowledge![k].trim() !== '') {
-          allAllowedPlayers.add(k);
-        }
-      });
-
-      Object.values(formData.fieldPermissions || {}).forEach(perm => {
-        if (perm.isPublic) {
-          players.forEach(p => allAllowedPlayers.add(p.uid));
-        } else if (perm.allowedPlayers) {
-          perm.allowedPlayers.forEach(p => allAllowedPlayers.add(p));
-        }
-      });
-
-      // If a player is saving an entity, ensure they are the owner if it's new
-      const ownerId = formData.ownerId || user.uid;
-
-      const entityData: Entity = {
-        id: entityId,
-        campaignId: currentCampaign.id,
-        type: formData.type as EntityType,
-        name: formData.name || 'Untitled',
-        content: formData.content || '',
-        tags: formData.tags || [],
-        ownerId: ownerId,
-        isPublic: formData.isPublic || false,
-        allowedPlayers: Array.from(allAllowedPlayers),
-        playerKnowledge: formData.playerKnowledge || {},
-        locationId: formData.locationId || null,
-        gender: formData.gender || null,
-        imageUrls: finalImageUrls,
-        attributes: formData.attributes || {},
-        fieldPermissions: formData.fieldPermissions || {},
-        mapConfig: formData.mapConfig || null,
-        statBlock: formData.statBlock || null,
-        dndStats: formData.dndStats || null,
-        dmNotes: formData.dmNotes || null,
-        createdAt: formData.createdAt || now,
-        updatedAt: now,
-      };
-
-      // Remove undefined values to prevent Firestore errors
-      Object.keys(entityData).forEach(key => {
-        if ((entityData as any)[key] === undefined) {
-          delete (entityData as any)[key];
-        }
-      });
-
-      await setDoc(doc(db, 'entities', entityId), entityData);
-
-      // Save pending relationships
-      for (const rel of pendingRelationships) {
-        const relId = `${entityId}_${rel.targetId}`;
-        const reverseRelId = `${rel.targetId}_${entityId}`;
-        
-        const relationship = {
-          id: relId,
-          campaignId: currentCampaign.id,
-          sourceId: entityId,
-          targetId: rel.targetId,
-          targetName: rel.targetName,
-          label: rel.label,
-          reverseId: reverseRelId,
-          createdAt: now,
-        };
-        
-        const reverseRelationship = {
-          id: reverseRelId,
-          campaignId: currentCampaign.id,
-          sourceId: rel.targetId,
-          targetId: entityId,
-          targetName: formData.name,
-          label: rel.reverseLabel || rel.label, // Fallback if empty
-          reverseId: relId,
-          createdAt: now,
-        };
-        
-        await Promise.all([
-          setDoc(doc(db, 'relationships', relId), relationship),
-          setDoc(doc(db, 'relationships', reverseRelId), reverseRelationship)
-        ]);
-      }
-
-      if (id === 'new' || !(window.history.state && window.history.state.idx > 0)) {
-        navigate(`/entity/${entityId}`, { replace: true });
-      } else {
-        navigate(-1);
-      }
-    } catch (error: any) {
-      console.error("Save error:", error);
-      setSaveError(error.message || "Failed to save entity. Please check your permissions.");
-      handleFirestoreError(error, OperationType.WRITE, `entities/${id || 'new'}`);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const addTag = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && tagInput.trim()) {
+    if (!dirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault();
-      if (!formData.tags?.includes(tagInput.trim())) {
-        setFormData({ ...formData, tags: [...(formData.tags || []), tagInput.trim()] });
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [dirty]);
+
+  const set = useCallback(<K extends keyof EntityDraft>(key: K, value: EntityDraft[K]) => setDraft((d) => (d ? { ...d, [key]: value } : d)), []);
+  const setAttr = (key: string, value: unknown) => setDraft((d) => (d ? { ...d, attributes: { ...d.attributes, [key]: value } } : d));
+  const setFieldPerm = (key: string, perm: FieldPermission) => setDraft((d) => (d ? { ...d, fieldPermissions: { ...d.fieldPermissions, [key]: perm } } : d));
+
+  const locationOptions = useMemo(() => {
+    if (!draft) return [];
+    const parents = typeMeta(draft.type).parents;
+    return visible.filter((e) => parents.includes(e.type) && e.id !== routeId && !(routeId && isDescendant(e, routeId)));
+  }, [draft?.type, visible, routeId, isDescendant]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const suggestions = useMemo(() => {
+    const byKey = new Map<string, Set<string>>();
+    const tags = new Set<string>();
+    for (const e of visible) {
+      if (canViewField(e, 'tags')) e.tags?.forEach((t) => tags.add(t));
+      for (const [k, v] of Object.entries(e.attributes ?? {})) {
+        if (typeof v !== 'string' || !v || v.length > 60 || !canViewField(e, k)) continue;
+        if (!byKey.has(k)) byKey.set(k, new Set());
+        byKey.get(k)!.add(v);
       }
-      setTagInput('');
     }
+    return { byKey, tags: [...tags].sort() };
+  }, [visible, canViewField]);
+
+  const leave = async (force = false) => {
+    if (!force && dirty) {
+      const ok = await confirm({ title: 'Discard changes?', message: 'Your unsaved changes will be lost.', confirmLabel: 'Discard', danger: true });
+      if (!ok) return;
+    }
+    if ((window.history.state?.idx ?? 0) > 0) navigate(-1);
+    else if (routeId) navigate(`/entity/${routeId}`, { replace: true });
+    else navigate(`/entities/${draft?.type ?? 'npc'}`, { replace: true });
   };
 
-  const removeTag = (tagToRemove: string) => {
-    setFormData({ ...formData, tags: formData.tags?.filter(t => t !== tagToRemove) });
-  };
-
-  const handleKnowledgeChange = (playerId: string, knowledge: string) => {
-    setFormData(prev => ({
-      ...prev,
-      playerKnowledge: {
-        ...(prev.playerKnowledge || {}),
-        [playerId]: knowledge
-      }
-    }));
-  };
-
-  const setAsMap = async (imageUrl: string) => {
-    if (!currentCampaign || !user) return;
-    
+  const save = async () => {
+    if (!draft || !user || !currentCampaign || saving) return;
+    if (!draft.name.trim()) {
+      setError('Give it a name first.');
+      document.getElementById('f-name')?.focus();
+      return;
+    }
     setSaving(true);
+    setError('');
     try {
-      const mediaId = `map-${Date.now()}`;
-      const now = new Date().toISOString();
-      
-      const mediaData = {
-        id: mediaId,
-        entityId: id === 'new' ? 'pending' : id,
-        campaignId: currentCampaign.id,
-        data: imageUrl,
-        mimeType: imageUrl.startsWith('data:image/png') ? 'image/png' : 'image/jpeg',
-        ownerId: user.uid,
-        createdAt: now,
-      };
-      
-      await setDoc(doc(db, 'media', mediaId), mediaData);
-      
-      const newMapConfig = {
-        ...(formData.mapConfig || { pins: [] }),
-        mediaId: mediaId
-      };
-
-      // If it's an existing entity, update it immediately to ensure persistence
-      if (id && id !== 'new') {
-        await updateDoc(doc(db, 'entities', id), {
-          mapConfig: newMapConfig
-        });
+      // If sharing was changed elsewhere (e.g. "Reveal" in the side panel) while this form was
+      // open and the DM didn't touch it here, keep the newer sharing instead of undoing it.
+      let toSave = draft;
+      if (existing && initialJson.current) {
+        const initial = JSON.parse(initialJson.current) as EntityDraft;
+        const same = (k: 'isPublic' | 'allowedPlayers' | 'fieldPermissions') => JSON.stringify(initial[k]) === JSON.stringify(draft[k]);
+        const live = draftFromEntity(existing, players, isDM);
+        if (same('isPublic') && same('allowedPlayers')) toSave = { ...toSave, isPublic: live.isPublic, allowedPlayers: live.allowedPlayers };
+        if (same('fieldPermissions')) toSave = { ...toSave, fieldPermissions: live.fieldPermissions };
       }
-
-      setActiveMapUrl(imageUrl);
-      setFormData(prev => ({
-        ...prev,
-        mapConfig: newMapConfig
-      }));
-    } catch (error) {
-      console.error("Error setting map:", error);
-      setSaveError("Failed to set image as map.");
+      const saved = await saveEntity(toSave, {
+        campaign: currentCampaign,
+        user,
+        isDM,
+        players,
+        previous: existing ?? null,
+        pendingRelationships: pendingRels,
+      });
+      initialJson.current = JSON.stringify(draft);
+      setPendingRels([]);
+      toast.success(isNew ? `Created “${saved.name}”` : 'Saved');
+      if (isNew) navigate(`/entity/${saved.id}`, { replace: true });
+      else leave(true);
+    } catch (err) {
+      setError((err as Error)?.message ?? 'Save failed');
+      toast.error(err, 'Save entity');
     } finally {
       setSaving(false);
     }
   };
 
-  const removeImage = (urlToRemove: string) => {
-    setFormData(prev => ({
-      ...prev,
-      imageUrls: prev.imageUrls?.filter(url => url !== urlToRemove) || []
-    }));
-  };
-
-  const handleAddImageUrl = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!imageUrlInput.trim()) return;
-    
-    setFormData(prev => ({
-      ...prev,
-      imageUrls: [...(prev.imageUrls || []), imageUrlInput.trim()]
-    }));
-    setImageUrlInput('');
-  };
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const base64Data = event.target?.result as string;
-      if (!base64Data) return;
-
-      try {
-        // Compress the image to avoid Firestore 1MB limit
-        const compressedBase64 = await new Promise<string>((resolve, reject) => {
-          const img = new Image();
-          img.onload = () => {
-            const canvas = document.createElement('canvas');
-            const maxWidth = 800;
-            let width = img.width;
-            let height = img.height;
-
-            if (width > maxWidth) {
-              height = Math.round((height * maxWidth) / width);
-              width = maxWidth;
-            }
-
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            if (!ctx) {
-              resolve(base64Data);
-              return;
-            }
-            ctx.drawImage(img, 0, 0, width, height);
-            resolve(canvas.toDataURL('image/jpeg', 0.8));
-          };
-          img.onerror = reject;
-          img.src = base64Data;
-        });
-
-        setFormData(prev => ({
-          ...prev,
-          imageUrls: [...(prev.imageUrls || []), compressedBase64]
-        }));
-      } catch (err) {
-        console.error("Error processing image:", err);
-        setImageError("Failed to process the uploaded image.");
+  // Ctrl/Cmd + S
+  const saveRef = useRef(save);
+  saveRef.current = save;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        saveRef.current();
       }
     };
-    reader.readAsDataURL(file);
-    
-    // Reset the input so the same file can be uploaded again if needed
-    e.target.value = '';
-  };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
-  const handleFieldPermissionChange = (field: string, permission: FieldPermission) => {
-    setFormData(prev => {
-      // If a field is shared with specific players, ensure they can also see the entity itself
-      const newAllowedPlayers = new Set(prev.allowedPlayers || []);
-      permission.allowedPlayers.forEach(p => newAllowedPlayers.add(p));
-      
-      return {
-        ...prev,
-        allowedPlayers: Array.from(newAllowedPlayers),
-        fieldPermissions: {
-          ...(prev.fieldPermissions || {}),
-          [field]: permission
-        }
-      };
-    });
-  };
+  // --- guards --------------------------------------------------------------
+  if (!isNew && loading) return <Spinner className="py-24" />;
+  if (!isNew && !existing) {
+    return (
+      <Page>
+        <EmptyState title="Entry not found" action={<button className="btn btn-secondary" onClick={() => navigate('/search')}>Go home</button>}>
+          It may have been deleted.
+        </EmptyState>
+      </Page>
+    );
+  }
+  if (existing && !canEdit(existing)) {
+    return (
+      <Page>
+        <EmptyState icon={Lock} title="You can’t edit this" action={<button className="btn btn-secondary" onClick={() => navigate(-1)}>Go back</button>}>
+          {existing.type === 'note' ? 'Only the author of a note can edit it.' : 'Only the DM can edit this entry.'}
+        </EmptyState>
+      </Page>
+    );
+  }
+  if (!draft) return <Spinner className="py-24" />;
 
-  const handleInsertLink = (text: string, entityId: string) => {
-    const markdownLink = `[${text}](/entity/${entityId})`;
-    setFormData(prev => ({ ...prev, content: (prev.content || '') + markdownLink }));
-  };
+  const meta = typeMeta(draft.type);
+  const schema = fieldsFor(draft.type);
+  const showFieldPerms = isDM && draft.type !== 'note';
+  // Fields without their own setting follow the entry: visible to whoever can see it.
+  const inheritsPublic = !!draft.isPublic || (draft.type !== 'note' && (draft.allowedPlayers?.length ?? 0) > 0);
 
-  const setAllPermissions = (isPublic: boolean) => {
-    const newPerms: Record<string, FieldPermission> = {};
-    const perm = { isPublic, allowedPlayers: [] };
-    
-    newPerms['content'] = perm;
-    newPerms['tags'] = perm;
-    newPerms['locationId'] = perm;
-    newPerms['gender'] = perm;
-    newPerms['imageUrls'] = perm;
-    
-    if (formData.type && ENTITY_SCHEMAS[formData.type]) {
-      ENTITY_SCHEMAS[formData.type].forEach(field => {
-        newPerms[field.key] = perm;
-      });
-    }
-    
-    setFormData(prev => ({
-      ...prev,
-      isPublic, // Also set the entity's global isPublic
-      fieldPermissions: newPerms
-    }));
-  };
-
-  const renderLabel = (field: string, label: string, description?: string) => (
-    <div className="flex flex-col mb-2">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <label className="block text-sm font-medium text-stone-400">{label}</label>
-          {description && (
-            <div className="group relative">
-              <div className="cursor-help text-stone-500 hover:text-stone-300">
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-              </div>
-              <div className="absolute bottom-full left-0 mb-2 w-64 p-2 bg-stone-800 text-stone-200 text-xs rounded-lg shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 border border-stone-700">
-                {description}
-              </div>
-            </div>
-          )}
-        </div>
-        {isDM && (
-          <FieldPermissionToggle
-            permission={formData.fieldPermissions?.[field]}
-            onChange={(perm) => handleFieldPermissionChange(field, perm)}
-            players={players}
-          />
-        )}
-      </div>
+  // Plain function (not a component) so popovers inside keep their state across renders.
+  const fieldLabel = ({ field, label, htmlFor, help }: { field: string; label: string; htmlFor?: string; help?: string }) => (
+    <div className="mb-1.5 flex items-center gap-1.5">
+      <label className="label mb-0" htmlFor={htmlFor}>
+        {label}
+      </label>
+      {help && <Help text={help} />}
+      {showFieldPerms && (
+        <span className="ml-auto">
+          <FieldPermissionToggle permission={draft.fieldPermissions?.[field]} onChange={(p) => setFieldPerm(field, p)} players={players} inheritsPublic={inheritsPublic} fieldLabel={label} />
+        </span>
+      )}
     </div>
   );
 
-  const getSuggestions = (fieldKey: string) => {
-    const values = new Set<string>();
-    availableLocations.forEach(loc => {
-      if (loc.attributes?.[fieldKey]) {
-        values.add(loc.attributes[fieldKey]);
-      }
-    });
-    return Array.from(values);
+  const renderField = (f: FieldSchema) => {
+    const id = `f-attr-${f.key}`;
+    const value = draft.attributes?.[f.key];
+    let control: ReactNode;
+    if (f.type === 'boolean') {
+      return (
+        <div key={f.key} className="surface flex items-center justify-between gap-3 px-3 py-2.5">
+          <span className="text-sm text-stone-200">{f.label}</span>
+          <div className="flex items-center gap-2">
+            {showFieldPerms && (
+              <FieldPermissionToggle permission={draft.fieldPermissions?.[f.key]} onChange={(p) => setFieldPerm(f.key, p)} players={players} inheritsPublic={inheritsPublic} fieldLabel={f.label} />
+            )}
+            <Toggle checked={Boolean(value ?? f.defaultValue)} onChange={(v) => setAttr(f.key, v)} label={f.label} />
+          </div>
+        </div>
+      );
+    }
+    if (f.type === 'textarea') {
+      control = <textarea id={id} className="input" rows={3} value={String(value ?? '')} onChange={(e) => setAttr(f.key, e.target.value)} placeholder={f.description} />;
+    } else if (f.type === 'select') {
+      const custom = customSelect.has(f.key);
+      control = (
+        <div className="space-y-2">
+          <select
+            id={id}
+            className="input"
+            value={custom ? '__other' : String(value ?? '')}
+            onChange={(e) => {
+              if (e.target.value === '__other') {
+                setCustomSelect((s) => new Set(s).add(f.key));
+                setAttr(f.key, '');
+              } else {
+                setCustomSelect((s) => {
+                  const n = new Set(s);
+                  n.delete(f.key);
+                  return n;
+                });
+                setAttr(f.key, e.target.value);
+              }
+            }}
+          >
+            <option value="">—</option>
+            {f.options?.map((o) => (
+              <option key={o} value={o}>
+                {o}
+              </option>
+            ))}
+            <option value="__other">Other…</option>
+          </select>
+          {custom && <input autoFocus className="input" placeholder="Custom value" value={String(value ?? '')} onChange={(e) => setAttr(f.key, e.target.value)} />}
+        </div>
+      );
+    } else if (f.type === 'entity-select') {
+      control = (
+        <EntityPicker
+          id={id}
+          options={visible.filter((e) => !f.targetType || e.type === f.targetType)}
+          value={String(value ?? '')}
+          onChange={(v) => setAttr(f.key, v)}
+          placeholder={`Choose ${f.targetType ? typeMeta(f.targetType).label.toLowerCase() : 'entry'}…`}
+        />
+      );
+    } else if (f.rating) {
+      const n = Number(value);
+      const numeric = value === undefined || value === '' || Number.isFinite(n);
+      control = numeric ? (
+        <div className="flex items-center gap-3">
+          <input
+            type="range"
+            min={0}
+            max={20}
+            value={Number.isFinite(n) && value !== '' && value !== undefined ? n : 0}
+            onChange={(e) => setAttr(f.key, e.target.value === '0' ? '' : e.target.value)}
+            className="h-2 flex-1 cursor-pointer accent-amber-500"
+            aria-label={f.label}
+          />
+          <input id={id} inputMode="numeric" className="input w-16 text-center" value={String(value ?? '')} placeholder="–" onChange={(e) => setAttr(f.key, e.target.value.replace(/[^0-9]/g, '').slice(0, 2))} />
+        </div>
+      ) : (
+        <input id={id} className="input" value={String(value ?? '')} onChange={(e) => setAttr(f.key, e.target.value)} />
+      );
+    } else {
+      const listId = `dl-${f.key}`;
+      const opts = [...(suggestions.byKey.get(f.key) ?? [])].slice(0, 40);
+      control = (
+        <>
+          <input id={id} list={opts.length ? listId : undefined} className="input" value={String(value ?? '')} onChange={(e) => setAttr(f.key, e.target.value)} placeholder={f.description?.startsWith('e.g.') ? f.description : undefined} />
+          {opts.length > 0 && (
+            <datalist id={listId}>
+              {opts.map((o) => (
+                <option key={o} value={o} />
+              ))}
+            </datalist>
+          )}
+        </>
+      );
+    }
+    return (
+      <div key={f.key} className={f.type === 'textarea' ? 'sm:col-span-2' : undefined}>
+        {fieldLabel({ field: f.key, label: f.label, htmlFor: id, help: f.description && !f.description.startsWith('e.g.') ? f.description : undefined })}
+        {control}
+      </div>
+    );
   };
 
-  if (loading) return <div className="text-center py-12 text-stone-500">Loading...</div>;
+  // Player note sharing presets
+  const dmId = currentCampaign!.dmId;
+  const playerIds = players.map((p) => p.uid);
+  const shareMode = (() => {
+    if (draft.isPublic) return 'all';
+    const a = draft.allowedPlayers ?? [];
+    const hasDM = a.includes(dmId);
+    const hasPlayers = playerIds.some((p) => p !== user?.uid && a.includes(p));
+    if (hasPlayers && hasDM) return 'party_dm';
+    if (hasPlayers) return 'party';
+    if (hasDM) return 'dm';
+    return 'private';
+  })();
+  const setShare = (mode: string) => {
+    const others = playerIds.filter((p) => p !== user?.uid);
+    const map: Record<string, { isPublic: boolean; allowedPlayers: string[] }> = {
+      private: { isPublic: false, allowedPlayers: [] },
+      dm: { isPublic: false, allowedPlayers: [dmId] },
+      party: { isPublic: false, allowedPlayers: others },
+      party_dm: { isPublic: false, allowedPlayers: [...others, dmId] },
+      all: { isPublic: true, allowedPlayers: [] },
+    };
+    setDraft((d) => (d ? { ...d, ...map[mode] } : d));
+  };
+
+  const dmVisibility = draft.isPublic ? 'public' : (draft.allowedPlayers?.length ?? 0) > 0 ? 'shared' : 'secret';
+  const hiddenCount = permissionKeys(draft.type).filter((k) => {
+    const p = draft.fieldPermissions?.[k];
+    return p && !p.isPublic && !p.allowedPlayers?.length;
+  }).length;
+  const setAllFields = (show: boolean) => {
+    const perms: Record<string, FieldPermission> = {};
+    // "Show" clears the per-field settings so every field follows the entry's visibility.
+    if (!show) permissionKeys(draft.type).forEach((k) => (perms[k] = { isPublic: false, allowedPlayers: [] }));
+    setDraft((d) => (d ? { ...d, fieldPermissions: perms } : d));
+    toast.show(show ? 'Every field follows the entry’s visibility' : 'All fields hidden — only the name is shown');
+  };
 
   return (
-    <div className="p-6 md:p-10 pb-12">
-      {/* Sticky Header - Full Width */}
-      <div className="sticky -top-6 md:-top-10 z-40 -mx-6 px-6 md:-mx-10 md:px-10 -mt-6 md:-mt-10 py-3 bg-stone-900/95 backdrop-blur-md border-b border-stone-800 flex items-center justify-between mb-8 shadow-sm">
-        <div className="max-w-4xl mx-auto w-full flex items-center justify-between">
-          <button 
-            onClick={() => {
-              if (window.history.state && window.history.state.idx > 0) {
-                navigate(-1);
-              } else if (id && id !== 'new') {
-                navigate(`/entity/${id}`, { replace: true });
-              } else {
-                navigate(`/entities/${formData.type}`, { replace: true });
-              }
-            }} 
-            className="flex items-center justify-center gap-2 px-3 py-1.5 text-stone-400 hover:text-stone-100 transition-colors text-sm font-medium rounded-lg hover:bg-stone-800"
-          >
-            <ArrowLeft size={16} />
-            Cancel
+    <div className="pb-24 md:pb-10">
+      {/* Sticky action bar */}
+      <div className="sticky top-0 z-20 border-b border-stone-800/70 bg-stone-950/85 backdrop-blur-md">
+        <div className="mx-auto flex h-14 max-w-6xl items-center gap-2 px-3 sm:px-6">
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => leave()}>
+            <ArrowLeft size={16} /> <span className="hidden sm:inline">Cancel</span>
           </button>
-          <button
-            onClick={handleSave}
-            disabled={saving || (!isDM && formData.type !== 'note')}
-            className="flex items-center justify-center gap-2 px-4 py-1.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-all shadow-md shadow-amber-900/20 active:scale-95"
-          >
-            <Save size={16} />
-            {saving ? 'Saving...' : 'Save'}
+          <div className="min-w-0 flex-1 truncate text-center text-sm text-stone-400 sm:text-left">
+            {isNew ? `New ${meta.label.toLowerCase()}` : `Editing ${existing?.name}`}
+            {dirty && <span className="ml-2 text-xs text-amber-400">• unsaved</span>}
+          </div>
+          <button type="button" className="btn btn-primary" onClick={save} disabled={saving}>
+            {saving ? <div className="size-4 animate-spin rounded-full border-2 border-stone-900/30 border-t-stone-900" /> : <Save size={16} />}
+            {saving ? 'Saving…' : 'Save'}
           </button>
         </div>
       </div>
 
-      <div className="max-w-4xl mx-auto">
-        {saveError && (
-        <div className="mb-8 p-4 bg-red-950/50 border border-red-900/50 rounded-xl text-red-400 text-sm">
-          <strong className="font-bold block mb-1">Error saving entity:</strong>
-          {saveError}
-        </div>
-      )}
+      <form
+        className="mx-auto grid max-w-6xl gap-4 px-3 py-4 sm:px-6 sm:py-6 lg:grid-cols-[minmax(0,1fr)_340px]"
+        onSubmit={(e) => {
+          e.preventDefault();
+          save();
+        }}
+      >
+        {error && <div className="rounded-lg border border-rose-900/60 bg-rose-950/40 px-4 py-3 text-sm text-rose-300 lg:col-span-2">{error}</div>}
 
-      <form onSubmit={handleSave} className="space-y-8">
-        <div className="bg-stone-900/80 backdrop-blur-md border border-stone-800 rounded-2xl p-8 shadow-xl">
-          {isDM && (
-            <div className="flex flex-col md:flex-row md:items-start justify-between mb-8 pb-6 border-b border-stone-800 gap-4">
-              <div className="flex-1">
-                <h2 className="text-xl font-cinzel font-bold text-amber-500">Entity Visibility</h2>
-                <p className="text-sm text-stone-400 mt-1 mb-4">Control who can see this entity and its basic information.</p>
-                <div className="flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setFormData(prev => ({ ...prev, isPublic: true, allowedPlayers: [] }))}
-                    className={clsx(
-                      "flex items-center gap-2 px-4 py-2 rounded-lg transition-colors text-sm font-medium border",
-                      formData.isPublic 
-                        ? "bg-emerald-900/50 text-emerald-300 border-emerald-500/50" 
-                        : "bg-stone-950/50 text-stone-400 border-stone-800 hover:bg-stone-800"
-                    )}
-                  >
-                    <Globe size={16} />
-                    Public (All Players)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFormData(prev => ({ ...prev, isPublic: false, allowedPlayers: [] }))}
-                    className={clsx(
-                      "flex items-center gap-2 px-4 py-2 rounded-lg transition-colors text-sm font-medium border",
-                      !formData.isPublic && (!formData.allowedPlayers || formData.allowedPlayers.length === 0)
-                        ? "bg-red-900/50 text-red-300 border-red-500/50" 
-                        : "bg-stone-950/50 text-stone-400 border-stone-800 hover:bg-stone-800"
-                    )}
-                  >
-                    <Lock size={16} />
-                    Secret (DM Only)
-                  </button>
-                </div>
-                
-                {players.length > 0 && !formData.isPublic && (
-                  <div className="mt-4 p-4 bg-stone-950/50 border border-stone-800 rounded-xl">
-                    <label className="block text-xs font-bold text-stone-500 uppercase tracking-wider mb-3">Specific Players</label>
-                    <div className="flex flex-wrap gap-2">
-                      {players.map(player => {
-                        const isAllowed = formData.allowedPlayers?.includes(player.uid);
-                        return (
-                          <button
-                            key={player.uid}
-                            type="button"
-                            onClick={() => {
-                              const newAllowed = isAllowed 
-                                ? (formData.allowedPlayers || []).filter(id => id !== player.uid)
-                                : [...(formData.allowedPlayers || []), player.uid];
-                              setFormData(prev => ({ ...prev, allowedPlayers: newAllowed }));
-                            }}
-                            className={clsx(
-                              "flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border",
-                              isAllowed
-                                ? "bg-amber-900/30 text-amber-400 border-amber-700/50"
-                                : "bg-stone-900 text-stone-400 border-stone-800 hover:bg-stone-800"
-                            )}
-                          >
-                            <Users size={14} />
-                            {player.displayName}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-              
-              <div className="flex-1 md:pl-8 md:border-l border-stone-800">
-                <h2 className="text-xl font-cinzel font-bold text-amber-500">Bulk Permissions</h2>
-                <p className="text-sm text-stone-400 mt-1 mb-4">Set visibility for all individual fields at once.</p>
-                <div className="flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setAllPermissions(true)}
-                    className="flex items-center gap-2 px-4 py-2 bg-emerald-950/30 text-emerald-400 border border-emerald-900/50 rounded-lg hover:bg-emerald-900/50 transition-colors text-sm font-medium"
-                  >
-                    <Globe size={16} />
-                    Make All Fields Public
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAllPermissions(false)}
-                    className="flex items-center gap-2 px-4 py-2 bg-red-950/30 text-red-400 border border-red-900/50 rounded-lg hover:bg-red-900/50 transition-colors text-sm font-medium"
-                  >
-                    <Lock size={16} />
-                    Make All Fields Secret
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {!isDM && (
-            <div className="mb-8 pb-6 border-b border-stone-800">
-              <label className="block text-sm font-medium text-stone-400 mb-2">Share Entity With</label>
-              <select
-                value={(() => {
-                  if (formData.isPublic) return 'all';
-                  if (!formData.allowedPlayers || formData.allowedPlayers.length === 0) return 'private';
-                  
-                  const hasDM = formData.allowedPlayers.includes(currentCampaign?.dmId || '');
-                  const hasPlayers = formData.allowedPlayers.some(id => id !== currentCampaign?.dmId);
-                  
-                  if (formData.type === 'note') {
-                    if (hasPlayers && !hasDM) return 'party';
-                    if (hasPlayers && hasDM) return 'party_dm';
-                    if (hasDM) return 'dm';
-                  } else {
-                    if (hasDM && hasPlayers) return 'party';
-                    if (hasDM) return 'dm';
-                  }
-                  return 'private';
-                })()}
-                onChange={e => {
-                  const val = e.target.value;
-                  if (val === 'all') {
-                    setFormData({ ...formData, isPublic: true, allowedPlayers: [] });
-                  } else if (val === 'party') {
-                    // For notes, party means players ONLY. For others, it means players + DM.
-                    const targetPlayers = formData.type === 'note' 
-                      ? players.map(p => p.uid)
-                      : [...players.map(p => p.uid), currentCampaign?.dmId || ''];
-                    setFormData({ ...formData, isPublic: false, allowedPlayers: targetPlayers });
-                  } else if (val === 'party_dm') {
-                    setFormData({ ...formData, isPublic: false, allowedPlayers: [...players.map(p => p.uid), currentCampaign?.dmId || ''] });
-                  } else if (val === 'dm') {
-                    setFormData({ ...formData, isPublic: false, allowedPlayers: [currentCampaign?.dmId || ''] });
-                  } else {
-                    setFormData({ ...formData, isPublic: false, allowedPlayers: [] });
-                  }
-                }}
-                className="w-full px-4 py-3 bg-stone-950/50 border border-stone-800 rounded-xl text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50 transition-all font-medium appearance-none"
-              >
-                <option value="private">Private (Only Me)</option>
-                <option value="dm">DM Only</option>
-                {formData.type === 'note' ? (
-                  <>
-                    <option value="party">Party (Players Only)</option>
-                    <option value="party_dm">Party & DM</option>
-                  </>
-                ) : (
-                  <option value="party">Party (All Players + DM)</option>
-                )}
-                <option value="all">Public (Everyone)</option>
-              </select>
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-            <div>
-              <label className="block text-sm font-medium text-stone-400 mb-2">Name</label>
-              <AutoExpandingTextarea
-                required
-                value={formData.name}
-                onChange={e => setFormData({ ...formData, name: e.target.value })}
-                className="font-semibold text-lg min-h-[52px]"
-                placeholder="e.g. Neverwinter"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-stone-400 mb-2">Type</label>
-              <select
-                value={formData.type}
-                onChange={e => setFormData({ ...formData, type: e.target.value as EntityType })}
-                disabled={!isDM}
-                className="w-full px-4 py-3 bg-stone-950/50 border border-stone-800 rounded-xl text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50 transition-all font-medium appearance-none disabled:opacity-50"
-              >
-                {ENTITY_TYPES_ORDERED.map(type => (
-                  <option key={type.value} value={type.value}>{type.label}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {formData.type === 'npc' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-              <div>
-                {renderLabel('gender', 'Gender')}
-                <select
-                  value={formData.gender || ''}
-                  onChange={e => setFormData({ ...formData, gender: e.target.value })}
-                  className="w-full px-4 py-3 bg-stone-950/50 border border-stone-800 rounded-xl text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50 transition-all font-medium appearance-none"
-                >
-                  <option value="">Not specified</option>
-                  <option value="Male">Male</option>
-                  <option value="Female">Female</option>
-                  <option value="Other">Other</option>
-                </select>
-              </div>
-              <div>
-                {renderLabel('statBlock', 'Stat Block')}
-                <button
-                  type="button"
-                  onClick={() => setIsStatBlockModalOpen(true)}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-stone-950/50 border border-stone-800 rounded-xl text-stone-300 hover:text-amber-400 hover:border-amber-900/50 transition-all font-medium"
-                >
-                  <BookOpen size={18} />
-                  {formData.statBlock ? 'Edit Stat Block' : 'Add Stat Block'}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {formData.type === 'monster' && (
-            <div className="mb-6">
-              {renderLabel('statBlock', 'Stat Block')}
-              <button
-                type="button"
-                onClick={() => setIsStatBlockModalOpen(true)}
-                className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-stone-950/50 border border-stone-800 rounded-xl text-stone-300 hover:text-amber-400 hover:border-amber-900/50 transition-all font-medium"
-              >
-                <BookOpen size={18} />
-                {formData.statBlock ? 'Edit Stat Block' : 'Add Stat Block'}
-              </button>
-            </div>
-          )}
-
-          {formData.type && ENTITY_SCHEMAS[formData.type] && ENTITY_SCHEMAS[formData.type].length > 0 && (
-            <div className="mb-6 grid grid-cols-1 md:grid-cols-2 gap-6 p-6 bg-stone-950/30 border border-stone-800/50 rounded-xl">
-              <div className="col-span-full mb-2">
-                <h3 className="text-lg font-semibold text-stone-100 font-cinzel tracking-wider">Specific Attributes</h3>
-                <p className="text-sm text-stone-500">Fill out specific details for this {formData.type}.</p>
-              </div>
-              {ENTITY_SCHEMAS[formData.type].map(field => (
-                <div key={field.key} className={field.type === 'textarea' ? 'col-span-full' : ''}>
-                  {renderLabel(field.key, field.label, field.description)}
-                  {field.type === 'text' && (
-                    <>
-                      <AutoExpandingTextarea
-                        value={formData.attributes?.[field.key] || ''}
-                        onChange={e => setFormData({ ...formData, attributes: { ...formData.attributes, [field.key]: e.target.value } })}
-                        className="min-h-[52px]"
-                        list={`suggestions-${field.key}`}
-                      />
-                      <datalist id={`suggestions-${field.key}`}>
-                        {getSuggestions(field.key).map(val => (
-                          <option key={val} value={val} />
-                        ))}
-                      </datalist>
-                    </>
-                  )}
-                  {field.type === 'textarea' && (
-                    <AutoExpandingTextarea
-                      value={formData.attributes?.[field.key] || ''}
-                      onChange={e => setFormData({ ...formData, attributes: { ...formData.attributes, [field.key]: e.target.value } })}
-                      className="min-h-[100px]"
-                    />
-                  )}
-                  {field.type === 'select' && field.options && (
-                    <div className="relative">
-                      <select
-                        value={otherFields.has(field.key) ? 'CUSTOM_OTHER' : (formData.attributes?.[field.key] || '')}
-                        onChange={e => {
-                          if (e.target.value === 'CUSTOM_OTHER') {
-                            setOtherFields(prev => new Set(prev).add(field.key));
-                          } else {
-                            setOtherFields(prev => {
-                              const next = new Set(prev);
-                              next.delete(field.key);
-                              return next;
-                            });
-                            setFormData({ ...formData, attributes: { ...formData.attributes, [field.key]: e.target.value } });
-                          }
-                        }}
-                        className="w-full px-4 py-3 bg-stone-950/50 border border-stone-800 rounded-xl text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50 transition-all appearance-none"
-                      >
-                        <option value="">Select...</option>
-                        {field.options.map(opt => (
-                          <option key={opt} value={opt}>{opt}</option>
-                        ))}
-                        <option value="CUSTOM_OTHER">Other...</option>
-                      </select>
-                      {otherFields.has(field.key) && (
-                        <div className="mt-2">
-                          <AutoExpandingTextarea
-                            placeholder="Enter custom value..."
-                            autoFocus
-                            onChange={e => setFormData({ ...formData, attributes: { ...formData.attributes, [field.key]: e.target.value } })}
-                            className="min-h-[52px]"
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {field.type === 'entity-select' && (
-                    <SearchableDropdown
-                      options={availableLocations.filter(e => !field.targetType || e.type === field.targetType).map(e => ({ id: e.id, label: e.name, type: e.type }))}
-                      value={formData.attributes?.[field.key] || ''}
-                      onChange={val => setFormData({ ...formData, attributes: { ...formData.attributes, [field.key]: val } })}
-                      placeholder={`Select ${field.targetType || 'entity'}...`}
-                    />
-                  )}
-                  {field.type === 'boolean' && (
-                    <div className="flex items-center justify-between p-4 bg-stone-950/50 border border-stone-800 rounded-xl hover:border-amber-500/50 transition-colors">
-                      <span className="text-stone-100 font-medium">{field.label}</span>
+        {/* Main column */}
+        <div className="min-w-0 space-y-4">
+          <section className="card p-4 sm:p-5">
+            <label className="label" htmlFor="f-name">
+              Name
+            </label>
+            <input
+              id="f-name"
+              autoFocus={isNew}
+              className="input h-12 font-display text-xl font-semibold"
+              value={draft.name}
+              onChange={(e) => set('name', e.target.value)}
+              placeholder={`Name this ${meta.label.toLowerCase()}`}
+              maxLength={190}
+            />
+            {isDM && (
+              <div className="mt-4">
+                <span className="label">Type</span>
+                <div className="scrollbar-none -mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1 sm:flex-wrap">
+                  {ENTITY_TYPES.filter((t) => !t.hidden || t.value === draft.type).map((t) => {
+                    const Icon = t.icon;
+                    const active = t.value === draft.type;
+                    return (
                       <button
+                        key={t.value}
                         type="button"
-                        role="switch"
-                        aria-checked={formData.attributes?.[field.key] ?? field.defaultValue ?? false}
-                        onClick={() => setFormData({ ...formData, attributes: { ...formData.attributes, [field.key]: !(formData.attributes?.[field.key] ?? field.defaultValue ?? false) } })}
+                        aria-pressed={active}
+                        onClick={() => set('type', t.value)}
                         className={clsx(
-                          "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-stone-900",
-                          (formData.attributes?.[field.key] ?? field.defaultValue ?? false) ? "bg-amber-500" : "bg-stone-700"
+                          'flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
+                          active ? 'border-amber-500/70 bg-amber-500/15 text-amber-200' : 'border-stone-800 text-stone-400 hover:border-stone-700 hover:text-stone-200',
                         )}
                       >
-                        <span
-                          className={clsx(
-                            "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
-                            (formData.attributes?.[field.key] ?? field.defaultValue ?? false) ? "translate-x-6" : "translate-x-1"
-                          )}
-                        />
+                        <Icon size={13} /> {t.label}
                       </button>
-                    </div>
-                  )}
+                    );
+                  })}
                 </div>
-              ))}
-            </div>
+              </div>
+            )}
+          </section>
+
+          <Card title="Description">
+            {fieldLabel({ field: "content", label: "Main text" })}
+            <MarkdownField value={draft.content} onChange={(v) => set('content', v)} height={360} source={draft.id ? { id: draft.id, name: draft.name } : undefined} placeholder="Write freely. Type @ to link another entry." />
+          </Card>
+
+          {(schema.length > 0 || baseType(draft.type) === 'npc') && (
+            <Card title={`${meta.label} details`}>
+              <div className="grid gap-4 sm:grid-cols-2">
+                {baseType(draft.type) === 'npc' && (
+                  <div>
+                    {fieldLabel({ field: "gender", label: "Gender", htmlFor: "f-gender" })}
+                    <select id="f-gender" className="input" value={draft.gender ?? ''} onChange={(e) => set('gender', e.target.value)}>
+                      <option value="">Not specified</option>
+                      <option>Male</option>
+                      <option>Female</option>
+                      <option>Other</option>
+                    </select>
+                  </div>
+                )}
+                {schema.map(renderField)}
+              </div>
+            </Card>
           )}
 
-          <div className="mb-6">
-            {renderLabel('locationId', 'Located In (Optional)')}
-            <SearchableDropdown
-              options={dropdownOptions}
-              value={formData.locationId || ''}
-              onChange={(val) => setFormData({ ...formData, locationId: val })}
-              placeholder="Select location..."
-              onCreateNew={(name) => {
-                setQuickCreateName(name);
-                setIsQuickCreateOpen(true);
-              }}
-            />
-          </div>
+          {(baseType(draft.type) === 'npc' || baseType(draft.type) === 'monster') && (
+            <Card title="Stat block" description="Optional combat stats, shown as a D&D-style block.">
+              {showFieldPerms && (
+                <div className="-mt-2 mb-3 flex justify-end">
+                  <FieldPermissionToggle permission={draft.fieldPermissions?.statBlock} onChange={(p) => setFieldPerm('statBlock', p)} players={players} inheritsPublic={inheritsPublic} fieldLabel="Stat block" />
+                </div>
+              )}
+              <StatBlockEditor stats={draft.dndStats} text={draft.statBlock ?? ''} onStats={(s) => set('dndStats', s)} onText={(t) => set('statBlock', t)} />
+            </Card>
+          )}
 
-          <div className="mb-6">
-            {renderLabel('imageUrls', 'Images & Maps')}
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 mb-4">
-              {formData.imageUrls?.map((url, index) => (
-                <div 
-                  key={index} 
-                  className="relative aspect-square rounded-xl overflow-hidden bg-stone-950/50 border border-stone-800 group cursor-pointer"
-                  onClick={() => {
-                    if (activeImageIndex === index) {
-                      setActiveImageIndex(null);
-                    } else {
-                      setActiveImageIndex(index);
-                    }
-                  }}
-                >
-                  <img src={url} alt={`Image ${index + 1}`} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                  <div className={clsx(
-                    "absolute inset-0 bg-black/40 transition-opacity flex items-center justify-center gap-2",
-                    activeImageIndex === index ? "opacity-100" : "opacity-0 group-hover:opacity-100"
-                  )}>
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); setAsMap(url); }}
-                      disabled={saving}
-                      className={clsx(
-                        "p-2 rounded-lg transition-all",
-                        activeMapUrl === url ? "bg-amber-500 text-stone-950" : "bg-stone-800 text-stone-100 hover:bg-stone-700",
-                        saving && "opacity-50 cursor-not-allowed"
-                      )}
-                      title="Set as Map"
-                    >
-                      {saving && activeMapUrl !== url ? <RefreshCw size={16} className="animate-spin" /> : <MapIcon size={16} />}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); removeImage(url); }}
-                      className="p-2 bg-red-500/80 hover:bg-red-500 text-white rounded-lg transition-all"
-                      title="Remove Image"
-                    >
-                      <X size={16} />
-                    </button>
-                  </div>
-                  {activeMapUrl === url && (
-                    <div className="absolute top-2 left-2 px-2 py-0.5 bg-amber-500 text-stone-950 text-[10px] font-bold rounded uppercase tracking-wider">
-                      Active Map
+          {isDM && (
+            <Card title="DM secrets" description="Only DMs ever see this — even when the entry is public." className="border-rose-900/40">
+              <MarkdownField value={draft.dmNotes ?? ''} onChange={(v) => set('dmNotes', v)} height={220} source={draft.id ? { id: draft.id, name: draft.name } : undefined} placeholder="Hidden motives, twists, what they really know…" />
+            </Card>
+          )}
+
+          {isDM && draft.type !== 'note' && (
+            <Card title="Player knowledge" description="Private notes per player. A player who has knowledge can see this entry.">
+              {players.length === 0 ? (
+                <p className="text-sm text-stone-500">No players have joined yet.</p>
+              ) : (
+                <div className="space-y-3">
+                  {players.map((p) => (
+                    <div key={p.uid} className="flex gap-3">
+                      <Avatar user={p} size={32} className="mt-1" />
+                      <div className="min-w-0 flex-1">
+                        <label className="mb-1 block text-sm font-medium text-stone-200" htmlFor={`pk-${p.uid}`}>
+                          {p.displayName}
+                        </label>
+                        <textarea
+                          id={`pk-${p.uid}`}
+                          rows={2}
+                          className="input min-h-16"
+                          placeholder={`What does ${p.displayName} know?`}
+                          value={draft.playerKnowledge?.[p.uid] ?? ''}
+                          onChange={(e) => set('playerKnowledge', { ...draft.playerKnowledge, [p.uid]: e.target.value })}
+                        />
+                      </div>
                     </div>
-                  )}
+                  ))}
                 </div>
-              ))}
-            </div>
-            
-            <div className="flex flex-col sm:flex-row gap-2 mt-2">
-              <div className="flex-1 flex gap-2">
-                <AutoExpandingTextarea
-                  value={imageUrlInput}
-                  onChange={(e) => setImageUrlInput(e.target.value)}
-                  placeholder="Paste a direct image URL..."
-                  className="flex-1 text-sm min-h-[42px]"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      handleAddImageUrl(e as any);
-                    }
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={handleAddImageUrl}
-                  disabled={!imageUrlInput.trim()}
-                  className="px-4 py-2 bg-stone-800 hover:bg-stone-700 disabled:opacity-50 text-stone-100 rounded-xl text-sm font-medium transition-colors whitespace-nowrap"
-                >
-                  Add URL
-                </button>
-              </div>
-              <label className="flex items-center justify-center px-4 py-2 bg-stone-800 hover:bg-stone-700 text-stone-100 rounded-xl text-sm font-medium transition-colors cursor-pointer whitespace-nowrap">
-                <Upload size={16} className="mr-2" />
-                Upload
-                <input 
-                  type="file" 
-                  accept="image/*" 
-                  className="hidden" 
-                  onChange={handleFileUpload} 
-                />
-              </label>
-            </div>
+              )}
+            </Card>
+          )}
 
-            {/* AI Image Generation - DEV ONLY */}
-            {import.meta.env.DEV && (
-              <div className="mt-4 flex flex-col items-start gap-4 p-4 bg-stone-900/50 border border-stone-800 rounded-xl">
-                <div className="w-full flex items-center justify-between">
-                  <div>
-                    <h4 className="text-sm font-medium text-stone-200 flex items-center gap-2">
-                      <ImageIcon size={16} className="text-amber-500" />
-                      AI Image Generation (DEV ONLY)
-                    </h4>
-                    <p className="text-xs text-stone-400 mt-1">
-                      Generates an image based on the entity's Name, Type, and Content description.
-                    </p>
-                  </div>
-                </div>
-                
-                <div className="w-full flex flex-col sm:flex-row gap-2">
-                  <AutoExpandingTextarea
-                    value={customImagePrompt}
-                    onChange={(e) => setCustomImagePrompt(e.target.value)}
-                    placeholder="Optional: Override description (e.g., 'A bustling street at night')"
-                    className="flex-1 text-sm min-h-[42px]"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        generateImage();
-                      }
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={generateImage}
-                    disabled={generatingImage || !formData.name}
-                    className="flex items-center justify-center gap-2 px-4 py-2 bg-amber-600/20 hover:bg-amber-600/30 text-amber-500 border border-amber-500/30 rounded-xl text-sm font-medium transition-colors disabled:opacity-50 whitespace-nowrap"
-                  >
-                    {generatingImage ? (
-                      <><RefreshCw size={16} className="animate-spin" /> Generating...</>
-                    ) : (
-                      <><ImageIcon size={16} /> Generate</>
-                    )}
-                  </button>
-                </div>
-
-                {imageError && (
-                  <p className="text-red-400 text-xs">{imageError}</p>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="mb-6">
-            <div className="flex items-center justify-between mb-2">
-              {renderLabel('content', 'Content')}
-              <button
-                type="button"
-                onClick={() => setIsLinkModalOpen(true)}
-                className="flex items-center gap-1.5 px-3 py-1 bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-amber-400 rounded-lg text-xs font-medium transition-all border border-stone-700"
-              >
-                <LinkIcon size={14} />
-                Add Entity Link
-              </button>
-            </div>
-            <div data-color-mode="dark" className="rounded-xl overflow-hidden border border-stone-800">
-              <MDEditor
-                value={formData.content || ''}
-                onChange={val => setFormData({ ...formData, content: val || '' })}
-                height={400}
-                preview="edit"
-                className="!bg-stone-950/50 !border-none"
-              />
-            </div>
-          </div>
-
-          <div>
-            {renderLabel('tags', 'Tags')}
-            <div className="flex flex-wrap gap-2 mb-3">
-              {formData.tags?.map(tag => (
-                <span key={tag} className="flex items-center gap-1 px-3 py-1 rounded-lg text-sm font-medium bg-amber-950/30 text-amber-300 border border-amber-900/30">
-                  #{tag}
-                  <button type="button" onClick={() => removeTag(tag)} className="ml-1 text-amber-500 hover:text-amber-300">&times;</button>
-                </span>
-              ))}
-            </div>
-            <AutoExpandingTextarea
-              value={tagInput}
-              onChange={e => setTagInput(e.target.value)}
-              onKeyDown={addTag}
-              className="min-h-[52px]"
-              placeholder="Type a tag and press Enter..."
-            />
-          </div>
-
-          <div className="pt-6 border-t border-stone-800">
-            <h3 className="text-lg font-semibold text-stone-100 font-cinzel tracking-wider mb-4">Relationships</h3>
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <SearchableDropdown
-                  options={availableLocations.map(e => ({ id: e.id, label: e.name, type: e.type }))}
-                  value={relSearch}
-                  onChange={(val) => setRelSearch(val)}
-                  placeholder="Link to Faction, NPC, or Country..."
-                />
-                <div className="flex gap-2">
-                  <div className="flex-1 relative flex flex-col gap-2">
-                    <AutoExpandingTextarea
-                      value={relLabel}
-                      onChange={(e) => setRelLabel(e.target.value)}
-                      placeholder="This entity is... (e.g. Member)"
-                      className="min-h-[42px]"
-                      list="rel-labels"
-                    />
-                    <AutoExpandingTextarea
-                      value={relReverseLabel}
-                      onChange={(e) => setRelReverseLabel(e.target.value)}
-                      placeholder="Target entity is... (e.g. Faction)"
-                      className="min-h-[42px]"
-                      list="rel-labels"
-                    />
-                    <datalist id="rel-labels">
-                      {existingLabels.map(l => <option key={l} value={l} />)}
-                    </datalist>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={!relSearch || !relLabel.trim() || !relReverseLabel.trim()}
-                    onClick={() => {
-                      if (relSearch && relLabel && relReverseLabel) {
-                        const target = availableLocations.find(e => e.id === relSearch);
-                        if (target) {
-                          setPendingRelationships([...pendingRelationships, { targetId: relSearch, label: relLabel, reverseLabel: relReverseLabel, targetName: target.name }]);
-                          setRelSearch('');
-                          setRelLabel('');
-                          setRelReverseLabel('');
-                        }
-                      }
-                    }}
-                    className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-sm font-medium transition-colors h-[42px] self-start disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Add
-                  </button>
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {pendingRelationships.map((rel, idx) => (
-                  <div key={idx} className="flex items-center gap-2 px-3 py-1.5 bg-stone-800 border border-stone-700 rounded-lg text-sm">
-                    <span className="text-stone-400">{rel.label}:</span>
-                    <span className="text-amber-400 font-medium">{rel.targetName}</span>
-                    <button
-                      type="button"
-                      onClick={() => setPendingRelationships(pendingRelationships.filter((_, i) => i !== idx))}
-                      className="text-stone-500 hover:text-red-400 transition-colors"
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {isDM && (
-          <div className="bg-stone-900/80 backdrop-blur-md border border-stone-800 rounded-2xl p-8 shadow-xl mb-6">
-            <div className="flex items-center gap-3 mb-6">
-              <Lock className="text-red-400" size={24} />
-              <h2 className="text-xl font-bold text-stone-100 font-cinzel tracking-wider">DM Secret Notes</h2>
-            </div>
-            <p className="text-stone-400 text-sm mb-6">
-              These notes are strictly for you. Players will never see this section, even if the entity is public.
-            </p>
-            <div data-color-mode="dark" className="rounded-xl overflow-hidden border border-red-900/30">
-              <MDEditor
-                value={formData.dmNotes || ''}
-                onChange={val => setFormData({ ...formData, dmNotes: val || '' })}
-                height={300}
-                preview="edit"
-                className="!bg-stone-950/50 !border-none"
-              />
-            </div>
-          </div>
-        )}
-
-        {isDM && (
-          <div className="bg-stone-900/80 backdrop-blur-md border border-stone-800 rounded-2xl p-8 shadow-xl">
-            <div className="flex items-center gap-3 mb-6">
-              <Users className="text-amber-400" size={24} />
-              <h2 className="text-xl font-bold text-stone-100 font-cinzel tracking-wider">Player Specific Knowledge</h2>
-            </div>
-            <p className="text-stone-400 text-sm mb-6">
-              Add notes here that only specific players can see. This is useful for secrets, backstory connections, or individual discoveries.
-            </p>
-            
-            {players.length === 0 ? (
-              <div className="text-center py-6 text-stone-500 bg-stone-950/50 rounded-xl border border-stone-800">
-                No players found in the database.
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {players.map(player => (
-                  <div key={player.uid} className="p-4 bg-stone-950/50 border border-stone-800 rounded-xl">
-                    <label className="block text-sm font-semibold text-stone-300 mb-2">{player.displayName}</label>
-                    <AutoExpandingTextarea
-                      value={formData.playerKnowledge?.[player.uid] || ''}
-                      onChange={e => handleKnowledgeChange(player.uid, e.target.value)}
-                      className="text-sm min-h-[80px]"
-                      placeholder={`What does ${player.displayName} know?`}
-                    />
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </form>
-      </div>
-
-      <LinkModal
-        isOpen={isLinkModalOpen}
-        onClose={() => setIsLinkModalOpen(false)}
-        onInsert={handleInsertLink}
-        entities={availableLocations}
-        sourceEntityId={id && id !== 'new' ? id : undefined}
-        sourceEntityName={formData.name}
-      />
-
-      <QuickCreateModal
-        isOpen={isQuickCreateOpen}
-        onClose={() => setIsQuickCreateOpen(false)}
-        onCreated={handleQuickCreate}
-        initialName={quickCreateName}
-      />
-
-      {isStatBlockModalOpen && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-stone-900 border border-stone-800 rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl">
-            <div className="flex items-center justify-between p-6 border-b border-stone-800">
-              <div>
-                <h2 className="text-xl font-cinzel font-bold text-stone-100">Stat Block</h2>
-                <p className="text-sm text-stone-400">Edit the stat block for {formData.name || 'this NPC'}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsStatBlockModalOpen(false)}
-                className="p-2 text-stone-400 hover:text-stone-100 hover:bg-stone-800 rounded-lg transition-colors"
-              >
-                <X size={20} />
-              </button>
-            </div>
-            
-            <div className="p-6 flex-1 overflow-y-auto space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-stone-950/50 p-4 rounded-xl border border-stone-800">
-                <div>
-                  <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">Armor Class</label>
-                  <input type="text" value={formData.dndStats?.armorClass || ''} onChange={e => handleDndStatChange('armorClass', e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-1.5 text-sm text-stone-100 placeholder-stone-600 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none" placeholder="e.g. 16 (chain shirt, shield)" />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">Hit Points</label>
-                  <input type="text" value={formData.dndStats?.hitPoints || ''} onChange={e => handleDndStatChange('hitPoints', e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-1.5 text-sm text-stone-100 placeholder-stone-600 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none" placeholder="e.g. 11 (2d8 + 2)" />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">Speed</label>
-                  <input type="text" value={formData.dndStats?.speed || ''} onChange={e => handleDndStatChange('speed', e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-1.5 text-sm text-stone-100 placeholder-stone-600 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none" placeholder="e.g. 30 ft." />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 md:grid-cols-6 gap-4 bg-stone-950/50 p-4 rounded-xl border border-stone-800">
-                {['str', 'dex', 'con', 'int', 'wis', 'cha'].map((stat) => (
-                  <div key={stat} className="text-center">
-                    <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">{stat}</label>
-                    <div className="flex flex-col items-center">
-                      <input 
-                        type="number" 
-                        value={formData.dndStats?.[stat as keyof DndStats] ?? 10} 
-                        onChange={e => handleDndStatChange(stat as keyof DndStats, parseInt(e.target.value) || 0)} 
-                        className="w-16 bg-stone-900 border border-stone-700 rounded-lg px-2 py-1 text-center text-lg font-bold text-amber-500 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none" 
-                      />
-                      <span className="text-sm text-stone-500 mt-1">
-                        {calculateModifier(Number(formData.dndStats?.[stat as keyof DndStats]) || 10)}
+          {isDM && (
+            <Card title="Relationships">
+              {existing ? <RelationshipList entity={existing} /> : null}
+              {pendingRels.length > 0 && (
+                <ul className="mt-2 space-y-1">
+                  {pendingRels.map((r, i) => (
+                    <li key={i} className="surface flex items-center gap-2 px-3 py-2 text-sm">
+                      <span className="flex-1 truncate">
+                        <span className="text-stone-100">{r.targetName}</span> <span className="text-stone-500">· {r.label}</span>
                       </span>
-                    </div>
+                      <span className="text-xs text-amber-400">added on save</span>
+                      <button type="button" aria-label="Remove" className="btn-icon-sm" onClick={() => setPendingRels((p) => p.filter((_, j) => j !== i))}>
+                        <X size={14} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {!existing && pendingRels.length === 0 && <p className="text-sm text-stone-500">Link this entry to others — family, employers, rivals…</p>}
+              <button type="button" className="btn btn-ghost btn-sm mt-2 -ml-2 text-amber-400" onClick={() => setRelOpen(true)}>
+                <Plus size={14} /> Add relationship
+              </button>
+            </Card>
+          )}
+        </div>
+
+        {/* Side column */}
+        <div className="min-w-0 space-y-4 lg:sticky lg:top-18 lg:self-start">
+          {isDM ? (
+            <Card title="Visibility" description="Who can find this entry.">
+              <Segmented
+                className="w-full"
+                value={dmVisibility}
+                onChange={(v) =>
+                  setDraft((d) =>
+                    d
+                      ? {
+                          ...d,
+                          isPublic: v === 'public',
+                          allowedPlayers: v === 'shared' ? (d.allowedPlayers?.length ? d.allowedPlayers : playerIds) : [],
+                        }
+                      : d,
+                  )
+                }
+                options={[
+                  { value: 'secret', label: 'Secret', icon: Lock },
+                  { value: 'shared', label: 'Some', icon: Users },
+                  { value: 'public', label: 'Public', icon: Globe },
+                ]}
+              />
+              {dmVisibility === 'shared' && (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {players.map((p) => {
+                    const on = draft.allowedPlayers?.includes(p.uid);
+                    return (
+                      <button
+                        key={p.uid}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() => set('allowedPlayers', on ? draft.allowedPlayers.filter((x) => x !== p.uid) : [...(draft.allowedPlayers ?? []), p.uid])}
+                        className={clsx(
+                          'flex items-center gap-1.5 rounded-full border py-1 pr-3 pl-1 text-xs',
+                          on ? 'border-sky-500/60 bg-sky-500/10 text-sky-200' : 'border-stone-800 text-stone-400',
+                        )}
+                      >
+                        <Avatar user={p} size={20} />
+                        {p.displayName}
+                        {on && <Check size={12} />}
+                      </button>
+                    );
+                  })}
+                  {players.length === 0 && <p className="text-xs text-stone-500">No players have joined yet.</p>}
+                </div>
+              )}
+              {draft.type !== 'note' && (
+                <>
+                  <p className="mt-3 text-xs text-stone-500">
+                    {dmVisibility === 'secret'
+                      ? 'Only you can see it. Use “Reveal” on the entry when the party discovers it.'
+                      : `${dmVisibility === 'public' ? 'Everyone' : 'The chosen players'} see${dmVisibility === 'public' ? 's' : ''} every field, except the ones you lock with the small toggle next to each field.`}
+                    {hiddenCount > 0 && dmVisibility !== 'secret' && <span className="text-amber-500"> {hiddenCount} hidden.</span>}
+                  </p>
+                  <div className="mt-2 flex gap-2">
+                    <button type="button" className="btn btn-ghost btn-sm flex-1" onClick={() => setAllFields(true)} disabled={hiddenCount === 0}>
+                      <Globe size={13} /> Show all fields
+                    </button>
+                    <button type="button" className="btn btn-ghost btn-sm flex-1" onClick={() => setAllFields(false)}>
+                      <Lock size={13} /> Hide all fields
+                    </button>
                   </div>
+                </>
+              )}
+            </Card>
+          ) : (
+            <Card title="Sharing" description="Who can read this note.">
+              <div className="space-y-1.5">
+                {[
+                  { v: 'private', label: 'Only me', icon: Lock },
+                  { v: 'dm', label: 'Me and the DM', icon: Users },
+                  { v: 'party', label: 'The party (not the DM)', icon: Users },
+                  { v: 'party_dm', label: 'The party and the DM', icon: Users },
+                  { v: 'all', label: 'Everyone in the campaign', icon: Globe },
+                ].map((o) => (
+                  <button
+                    key={o.v}
+                    type="button"
+                    role="radio"
+                    aria-checked={shareMode === o.v}
+                    onClick={() => setShare(o.v)}
+                    className={clsx(
+                      'flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm',
+                      shareMode === o.v ? 'border-amber-500/60 bg-amber-500/10 text-amber-100' : 'border-stone-800 text-stone-300 hover:border-stone-700',
+                    )}
+                  >
+                    <o.icon size={15} className="shrink-0" />
+                    <span className="flex-1">{o.label}</span>
+                    {shareMode === o.v && <Check size={14} />}
+                  </button>
                 ))}
               </div>
+            </Card>
+          )}
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-stone-950/50 p-4 rounded-xl border border-stone-800">
-                <div>
-                  <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">Skills</label>
-                  <input type="text" value={formData.dndStats?.skills || ''} onChange={e => handleDndStatChange('skills', e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-1.5 text-sm text-stone-100 placeholder-stone-600 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none" placeholder="e.g. Perception +2" />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">Senses</label>
-                  <input type="text" value={formData.dndStats?.senses || ''} onChange={e => handleDndStatChange('senses', e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-1.5 text-sm text-stone-100 placeholder-stone-600 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none" placeholder="e.g. Passive Perception 12" />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">Languages</label>
-                  <input type="text" value={formData.dndStats?.languages || ''} onChange={e => handleDndStatChange('languages', e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-1.5 text-sm text-stone-100 placeholder-stone-600 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none" placeholder="e.g. Common" />
-                </div>
-                <div className="flex gap-4">
-                  <div className="flex-1">
-                    <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">Challenge</label>
-                    <input type="text" value={formData.dndStats?.challenge || ''} onChange={e => handleDndStatChange('challenge', e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-1.5 text-sm text-stone-100 placeholder-stone-600 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none" placeholder="e.g. 1/8 (25 XP)" />
-                  </div>
-                  <div className="flex-1">
-                    <label className="block text-xs font-bold text-stone-400 uppercase tracking-wider mb-1">Proficiency Bonus</label>
-                    <input type="text" value={formData.dndStats?.proficiencyBonus || ''} onChange={e => handleDndStatChange('proficiencyBonus', e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-1.5 text-sm text-stone-100 placeholder-stone-600 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/50 outline-none" placeholder="e.g. +2" />
-                  </div>
-                </div>
-              </div>
+          <Card title={draft.type === 'note' ? 'Attached to' : 'Location'}>
+            {fieldLabel({ field: "locationId", label: draft.type === 'note' ? 'About' : 'Located in' })}
+            <EntityPicker
+              options={locationOptions}
+              value={draft.locationId ?? ''}
+              onChange={(v) => set('locationId', v)}
+              placeholder={draft.type === 'note' ? 'Not attached' : 'Top level'}
+              onCreateNew={isDM ? (name) => setQuickLocation(name) : undefined}
+            />
+            {draft.type !== 'note' && (
+              <p className="hint">
+                A {meta.label.toLowerCase()} can be inside: {meta.parents.map((p) => typeMeta(p).label.toLowerCase()).join(', ')}.
+              </p>
+            )}
+          </Card>
 
-              <div>
-                <label className="block text-sm font-bold text-stone-300 mb-2">Actions, Traits, & Description</label>
-                <div data-color-mode="dark" className="rounded-xl overflow-hidden border border-stone-800 min-h-[300px]">
-                  <MDEditor
-                    value={formData.statBlock || ''}
-                    onChange={val => setFormData({ ...formData, statBlock: val || '' })}
-                    height={300}
-                    preview="edit"
-                    className="!bg-stone-950/50 !border-none"
-                  />
-                </div>
-              </div>
-            </div>
-            
-            <div className="p-6 border-t border-stone-800 flex justify-end gap-3 bg-stone-950/50 rounded-b-2xl">
-              <button
-                type="button"
-                onClick={() => setIsStatBlockModalOpen(false)}
-                className="px-6 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl font-medium transition-colors"
-              >
-                Done
-              </button>
-            </div>
-          </div>
+          <Card title="Tags">
+            {fieldLabel({ field: "tags", label: "Tags", htmlFor: "f-tags" })}
+            <TagInput id="f-tags" value={draft.tags} onChange={(t) => set('tags', t)} suggestions={suggestions.tags} />
+            <p className="hint">Press Enter or comma to add. Search with #tag.</p>
+          </Card>
+
+          <Card title="Images & map">
+            {fieldLabel({ field: "imageUrls", label: "Gallery" })}
+            <ImageManager images={draft.imageUrls ?? []} onChange={(imgs) => set('imageUrls', imgs)} mapImage={draft.mapImage} onMapChange={(m) => set('mapImage', m)} />
+          </Card>
+
+          {existing && (
+            <p className="flex items-center gap-2 px-1 text-xs text-stone-500">
+              <TypeIcon type={existing.type} size={12} /> id: <code className="text-stone-400">{existing.id}</code>
+            </p>
+          )}
         </div>
+      </form>
+
+      {isDM && (
+        <RelationshipModal
+          open={relOpen}
+          onClose={() => setRelOpen(false)}
+          source={{ id: draft.id ?? '', name: draft.name || 'This entry' }}
+          onSubmit={(rel) => {
+            if (rel.targetId === draft.id) return;
+            setPendingRels((p) => [...p, rel]);
+          }}
+        />
       )}
+      <QuickCreateModal
+        open={quickLocation !== null}
+        onClose={() => setQuickLocation(null)}
+        initialName={quickLocation ?? ''}
+        initialType={meta.parents.find((p) => p !== 'note' && p !== draft.type) ?? meta.parents[0]}
+        onCreated={(e) => set('locationId', e.id)}
+      />
     </div>
   );
 }
