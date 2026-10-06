@@ -26,9 +26,14 @@ export function canViewField(viewer: Viewer | null, entity: Entity, fieldKey: st
 
   const perm = entity.fieldPermissions?.[fieldKey];
   if (perm) {
-    if (perm.isPublic) return true;
-    return perm.allowedPlayers?.includes(viewer.uid) ?? false;
+    if (perm.allowedPlayers?.includes(viewer.uid)) return true;
+    if (!perm.isPublic) return false;
+    // Current entries: "everyone who can see it" means players it was revealed to, not players
+    // who can only open it because of a "what you know" note.
+    return entity.shareV === 3 ? entity.isPublic || !!entity.sharedWith?.includes(viewer.uid) : true;
   }
+  // Current entries: a field without a setting hasn't been revealed.
+  if (entity.shareV === 3 && entity.type !== 'note') return false;
   // No explicit field rule: public entities show everything.
   if (entity.isPublic) return true;
   // Notes are shared as a whole by their author (players can't set per-field rules).
@@ -36,22 +41,6 @@ export function canViewField(viewer: Viewer | null, entity: Entity, fieldKey: st
   // Shared with this player: everything that isn't hidden.
   if (entity.shareV === 2) return entity.sharedWith?.includes(viewer.uid) ?? false;
   return false;
-}
-
-/**
- * Moves an older entry to the simpler sharing model without changing what anyone can see:
- * in the old model, players an entry was shared with saw only fields revealed one by one,
- * so those fields get an explicit "hidden" setting before the new default applies.
- */
-export function upgradeSharing(
-  entity: Pick<Entity, 'shareV' | 'isPublic' | 'type' | 'fieldPermissions' | 'attributes'>,
-  explicitlySharedWith: string[],
-  fieldKeys: string[],
-): NonNullable<Entity['fieldPermissions']> {
-  const perms = { ...(entity.fieldPermissions ?? {}) };
-  if (entity.shareV === 2 || entity.isPublic || entity.type === 'note' || explicitlySharedWith.length === 0) return perms;
-  for (const k of [...fieldKeys, ...Object.keys(entity.attributes ?? {})]) if (!perms[k]) perms[k] = { isPublic: false, allowedPlayers: [] };
-  return perms;
 }
 
 export function canEditEntity(viewer: Viewer | null, entity: Pick<Entity, 'type' | 'ownerId'>): boolean {

@@ -6,6 +6,7 @@ import {
   Copy,
   Crown,
   Edit3,
+  Eye,
   EyeOff,
   Lock,
   Map as MapIcon,
@@ -14,6 +15,7 @@ import {
   Skull,
   Sparkles,
   Trash2,
+  Users,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
@@ -21,8 +23,9 @@ import { useAncestors, useCampaignData } from '../../contexts/CampaignDataContex
 import { usePeek } from '../../contexts/PeekContext';
 import { useToast } from '../../contexts/ToastContext';
 import { useConfirm } from '../../contexts/ConfirmContext';
-import { baseType, fieldsFor, QUEST_STATUS_TONE, typeMeta, type FieldSchema } from '../../lib/entityTypes';
-import { deleteEntity } from '../../lib/entityService';
+import { baseType, fieldLabel, fieldsFor, permissionKeys, QUEST_STATUS_TONE, typeMeta, type FieldSchema } from '../../lib/entityTypes';
+import { fieldState, planFieldToggle } from '../../lib/sharing';
+import { applySharingUpdate, deleteEntity } from '../../lib/entityService';
 import RevealButton from './RevealButton';
 import { visibilityOf } from '../../lib/permissions';
 import { excerpt, timeAgo } from '../../lib/text';
@@ -38,15 +41,62 @@ import { RelationshipsSection } from './Relationships';
 import QuickCreateModal from './QuickCreateModal';
 import { useImageSrc } from '../../hooks/useImageSrc';
 
-function Section({ title, children, action, className }: { title: string; children: ReactNode; action?: ReactNode; className?: string }) {
+function Section({ title, children, action, className, eye }: { title: string; children: ReactNode; action?: ReactNode; className?: string; eye?: ReactNode }) {
   return (
     <section className={clsx('card p-4 sm:p-5', className)}>
       <div className="mb-3 flex items-center justify-between gap-2">
-        <h2 className="section-title">{title}</h2>
+        <h2 className="section-title min-w-0 flex-1">{title}</h2>
+        {eye}
         {action}
       </div>
       {children}
     </section>
+  );
+}
+
+/** DM-only switch next to a field: show it to everyone who can see the entry, or hide it again. */
+function FieldEye({ entity, field, compact }: { entity: Entity; field: string; compact?: boolean }) {
+  const { isDM } = useAuth();
+  const { players } = useCampaignData();
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  // Leftover values outside the type's fields are never shown to players, so no switch for them.
+  if (!isDM || entity.type === 'note' || !permissionKeys(entity.type).includes(field)) return null;
+  const state = fieldState(entity, field, players);
+  const label = fieldLabel(entity.type, field);
+  const cfg = {
+    shown: { icon: Eye, text: 'Players', tone: 'text-emerald-400 ring-emerald-600/40', title: `${label}: players who can see this entry see it. Click to hide.` },
+    some: { icon: Users, text: 'Some', tone: 'text-sky-400 ring-sky-600/40', title: `${label}: only some players know this (use Reveal to tell more). Click to hide it.` },
+    hidden: { icon: EyeOff, text: 'DM', tone: 'text-stone-500 ring-stone-700', title: `${label}: hidden from players. Click to reveal it.` },
+    prepared: { icon: Eye, text: 'Ready', tone: 'text-amber-500 ring-amber-600/40', title: `${label}: will be shown once you reveal the entry. Click to keep it hidden.` },
+  }[state];
+  const Icon = cfg.icon;
+  const click = async () => {
+    setBusy(true);
+    try {
+      const plan = planFieldToggle(entity, field, players);
+      await applySharingUpdate(entity.id, plan.update);
+      if (plan.newFields.length) toast.success(`Revealed “${label}”`);
+      else if (state === 'hidden') toast.show(`“${label}” will be shown when you reveal the entry`);
+      else toast.show(`“${label}” is hidden from players`);
+    } catch (err) {
+      toast.error(err, 'Change visibility');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={click}
+      disabled={busy}
+      title={cfg.title}
+      aria-label={cfg.title}
+      className={clsx('inline-flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-[11px] font-medium ring-1 ring-inset hover:bg-stone-800/60', cfg.tone)}
+    >
+      <Icon size={12} />
+      {!compact && <span className="hidden @sm:inline">{cfg.text}</span>}
+    </button>
   );
 }
 
@@ -244,8 +294,11 @@ export default function EntityView({ entityId, variant = 'page' }: { entityId: s
                 {attrs.short.map(([f, key, value]) => (
                   <div key={key} className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-3">
                     <dt className="text-stone-500">{f?.label ?? key}</dt>
-                    <dd className="min-w-0 text-stone-200">
-                      <AttributeValue field={f} value={value} />
+                    <dd className="flex min-w-0 items-start gap-2 text-stone-200">
+                      <span className="min-w-0 flex-1">
+                        <AttributeValue field={f} value={value} />
+                      </span>
+                      <FieldEye entity={entity} field={key} compact />
                     </dd>
                   </div>
                 ))}
@@ -356,8 +409,13 @@ export default function EntityView({ entityId, variant = 'page' }: { entityId: s
           )}
 
           {(shortDescription || entity.content || !showContent) && (
-            <Section title="Description">
-              {shortDescription && <p className="mb-3 text-base leading-relaxed text-stone-200">{String(shortDescription[2])}</p>}
+            <Section title="Description" eye={entity.content ? <FieldEye entity={entity} field="content" /> : undefined}>
+              {shortDescription && (
+                <div className="mb-3 flex items-start gap-2">
+                  <p className="min-w-0 flex-1 text-base leading-relaxed text-stone-200">{String(shortDescription[2])}</p>
+                  <FieldEye entity={entity} field="shortDescription" />
+                </div>
+              )}
               {showContent ? (
                 entity.content ? (
                   <Markdown source={entity.content} className={entity.content.length > 180 ? "dropcap" : undefined} />
@@ -373,7 +431,7 @@ export default function EntityView({ entityId, variant = 'page' }: { entityId: s
           {longAttrs.length > 0 && (
             <div className="grid gap-4 @2xl:grid-cols-2">
               {longAttrs.map(([f, key, value]) => (
-                <Section key={key} title={f?.label ?? key}>
+                <Section key={key} title={f?.label ?? key} eye={<FieldEye entity={entity} field={key} />}>
                   <p className="text-sm leading-relaxed whitespace-pre-wrap text-stone-300">{String(value)}</p>
                 </Section>
               ))}
@@ -381,7 +439,7 @@ export default function EntityView({ entityId, variant = 'page' }: { entityId: s
           )}
 
           {hasStatBlock && (
-            <Section title="Stat block">
+            <Section title="Stat block" eye={<FieldEye entity={entity} field="statBlock" />}>
               <StatBlock stats={entity.dndStats} text={entity.statBlock} />
             </Section>
           )}
@@ -465,7 +523,7 @@ export default function EntityView({ entityId, variant = 'page' }: { entityId: s
           {details('hidden @4xl:block')}
 
           {images.length > 0 && (
-            <Section title={`Images (${images.length})`}>
+            <Section title={`Images (${images.length})`} eye={<FieldEye entity={entity} field="imageUrls" />}>
               <div className="grid grid-cols-3 gap-2">
                 {images.map((img, i) => (
                   <ImageThumb key={img + i} imageRef={img} className="aspect-square" onClick={() => setLightbox(i)} alt={`${entity.name} image ${i + 1}`} />

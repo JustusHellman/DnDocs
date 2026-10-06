@@ -7,6 +7,7 @@ import { usePeek } from '../contexts/PeekContext';
 import { EmptyState, Page, PageHeader, TypeTile } from '../components/ui/bits';
 import { useDragSource } from '../components/layout/drag';
 import type { Entity, RevealEvent } from '../types';
+import { fieldLabel } from '../lib/entityTypes';
 
 interface Item {
   entity: Entity;
@@ -81,6 +82,8 @@ function Row({ entity, event }: Item) {
   const drag = useDragSource({ entryId: entity.id, label: entity.name, type: entity.type });
   const everyone = event.to.includes('*');
   const who = everyone ? 'everyone' : isDM ? event.to.map((u) => memberName(u)).join(', ') : 'you';
+  const fields = (event.fields ?? []).filter((k) => canViewField(entity, k)).map((k) => fieldLabel(entity.type, k));
+  const what = fields.length ? `Revealed ${fields.join(', ')} to ${who}` : `Revealed to ${who}`;
   return (
     <li>
       <button type="button" {...drag} onClick={(e) => peek(entity, { newSlot: e.ctrlKey || e.metaKey })} className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-stone-900/60">
@@ -90,7 +93,7 @@ function Row({ entity, event }: Item) {
           <span className="block truncate font-semibold text-stone-100">{entity.name}</span>
           <span className="flex items-center gap-1 truncate text-xs text-stone-500">
             {event.showOnly ? <MonitorUp size={12} /> : everyone ? <Globe size={12} /> : <Eye size={12} />}
-            {event.showOnly ? `Shown on screens · ${who}` : `Revealed to ${who}`}
+            {event.showOnly ? `Shown on screens · ${who}` : what}
           </span>
         </span>
       </button>

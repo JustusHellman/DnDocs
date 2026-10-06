@@ -26,7 +26,7 @@ export default function FieldPermissionToggle({ permission, onChange, players, i
   };
 
   const Icon = state === 'public' ? Globe : state === 'some' ? Users : Lock;
-  const label = state === 'public' ? 'Visible to players' : state === 'some' ? `Visible to ${perm.allowedPlayers.length}` : 'Hidden from players';
+  const label = state === 'public' ? 'Shown to players who can see the entry' : state === 'some' ? `Visible to ${perm.allowedPlayers.length}` : 'Hidden from players';
 
   return (
     <>
@@ -49,7 +49,7 @@ export default function FieldPermissionToggle({ permission, onChange, players, i
       <Popover anchorRef={anchor} open={open} onClose={() => setOpen(false)} width={250}>
         <div className="px-2 pt-1 pb-2 text-xs text-stone-400">Who can see “{fieldLabel}”?</div>
         {[
-          { key: 'public', icon: Globe, text: 'All players', on: () => onChange({ isPublic: true, allowedPlayers: [] }) },
+          { key: 'public', icon: Globe, text: 'Everyone who can see the entry', on: () => onChange({ isPublic: true, allowedPlayers: [] }) },
           { key: 'secret', icon: Lock, text: 'Only the DM', on: () => onChange({ isPublic: false, allowedPlayers: [] }) },
         ].map((o) => (
           <button

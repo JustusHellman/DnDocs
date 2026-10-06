@@ -18,10 +18,13 @@ Icons: [game-icons.net](https://game-icons.net) by Lorc, Delapouite and contribu
   colour and fields, rename the built-in ones, or hide fields you never use.
 - **Writing** – a light editor that grows with the text; type `@` to link another entry (or create it on
   the spot). Every entry lists where it's **mentioned**.
-- **Visibility** – Secret / some players / everyone per entry; shared players see every field except the
-  ones you lock. DM-only secrets and per-player "what you know" notes.
-- **Reveal** – one button when the party discovers something: share it with everyone or chosen players and
-  pop it up on their screens. The **Chronicle** lists everything revealed, day by day.
+- **Visibility** – Secret / some players / everyone per entry. Fields are hidden until revealed, and you
+  can tell one player something the others don't. DM-only secrets and per-player "what you know" notes.
+- **Reveal** – one button when the party discovers something: pick who, tick what they learn (the usual
+  fields are pre-ticked; stat blocks, tactics, ratings and the like stay back), and pop it up on their
+  screens. Press it again later to reveal more. Each field on an entry also has a small switch to show or
+  hide it on the spot. Per type, you choose which fields are pre-ticked (Entry types). The **Chronicle**
+  lists everything revealed, day by day.
 - **Reading desk** – clicking anything opens it next to the page (a bottom sheet on phones). Read up to
   three entries side by side: drag a name from the shelf, a card or a column header onto a column
   (replace) or its edge (new column), or Ctrl/⌘-click. Each column has its own back/forward, the desk

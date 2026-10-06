@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Check, Globe, HelpCircle, Lock, Plus, Save, Users, X } from 'lucide-react';
+import { ArrowLeft, Check, Eye, Globe, HelpCircle, Lock, Plus, Save, Users, X } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../contexts/AuthContext';
 import { useCampaignData, useIsDescendant, useVisibleEntities } from '../contexts/CampaignDataContext';
 import { useToast } from '../contexts/ToastContext';
 import { useConfirm } from '../contexts/ConfirmContext';
 import { baseType, menuTypes, ENTITY_TYPES, fieldsFor, isEntityType, permissionKeys, typeMeta, type FieldSchema } from '../lib/entityTypes';
-import { upgradeSharing } from '../lib/permissions';
+import { defaultFieldPerms, toV3 } from '../lib/sharing';
 import { defaultAttributes, explicitShare, saveEntity, type EntityDraft, type PendingRelationship } from '../lib/entityService';
 import type { Entity, EntityType, FieldPermission, User } from '../types';
 import { Avatar, EmptyState, Page, Segmented, Spinner, Toggle, TypeIcon } from '../components/ui/bits';
@@ -23,7 +23,9 @@ import { Popover } from '../components/ui/Popover';
 
 // ---------------------------------------------------------------------------
 
-function draftFromEntity(e: Entity, players: User[], isDM: boolean): EntityDraft {
+function draftFromEntity(original: Entity, players: User[], isDM: boolean): EntityDraft {
+  // DMs edit every entry in the current sharing model (same visibility for everyone).
+  const e = isDM && original.type !== 'note' ? toV3(original) : original;
   const images = e.imageUrls ?? [];
   const mapRef = e.mapConfig?.mediaId ? `media:${e.mapConfig.mediaId}` : null;
   return {
@@ -36,9 +38,11 @@ function draftFromEntity(e: Entity, players: User[], isDM: boolean): EntityDraft
     tags: e.tags ?? [],
     isPublic: !!e.isPublic,
     // In the editor this holds the explicit selection; derived access is re-added on save.
-    allowedPlayers: isDM ? explicitShare(e, players) : e.allowedPlayers ?? [],
-    // Older entries: make hidden-by-default fields explicit before the simpler model applies.
-    fieldPermissions: isDM ? upgradeSharing(e, explicitShare(e, players), permissionKeys(e.type)) : e.fieldPermissions ?? {},
+    allowedPlayers: isDM ? (e.type !== 'note' ? e.sharedWith ?? [] : explicitShare(e, players)) : e.allowedPlayers ?? [],
+    // Every field gets an explicit setting (fields are hidden until revealed), keeping what
+    // players currently see.
+    fieldPermissions: e.fieldPermissions ?? {},
+    shareV: e.shareV,
     playerKnowledge: e.playerKnowledge ?? {},
     locationId: e.locationId ?? '',
     gender: e.gender ?? '',
@@ -62,6 +66,7 @@ function newDraft(type: EntityType, locationId: string, dmId: string, isDM: bool
     // Players' notes are shared with the DM by default.
     allowedPlayers: !isDM && type === 'note' ? [dmId] : [],
     fieldPermissions: {},
+    shareV: isDM && type !== 'note' ? 3 : undefined,
     playerKnowledge: {},
     locationId,
     gender: '',
@@ -214,10 +219,19 @@ export default function EntityEdit() {
       let toSave = draft;
       if (existing && initialJson.current) {
         const initial = JSON.parse(initialJson.current) as EntityDraft;
-        const same = (k: 'isPublic' | 'allowedPlayers' | 'fieldPermissions') => JSON.stringify(initial[k]) === JSON.stringify(draft[k]);
+        const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
         const live = draftFromEntity(existing, players, isDM);
-        if (same('isPublic') && same('allowedPlayers')) toSave = { ...toSave, isPublic: live.isPublic, allowedPlayers: live.allowedPlayers };
-        if (same('fieldPermissions')) toSave = { ...toSave, fieldPermissions: live.fieldPermissions };
+        if (same(initial.isPublic, draft.isPublic) && same(initial.allowedPlayers, draft.allowedPlayers)) toSave = { ...toSave, isPublic: live.isPublic, allowedPlayers: live.allowedPlayers };
+        // Field by field: keep newer settings (e.g. a switch flipped on the entry page) for every
+        // field this form didn't change.
+        const perms = { ...(live.fieldPermissions ?? {}) };
+        for (const k of new Set([...Object.keys(draft.fieldPermissions ?? {}), ...Object.keys(initial.fieldPermissions ?? {})])) {
+          if (!same(initial.fieldPermissions?.[k], draft.fieldPermissions?.[k])) {
+            if (draft.fieldPermissions?.[k]) perms[k] = draft.fieldPermissions[k];
+            else delete perms[k];
+          }
+        }
+        toSave = { ...toSave, fieldPermissions: perms };
       }
       const saved = await saveEntity(toSave, {
         campaign: currentCampaign,
@@ -280,7 +294,8 @@ export default function EntityEdit() {
   const schema = fieldsFor(draft.type);
   const showFieldPerms = isDM && draft.type !== 'note';
   // Fields without their own setting follow the entry: visible to whoever can see it.
-  const inheritsPublic = !!draft.isPublic || (draft.type !== 'note' && (draft.allowedPlayers?.length ?? 0) > 0);
+  // Older drafts: fields without a setting follow the entry. Current ones: hidden until revealed.
+  const inheritsPublic = draft.shareV === 3 ? false : !!draft.isPublic || (draft.type !== 'note' && (draft.allowedPlayers?.length ?? 0) > 0);
 
   // Plain function (not a component) so popovers inside keep their state across renders.
   const fieldLabel = ({ field, label, htmlFor, help }: { field: string; label: string; htmlFor?: string; help?: string }) => (
@@ -428,16 +443,18 @@ export default function EntityEdit() {
   };
 
   const dmVisibility = draft.isPublic ? 'public' : (draft.allowedPlayers?.length ?? 0) > 0 ? 'shared' : 'secret';
-  const hiddenCount = permissionKeys(draft.type).filter((k) => {
+  const keys = permissionKeys(draft.type);
+  const shownCount = keys.filter((k) => {
     const p = draft.fieldPermissions?.[k];
-    return p && !p.isPublic && !p.allowedPlayers?.length;
+    return p ? p.isPublic || !!p.allowedPlayers?.length : inheritsPublic;
   }).length;
-  const setAllFields = (show: boolean) => {
+  const asEntity = () => ({ ...draft, id: draft.id ?? '', campaignId: '', ownerId: '', createdAt: '', updatedAt: '' }) as Entity;
+  const setAllFields = (mode: 'all' | 'usual' | 'none') => {
     const perms: Record<string, FieldPermission> = {};
-    // "Show" clears the per-field settings so every field follows the entry's visibility.
-    if (!show) permissionKeys(draft.type).forEach((k) => (perms[k] = { isPublic: false, allowedPlayers: [] }));
-    setDraft((d) => (d ? { ...d, fieldPermissions: perms } : d));
-    toast.show(show ? 'Every field follows the entry’s visibility' : 'All fields hidden — only the name is shown');
+    if (mode === 'usual') Object.assign(perms, defaultFieldPerms(asEntity()));
+    else keys.forEach((k) => (perms[k] = { isPublic: mode === 'all', allowedPlayers: [] }));
+    setDraft((d) => (d ? { ...d, fieldPermissions: { ...d.fieldPermissions, ...perms } } : d));
+    toast.show(mode === 'all' ? 'Every field shown to players who can see it' : mode === 'usual' ? 'The usual fields are shown; DM material stays hidden' : 'All fields hidden — only the name is shown');
   };
 
   return (
@@ -613,7 +630,7 @@ export default function EntityEdit() {
               <Segmented
                 className="w-full"
                 value={dmVisibility}
-                onChange={(v) =>
+                onChange={(v) => {
                   setDraft((d) =>
                     d
                       ? {
@@ -622,8 +639,10 @@ export default function EntityEdit() {
                           allowedPlayers: v === 'shared' ? (d.allowedPlayers?.length ? d.allowedPlayers : playerIds) : [],
                         }
                       : d,
-                  )
-                }
+                  );
+                  // Sharing something with nothing revealed yet: start from the usual fields.
+                  if (v !== 'secret' && dmVisibility === 'secret' && shownCount === 0 && draft.type !== 'note') setAllFields('usual');
+                }}
                 options={[
                   { value: 'secret', label: 'Secret', icon: Lock },
                   { value: 'shared', label: 'Some', icon: Users },
@@ -658,16 +677,18 @@ export default function EntityEdit() {
                 <>
                   <p className="mt-3 text-xs text-stone-500">
                     {dmVisibility === 'secret'
-                      ? 'Only you can see it. Use “Reveal” on the entry when the party discovers it.'
-                      : `${dmVisibility === 'public' ? 'Everyone' : 'The chosen players'} see${dmVisibility === 'public' ? 's' : ''} every field, except the ones you lock with the small toggle next to each field.`}
-                    {hiddenCount > 0 && dmVisibility !== 'secret' && <span className="text-amber-500"> {hiddenCount} hidden.</span>}
+                      ? 'Only you can see it. When the party discovers it, use “Reveal” on the entry and tick what they learn.'
+                      : `Players who can see it get ${shownCount} of ${keys.length} fields. The small switch next to each field changes that.`}
                   </p>
-                  <div className="mt-2 flex gap-2">
-                    <button type="button" className="btn btn-ghost btn-sm flex-1" onClick={() => setAllFields(true)} disabled={hiddenCount === 0}>
-                      <Globe size={13} /> Show all fields
+                  <div className="mt-2 flex gap-1">
+                    <button type="button" className="btn btn-ghost btn-sm flex-1 px-1" onClick={() => setAllFields('usual')} title="Show the usual fields, keep DM material hidden">
+                      <Eye size={13} /> Usual
                     </button>
-                    <button type="button" className="btn btn-ghost btn-sm flex-1" onClick={() => setAllFields(false)}>
-                      <Lock size={13} /> Hide all fields
+                    <button type="button" className="btn btn-ghost btn-sm flex-1 px-1" onClick={() => setAllFields('all')}>
+                      <Globe size={13} /> All
+                    </button>
+                    <button type="button" className="btn btn-ghost btn-sm flex-1 px-1" onClick={() => setAllFields('none')}>
+                      <Lock size={13} /> None
                     </button>
                   </div>
                 </>
