@@ -22,6 +22,9 @@ function validEntity(d: any, id: string) {
     (d.attributes == null || typeof d.attributes === 'object') && (d.dndStats == null || typeof d.dndStats === 'object')
   );
 }
+function validMedia(d: any) {
+  return ['id', 'entityId', 'campaignId', 'data', 'ownerId', 'createdAt'].every((k) => typeof d[k] === 'string') && d.data.length < 1048576 && d.ownerId === writerUid;
+}
 function validRel(d: any) {
   return ['id', 'campaignId', 'sourceId', 'targetId', 'targetName', 'label', 'reverseId', 'createdAt'].every((k) => typeof d[k] === 'string');
 }
@@ -44,6 +47,7 @@ vi.mock('firebase/firestore', () => {
       if (!isDM()) throw new Error('permission-denied');
       if (r.col === 'entities' && !validEntity(data, r.id)) throw new Error('permission-denied: invalid entity');
       if (r.col === 'relationships' && !validRel(data)) throw new Error('permission-denied: invalid relationship');
+      if (r.col === 'media' && !validMedia(data)) throw new Error('permission-denied: invalid media');
       store.set(r.path, JSON.parse(JSON.stringify(data)));
     },
     updateDoc: async (r: any, data: any) => {
@@ -157,6 +161,54 @@ describe('runImport', () => {
     const res = await runImport(plan(), { mode: 'update', campaignId: 'camp' });
     expect(res.failed.some((f) => /another campaign/.test(f.error))).toBe(true);
     expect(store.get('entities/seed-p-a')).toEqual({ id: 'seed-p-a', campaignId: 'other' });
+  });
+});
+
+const IMG = 'data:image/webp;base64,UklGRg==';
+const withMaps = () => ({
+  ...raw(),
+  maps: [{ entity: 'a', image: IMG, pins: [{ target: 'b', x: 25, y: 40 }, { target: 'c', x: 70, y: 10.5 }] }],
+});
+const mapPlan = () => buildPlan(withMaps(), { campaignId: 'camp', uid: 'dm1' });
+
+describe('maps', () => {
+  it('stores the image, points the entry at it and places the pins', async () => {
+    const res = await runImport(mapPlan(), { mode: 'skip', campaignId: 'camp' });
+    expect(res).toMatchObject({ mapsSet: 1, failed: [] });
+    expect(store.get('media/seedmedia-p-a')).toMatchObject({ data: IMG, entityId: 'seed-p-a', campaignId: 'camp' });
+    expect(store.get('entities/seed-p-a')!.mapConfig).toEqual({
+      mediaId: 'seedmedia-p-a',
+      pins: [{ x: 25, y: 40, targetEntityId: 'seed-p-b' }, { x: 70, y: 10.5, targetEntityId: 'seed-p-c' }],
+    });
+  });
+
+  it('is safe to run twice and never moves pins the DM placed', async () => {
+    await runImport(mapPlan(), { mode: 'skip', campaignId: 'camp' });
+    const e = store.get('entities/seed-p-a')!;
+    e.mapConfig.pins[0] = { x: 99, y: 1, targetEntityId: 'seed-p-b' };
+    const again = await runImport(mapPlan(), { mode: 'skip', campaignId: 'camp' });
+    expect(again).toMatchObject({ mapsSet: 0, mapsSkipped: 1 });
+    const upd = await runImport(mapPlan(), { mode: 'update', campaignId: 'camp' });
+    expect(upd.failed).toEqual([]);
+    expect(store.get('entities/seed-p-a')!.mapConfig.pins[0]).toEqual({ x: 99, y: 1, targetEntityId: 'seed-p-b' });
+    expect(ids('media')).toHaveLength(1);
+  });
+
+  it('keeps a map the DM uploaded themselves', async () => {
+    await runImport(plan(), { mode: 'skip', campaignId: 'camp' });
+    store.set('entities/seed-p-a', { ...store.get('entities/seed-p-a')!, mapConfig: { mediaId: 'mine', pins: [] } });
+    const res = await runImport(mapPlan(), { mode: 'update', campaignId: 'camp' });
+    expect(res.mapsSkipped).toBe(1);
+    expect(store.get('entities/seed-p-a')!.mapConfig.mediaId).toBe('mine');
+    expect(store.has('media/seedmedia-p-a')).toBe(false);
+  });
+
+  it('removePack takes the map image out too', async () => {
+    await runImport(mapPlan(), { mode: 'skip', campaignId: 'camp' });
+    const current = { entities: [...store.entries()].filter(([k]) => k.startsWith('entities/')).map(([, v]) => v as Entity) };
+    const r = await removePack('p', 'camp', current);
+    expect(r).toMatchObject({ maps: 1, failed: 0 });
+    expect(ids('media')).toHaveLength(0);
   });
 });
 

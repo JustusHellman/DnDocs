@@ -76,7 +76,7 @@ export default function DMPackImport() {
     if (!ok) return;
     setBusy('import');
     setSummary(null);
-    setProgress([0, plan.entities.length + plan.relationships.length]);
+    setProgress([0, plan.entities.length + plan.relationships.length + plan.maps.length]);
     try {
       const s = await runImport(plan, { mode, campaignId: currentCampaign.id, onProgress: (d, t) => setProgress([d, t]) });
       setSummary(s);
@@ -106,7 +106,7 @@ export default function DMPackImport() {
     try {
       const r = await removePack(plan.pack.id, currentCampaign.id, { entities });
       if (r.failed) toast.error(new Error(`${r.failed} items couldn't be removed. Try again.`), 'Remove pack');
-      else toast.success(`Removed ${r.entities} entries and ${r.relationships} links.`);
+      else toast.success(`Removed ${r.entities} entries, ${r.relationships} links and ${r.maps} maps.`);
       setSummary(null);
     } catch (e) {
       toast.error(e, 'Remove pack');
@@ -155,7 +155,7 @@ export default function DMPackImport() {
               {plan.ok && (
                 <>
                   <p className="mt-3 text-sm text-stone-300">
-                    {plan.entities.length} entries · {plan.relationships.length} links
+                    {plan.entities.length} entries · {plan.relationships.length} links{plan.maps.length ? ` · ${plan.maps.length} maps with ${plan.maps.reduce((n, m) => n + m.pins.length, 0)} pins` : ''}
                     {alreadyThere > 0 && <span className="text-amber-300"> · {alreadyThere} already in this campaign</span>}
                   </p>
                   <div className="mt-2 flex flex-wrap gap-1.5">
@@ -243,7 +243,7 @@ export default function DMPackImport() {
           <p className="mt-1 text-stone-300">
             {summary.created} entries created{summary.updated ? `, ${summary.updated} updated` : ''}
             {summary.skipped ? `, ${summary.skipped} left as they were` : ''}; {summary.relationshipsCreated} links created
-            {summary.relationshipsSkipped ? `, ${summary.relationshipsSkipped} already there` : ''}.
+            {summary.relationshipsSkipped ? `, ${summary.relationshipsSkipped} already there` : ''}{summary.mapsSet || summary.mapsSkipped ? `; ${summary.mapsSet} maps set${summary.mapsSkipped ? `, ${summary.mapsSkipped} left as they were` : ''}` : ''}.
           </p>
           {summary.failed.length > 0 && (
             <>

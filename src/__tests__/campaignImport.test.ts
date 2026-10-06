@@ -150,7 +150,7 @@ describe.skipIf(!packFile)('a real pack file', () => {
     const raw = JSON.parse(readFileSync(packFile!, 'utf8'));
     const plan = buildPlan(raw, ctx);
     const errors = plan.issues.filter((i) => i.level === 'error');
-    expect(errors).toEqual([]);
+    expect(JSON.stringify(errors).slice(0,400)).toBe("[]");
     expect(plan.entities.length).toBe(raw.entities.length);
     expect(plan.relationships.length).toBe(raw.relationships.length);
     // Nothing leaks to players.
@@ -164,5 +164,48 @@ describe.skipIf(!packFile)('a real pack file', () => {
         for (const m of field.matchAll(/\]\(\/entity\/([^)]+)\)/g)) expect(ids.has(m[1]), `${e.name} links to missing ${m[1]}`).toBe(true);
       }
     }
+  });
+});
+
+describe('maps and default-hidden fields', () => {
+  const IMG = 'data:image/webp;base64,UklGRg==';
+  const withMap = (m: unknown) => ({ ...base(), maps: [m] });
+
+  it('plans a map with pins as percentages', () => {
+    const plan = buildPlan(withMap({ entity: 'town', image: IMG, pins: [{ target: 'inn', x: 10, y: 90.123 }] }), ctx);
+    expect(plan.issues).toEqual([]);
+    expect(plan.maps).toHaveLength(1);
+    expect(plan.maps[0].media.id).toBe('seedmedia-test-pack-town');
+    expect(plan.maps[0].pins).toEqual([{ x: 10, y: 90.12, targetEntityId: entityIdFor('test-pack', 'inn') }]);
+  });
+
+  it.each([
+    ['an entry that is not in the pack', { entity: 'nowhere', image: IMG }],
+    ['a pin to nowhere', { entity: 'town', image: IMG, pins: [{ target: 'nowhere', x: 1, y: 1 }] }],
+    ['a pin outside the picture', { entity: 'town', image: IMG, pins: [{ target: 'inn', x: 101, y: 1 }] }],
+    ['an image that is not a data URL', { entity: 'town', image: 'https://example.com/a.png' }],
+    ['an image that is too big', { entity: 'town', image: 'data:image/png;base64,' + 'A'.repeat(1_000_000) }],
+    ['an svg image', { entity: 'town', image: 'data:image/svg+xml;base64,AAAA' }],
+  ])('rejects %s', (_name, m) => {
+    const plan = buildPlan(withMap(m), ctx);
+    expect(plan.ok).toBe(false);
+    expect(plan.issues.some((i) => i.level === 'error')).toBe(true);
+  });
+
+  it('rejects two maps for one entry', () => {
+    const plan = buildPlan({ ...base(), maps: [{ entity: 'town', image: IMG }, { entity: 'town', image: IMG }] }, ctx);
+    expect(plan.ok).toBe(false);
+  });
+
+  it('hides tags, and a creature\'s stat block, tactics and loot, until the DM shows them', () => {
+    const pack = base();
+    (pack.entities as unknown[]).push({ key: 'wolf', type: 'monster', name: 'Wolf', parent: 'town', statBlock: '**Bite**', attributes: { tactics: 'Circles', harvestableLoot: 'Pelt' } });
+    const plan = buildPlan(pack, ctx);
+    expect(plan.issues).toEqual([]);
+    const wolf = plan.entities.find((e) => e.name === 'Wolf')!;
+    expect(Object.keys(wolf.fieldPermissions!).sort()).toEqual(['harvestableLoot', 'statBlock', 'tactics', 'tags']);
+    expect(wolf.fieldPermissions!.statBlock).toEqual({ isPublic: false, allowedPlayers: [] });
+    const town = plan.entities.find((e) => e.name === 'Town')!;
+    expect(Object.keys(town.fieldPermissions!)).toEqual(['tags']);
   });
 });

@@ -10,13 +10,16 @@
  *  - Ids are derived from the pack id + the entry's key, so importing twice can never duplicate.
  *  - Unknown types, fields, select options, links and parents are errors, not guesses.
  */
-import type { DndStats, Entity, EntityType, Relationship } from '../types';
-import { builtinMeta, fieldsFor, isEntityType, storageType, typeMeta, type FieldSchema } from './entityTypes';
+import type { DndStats, Entity, EntityType, MapPin, MediaDoc, Relationship } from '../types';
+import { builtinMeta, fieldsFor, isEntityType, permissionKeys, storageType, typeMeta, type FieldSchema } from './entityTypes';
 import type { BuiltinType } from '../types';
 
 export const PACK_FORMAT = 'dndocs-campaign-pack';
 export const PACK_VERSION = 1;
 export const MAX_ENTRIES = 600;
+export const MAX_MAPS = 24;
+/** The security rules refuse a media document of 1 MiB or more; leave a margin. */
+export const MAX_MAP_CHARS = 1_000_000;
 
 export interface PackEntity {
   key: string;
@@ -41,12 +44,28 @@ export interface PackRelationship {
   reverseLabel?: string;
 }
 
+/** A map image for one entry, with pins that point at other entries (positions are percentages 0 to 100). */
+export interface PackMap {
+  entity: string;
+  /** A `data:image/webp|jpeg|png;base64,...` URL. */
+  image: string;
+  pins?: { target: string; x: number; y: number }[];
+}
+
 export interface CampaignPack {
   format: typeof PACK_FORMAT;
   version: number;
   pack: { id: string; name: string; description?: string };
   entities: PackEntity[];
   relationships?: PackRelationship[];
+  maps?: PackMap[];
+}
+
+export interface PlannedMap {
+  entityId: string;
+  entityName: string;
+  media: MediaDoc;
+  pins: MapPin[];
 }
 
 export interface Issue {
@@ -60,6 +79,7 @@ export interface ImportPlan {
   pack: CampaignPack['pack'] | null;
   entities: Entity[];
   relationships: Relationship[];
+  maps: PlannedMap[];
   issues: Issue[];
   /** Entries per entry type, for the preview. */
   counts: Record<string, number>;
@@ -72,9 +92,27 @@ const STAT_TEXT = ['armorClass', 'hitPoints', 'speed', 'skills', 'senses', 'lang
 
 /** Entries made from a pack always get ids like `seed-<pack>-<key>`. */
 export const entityIdFor = (packId: string, key: string) => `seed-${packId}-${key}`;
+export const mediaIdFor = (packId: string, key: string) => `seedmedia-${packId}-${key}`;
+export const isPackMediaId = (packId: string, id: string) => id.startsWith(`seedmedia-${packId}-`);
 export const relationshipIdFor = (packId: string, source: string, target: string) => `seedrel-${packId}-${source}--${target}`;
 export const isPackEntityId = (packId: string, id: string) => id.startsWith(`seed-${packId}-`);
 export const isPackRelationshipId = (packId: string, id: string) => id.startsWith(`seedrel-${packId}-`);
+
+/**
+ * Fields that start hidden even after the DM reveals an entry, because they are DM material:
+ * the tags (they hold act labels), a creature's stat block and its tactics and loot. The DM can
+ * show any of them later with the usual per-field switches.
+ */
+function defaultHiddenFields(type: EntityType, attributeKeys: string[], hasStats: boolean): NonNullable<Entity['fieldPermissions']> {
+  const allowed = new Set(permissionKeys(type));
+  const base = storageType(type).type;
+  const want = ['tags'];
+  if (hasStats) want.push('statBlock');
+  if (base === 'monster') want.push('tactics', 'harvestableLoot');
+  const out: NonNullable<Entity['fieldPermissions']> = {};
+  for (const k of want) if (allowed.has(k) && (k === 'tags' || k === 'statBlock' || attributeKeys.includes(k))) out[k] = { isPublic: false, allowedPlayers: [] };
+  return out;
+}
 
 const entryLink = (name: string, id: string) => `[${name.replace(/[[\]]/g, '')}](/entity/${id})`;
 
@@ -89,7 +127,7 @@ export function parsePackText(text: string): { raw: unknown; error?: string } {
 }
 
 function emptyPlan(issues: Issue[]): ImportPlan {
-  return { ok: false, pack: null, entities: [], relationships: [], issues, counts: {} };
+  return { ok: false, pack: null, entities: [], relationships: [], maps: [], issues, counts: {} };
 }
 
 /** Checks a pack and builds the documents it would create. Never throws. */
@@ -264,7 +302,7 @@ export function buildPlan(raw: unknown, ctx: { campaignId: string; uid: string; 
       sharedWith: [],
       shareV: storage.type === 'note' ? undefined : 2,
       playerKnowledge: {},
-      fieldPermissions: {},
+      fieldPermissions: defaultHiddenFields(type, Object.keys(attributes), !!(e.statBlock || dndStats)),
       locationId: e.parent ? idOf(e.parent) : null,
       gender: storage.type === 'npc' ? e.gender || null : null,
       imageUrls: [],
@@ -319,10 +357,71 @@ export function buildPlan(raw: unknown, ctx: { campaignId: string; uid: string; 
     });
   }
 
+  // ---- maps ---------------------------------------------------------------------------
+  const maps: PlannedMap[] = [];
+  const rawMaps = raw.maps === undefined ? [] : raw.maps;
+  if (!Array.isArray(rawMaps)) err('maps', '"maps" must be a list.');
+  else {
+    if (rawMaps.length > MAX_MAPS) err('maps', `A pack can have at most ${MAX_MAPS} maps.`);
+    const seenMap = new Set<string>();
+    for (const [i, m] of rawMaps.entries()) {
+      const where = `map #${i + 1}`;
+      if (!isRecord(m) || typeof m.entity !== 'string' || typeof m.image !== 'string') {
+        err(where, 'Needs "entity" (an entry key) and "image" (a data URL).');
+        continue;
+      }
+      const owner = byKey.get(m.entity);
+      if (!owner) {
+        err(where, `Entry "${m.entity}" isn't in the pack.`);
+        continue;
+      }
+      if (seenMap.has(m.entity)) {
+        err(where, `"${m.entity}" has two maps; an entry can have one.`);
+        continue;
+      }
+      seenMap.add(m.entity);
+      if (!/^data:image\/(webp|jpeg|png);base64,[A-Za-z0-9+/=]+$/.test(m.image)) {
+        err(where, 'The image must be a base64 data URL (webp, jpeg or png).');
+        continue;
+      }
+      if (m.image.length >= MAX_MAP_CHARS) {
+        err(where, `The image is too big (${Math.round(m.image.length / 1000)} KB; the limit is ${Math.round(MAX_MAP_CHARS / 1000)} KB). Re-export it smaller.`);
+        continue;
+      }
+      const pins: MapPin[] = [];
+      const pinned = new Set<string>();
+      if (m.pins !== undefined && (!Array.isArray(m.pins) || m.pins.length > 80)) err(where, '"pins" must be a list of up to 80.');
+      else
+        for (const [j, p] of ((m.pins as unknown[]) ?? []).entries()) {
+          if (!isRecord(p) || typeof p.target !== 'string' || typeof p.x !== 'number' || typeof p.y !== 'number' || p.x < 0 || p.x > 100 || p.y < 0 || p.y > 100) {
+            err(where, `Pin #${j + 1} needs a "target" key and "x" and "y" between 0 and 100.`);
+            continue;
+          }
+          if (!byKey.has(p.target)) {
+            err(where, `Pin #${j + 1} points to "${p.target}", which isn't in the pack.`);
+            continue;
+          }
+          if (pinned.has(p.target)) {
+            warn(where, `"${p.target}" is pinned twice; only the first is used.`);
+            continue;
+          }
+          pinned.add(p.target);
+          pins.push({ x: Math.round(p.x * 100) / 100, y: Math.round(p.y * 100) / 100, targetEntityId: idOf(p.target) });
+        }
+      const mime = m.image.slice(5, m.image.indexOf(';'));
+      maps.push({
+        entityId: idOf(m.entity),
+        entityName: owner.name,
+        media: { id: mediaIdFor(packMeta.id, m.entity), entityId: idOf(m.entity), campaignId: ctx.campaignId, data: m.image, mimeType: mime, ownerId: ctx.uid, createdAt: now },
+        pins,
+      });
+    }
+  }
+
   const counts: Record<string, number> = {};
   for (const e of entries) counts[e.type] = (counts[e.type] ?? 0) + 1;
   const ok = !issues.some((i) => i.level === 'error');
-  return { ok, pack: packMeta, entities: ok ? stripUndefined(built) : [], relationships: ok ? relDocs : [], issues, counts };
+  return { ok, pack: packMeta, entities: ok ? stripUndefined(built) : [], relationships: ok ? relDocs : [], maps: ok ? maps : [], issues, counts };
 }
 
 /** Firestore rejects `undefined`. */

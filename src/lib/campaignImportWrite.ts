@@ -8,8 +8,8 @@
  */
 import { collection, deleteDoc, doc, getDocFromServer, getDocs, query, setDoc, updateDoc, where } from 'firebase/firestore';
 import { db } from '../firebase';
-import type { Entity, Relationship } from '../types';
-import { isPackEntityId, isPackRelationshipId, type ImportPlan } from './campaignImport';
+import type { Entity, MapPin, Relationship } from '../types';
+import { isPackEntityId, isPackMediaId, isPackRelationshipId, type ImportPlan } from './campaignImport';
 
 export type ImportMode = 'skip' | 'update';
 
@@ -19,6 +19,8 @@ export interface ImportSummary {
   skipped: number;
   relationshipsCreated: number;
   relationshipsSkipped: number;
+  mapsSet: number;
+  mapsSkipped: number;
   failed: { id: string; name: string; error: string }[];
 }
 
@@ -53,9 +55,13 @@ async function withRetry<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
   throw last;
 }
 
-/** The fields an "update" overwrites. Who can see the entry, images and map pins are never touched. */
-function updatableFields(e: Entity) {
+/**
+ * The fields an "update" overwrites. Who can see the entry and its images are never touched, and neither are
+ * fields the DM has already chosen to show or hide (only the pack's defaults for fields not decided yet are added).
+ */
+function updatableFields(e: Entity, existing: Entity) {
   return {
+    fieldPermissions: { ...(e.fieldPermissions ?? {}), ...(existing.fieldPermissions ?? {}) },
     name: e.name,
     content: e.content,
     tags: e.tags,
@@ -74,8 +80,8 @@ export async function runImport(
   opts: { mode: ImportMode; campaignId: string; onProgress?: (done: number, total: number) => void },
 ): Promise<ImportSummary> {
   if (!plan.ok) throw new Error('This pack has errors and can\'t be imported.');
-  const summary: ImportSummary = { created: 0, updated: 0, skipped: 0, relationshipsCreated: 0, relationshipsSkipped: 0, failed: [] };
-  const total = plan.entities.length + plan.relationships.length;
+  const summary: ImportSummary = { created: 0, updated: 0, skipped: 0, relationshipsCreated: 0, relationshipsSkipped: 0, mapsSet: 0, mapsSkipped: 0, failed: [] };
+  const total = plan.entities.length + plan.relationships.length + plan.maps.length;
   let done = 0;
   const tick = () => opts.onProgress?.(++done, total);
 
@@ -91,7 +97,7 @@ export async function runImport(
           const data = existing.data() as Entity;
           if (data.campaignId !== opts.campaignId) throw new Error('An entry with this id belongs to another campaign.');
           if (opts.mode === 'update') {
-            await withRetry(() => updateDoc(ref, updatableFields(entity)));
+            await withRetry(() => updateDoc(ref, updatableFields(entity, data)));
             summary.updated++;
           } else summary.skipped++;
         } else {
@@ -128,12 +134,51 @@ export async function runImport(
     },
     tick,
   );
+
+  // Maps: the image goes in its own document, then the entry points at it. Pins are only added for targets that
+  // aren't pinned yet, so pins the DM moved or added by hand are never disturbed. An entry that already has a
+  // map of its own keeps it unless the DM chose "update".
+  await pool(
+    plan.maps,
+    async (m) => {
+      if (failedIds.has(m.entityId)) {
+        summary.failed.push({ id: m.media.id, name: `Map for ${m.entityName}`, error: 'Skipped because the entry failed.' });
+        return;
+      }
+      try {
+        const ref = doc(db, 'entities', m.entityId);
+        const snap = await withRetry(() => getDocFromServer(ref));
+        if (!snap.exists()) throw new Error('The entry for this map doesn\'t exist.');
+        const data = snap.data() as Entity;
+        if (data.campaignId !== opts.campaignId) throw new Error('This entry belongs to another campaign.');
+        const ownMap = data.mapConfig?.mediaId;
+        if (ownMap && !isPackMediaId(plan.pack!.id, ownMap)) {
+          summary.mapsSkipped++; // the DM's own map
+          return;
+        }
+        const mediaRef = doc(db, 'media', m.media.id);
+        const have = await withRetry(() => getDocFromServer(mediaRef));
+        if (!have.exists() || opts.mode === 'update') await withRetry(() => setDoc(mediaRef, m.media));
+        const pinned = new Set((data.mapConfig?.pins ?? []).map((p) => p.targetEntityId));
+        const pins: MapPin[] = [...(data.mapConfig?.pins ?? []), ...m.pins.filter((p) => !pinned.has(p.targetEntityId))];
+        if (ownMap === m.media.id && pins.length === (data.mapConfig?.pins ?? []).length && opts.mode === 'skip') summary.mapsSkipped++;
+        else {
+          await withRetry(() => updateDoc(ref, { mapConfig: { mediaId: m.media.id, pins }, updatedAt: new Date().toISOString() }));
+          summary.mapsSet++;
+        }
+      } catch (e) {
+        summary.failed.push({ id: m.media.id, name: `Map for ${m.entityName}`, error: errText(e) });
+      }
+    },
+    tick,
+  );
   return summary;
 }
 
 export interface RemovalSummary {
   entities: number;
   relationships: number;
+  maps: number;
   detached: number;
   failed: number;
 }
@@ -156,7 +201,8 @@ export async function removePack(packId: string, campaignId: string, current: { 
     })
     .map((d) => d.id);
 
-  const out: RemovalSummary = { entities: 0, relationships: 0, detached: 0, failed: 0 };
+  const out: RemovalSummary = { entities: 0, relationships: 0, maps: 0, detached: 0, failed: 0 };
+  const mapIds = [...new Set(mine.map((e) => e.mapConfig?.mediaId).filter((id): id is string => !!id && isPackMediaId(packId, id)))];
   await pool(orphans, async (e) => {
     try {
       await withRetry(() => updateDoc(doc(db, 'entities', e.id), { locationId: null, updatedAt: new Date().toISOString() }));
@@ -169,6 +215,14 @@ export async function removePack(packId: string, campaignId: string, current: { 
     try {
       await withRetry(() => deleteDoc(doc(db, 'relationships', id)));
       out.relationships++;
+    } catch {
+      out.failed++;
+    }
+  });
+  await pool(mapIds, async (id) => {
+    try {
+      await withRetry(() => deleteDoc(doc(db, 'media', id)));
+      out.maps++;
     } catch {
       out.failed++;
     }
