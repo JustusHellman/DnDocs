@@ -8,6 +8,7 @@ import { useToast } from '../contexts/ToastContext';
 import { quickCreateEntity } from '../lib/entityService';
 import type { EntityType } from '../types';
 import { EmptyState, Page, PageHeader } from '../components/ui/bits';
+import DMPackImport from '../components/DMPackImport';
 
 const pick = <T,>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)];
 
@@ -252,6 +253,7 @@ export default function DMTools() {
           saving={saving === 'loot'}
           onSave={loot ? () => save('loot', loot.replace(/^An? /, '').replace(/^./, (c) => c.toUpperCase()), 'item', loot, { itemCategory: 'Other' }, ['loot']) : undefined}
         />
+        <DMPackImport />
         {import.meta.env.DEV && <DevImageGenerator />}
       </div>
     </Page>
