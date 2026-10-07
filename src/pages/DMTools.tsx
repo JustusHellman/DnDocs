@@ -9,6 +9,7 @@ import { quickCreateEntity } from '../lib/entityService';
 import type { EntityType } from '../types';
 import { EmptyState, Page, PageHeader } from '../components/ui/bits';
 import DMPackImport from '../components/DMPackImport';
+import DMCampaignExport from '../components/DMCampaignExport';
 
 const pick = <T,>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)];
 
@@ -254,6 +255,7 @@ export default function DMTools() {
           onSave={loot ? () => save('loot', loot.replace(/^An? /, '').replace(/^./, (c) => c.toUpperCase()), 'item', loot, { itemCategory: 'Other' }, ['loot']) : undefined}
         />
         <DMPackImport />
+        <DMCampaignExport />
         {import.meta.env.DEV && <DevImageGenerator />}
       </div>
     </Page>

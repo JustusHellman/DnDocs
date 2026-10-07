@@ -8,7 +8,7 @@ import { useToast } from '../contexts/ToastContext';
 import { useConfirm } from '../contexts/ConfirmContext';
 import { Modal } from '../components/ui/Modal';
 import { EmptyState, Page, PageHeader, Toggle } from '../components/ui/bits';
-import { BUILTIN_TYPES, builtinMeta, builtinRevealDefault, ENTITY_TYPES, slugForType, TYPE_ICONS, typeMeta, type EntityTypeMeta } from '../lib/entityTypes';
+import { BUILTIN_TYPES, builtinMeta, ENTITY_TYPES, slugForType, TYPE_ICONS, typeMeta, type EntityTypeMeta } from '../lib/entityTypes';
 import { updateTypeConfig } from '../lib/entityService';
 import type { BuiltinType, CustomFieldDef, CustomTypeDef, FieldKind, TypeConfig, TypeOverride } from '../types';
 
@@ -265,12 +265,6 @@ function TypeEditor({ id, config, campaignId, count, onClose }: { id: string; co
             <p className="hint mt-1">Hiding a field keeps what’s already written in it; it’s just not shown or asked for.</p>
           </div>
           <FieldsEditor title="Your extra fields" fields={override.extraFields ?? []} onChange={(extraFields) => setOverride({ ...override, extraFields })} />
-          <RevealDefaultsEditor
-            base={id as BuiltinType}
-            fields={[...stock!.fields.filter((f) => !override.hiddenFields?.includes(f.key)), ...(override.extraFields ?? []).filter((f) => f.label.trim())]}
-            value={override.revealDefaults ?? {}}
-            onChange={(revealDefaults) => setOverride({ ...override, revealDefaults })}
-          />
         </div>
       ) : (
         <div className="space-y-5">
@@ -342,12 +336,6 @@ function TypeEditor({ id, config, campaignId, count, onClose }: { id: string; co
             </label>
           </div>
           <FieldsEditor title="Fields" fields={custom.fields} onChange={(fields) => setCustom({ ...custom, fields })} />
-          <RevealDefaultsEditor
-            base={custom.base}
-            fields={custom.fields.filter((f) => f.label.trim())}
-            value={custom.revealDefaults ?? {}}
-            onChange={(revealDefaults) => setCustom({ ...custom, revealDefaults })}
-          />
         </div>
       )}
     </Modal>
@@ -433,65 +421,5 @@ function cleanOverride(o: TypeOverride): TypeOverride {
   if (o.hiddenFields?.length) out.hiddenFields = o.hiddenFields;
   const extra = (o.extraFields ?? []).filter((f) => f.label.trim()).map((f) => ({ ...f, label: f.label.trim() }));
   if (extra.length) out.extraFields = extra;
-  if (o.revealDefaults && Object.keys(o.revealDefaults).length) out.revealDefaults = o.revealDefaults;
   return out;
-}
-
-const BASE_KEYS: { key: string; label: string; only?: string[] }[] = [
-  { key: 'content', label: 'Description' },
-  { key: 'imageUrls', label: 'Images' },
-  { key: 'locationId', label: 'Location' },
-  { key: 'gender', label: 'Gender', only: ['npc'] },
-  { key: 'statBlock', label: 'Stat block', only: ['npc', 'monster'] },
-  { key: 'tags', label: 'Tags' },
-];
-
-/** Which fields "Reveal" ticks by default for this type. */
-function RevealDefaultsEditor({
-  base,
-  fields,
-  value,
-  onChange,
-}: {
-  base: BuiltinType;
-  fields: { key: string; label: string; rating?: boolean }[];
-  value: Record<string, boolean>;
-  onChange: (v: Record<string, boolean>) => void;
-}) {
-  const rows = [
-    ...BASE_KEYS.filter((b) => !b.only || b.only.includes(base)).map((b) => ({ key: b.key, label: b.label, rating: false })),
-    ...fields.map((f) => ({ key: f.key, label: f.label, rating: !!f.rating })),
-  ];
-  const builtIn = (k: string, rating: boolean) => (rating ? false : builtinRevealDefault(base, k));
-  return (
-    <div>
-      <span className="label">When revealed, show by default</span>
-      <p className="hint mb-2">These are pre-ticked in the Reveal panel. You can still change them each time.</p>
-      <div className="flex flex-wrap gap-1.5">
-        {rows.map((r) => {
-          const on = value[r.key] ?? builtIn(r.key, r.rating);
-          return (
-            <button
-              key={r.key}
-              type="button"
-              aria-pressed={on}
-              onClick={() => {
-                const next = { ...value };
-                if (!on === builtIn(r.key, r.rating)) delete next[r.key];
-                else next[r.key] = !on;
-                onChange(next);
-              }}
-              className={clsx(
-                'flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs',
-                on ? 'border-emerald-600/50 bg-emerald-500/10 text-emerald-300' : 'border-stone-700 text-stone-500',
-              )}
-            >
-              {on ? <Eye size={12} /> : <EyeOff size={12} />}
-              {r.label}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
 }

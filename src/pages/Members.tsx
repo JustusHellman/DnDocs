@@ -12,6 +12,7 @@ import { GiMeepleGroup } from 'react-icons/gi';
 import { Modal } from '../components/ui/Modal';
 import { MenuItem, Popover } from '../components/ui/Popover';
 import InviteModal from '../components/InviteModal';
+import DeleteCampaignCard from '../components/DeleteCampaignCard';
 
 function MemberMenu({ member }: { member: User }) {
   const { currentCampaign } = useAuth();
@@ -204,6 +205,8 @@ export default function Members() {
           </div>
         </section>
       )}
+
+      {isOwner && <DeleteCampaignCard />}
 
       <InviteModal open={inviteOpen} onClose={() => setInviteOpen(false)} />
       <Modal

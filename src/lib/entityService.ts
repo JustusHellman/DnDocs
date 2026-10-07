@@ -14,7 +14,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import type { Campaign, DndStats, Entity, EntityType, MapPin, MediaDoc, Relationship, RevealEvent, TypeConfig, User } from '../types';
-import { derivedPlayers, explicitShare, planReveal, toV3, type RevealAudience } from './sharing';
+import { upgradeSharing } from './permissions';
 import { baseType, fieldsFor, isEntityType, normalizeEntity, permissionKeys, storageType } from './entityTypes';
 import { isMediaRef, MEDIA_PREFIX, mediaIdOf, primeMediaCache, forgetMedia, makeThumbnail, resolveImageSrc } from './media';
 
@@ -85,7 +85,37 @@ interface SaveContext {
   pendingRelationships?: PendingRelationship[];
 }
 
-export { derivedPlayers, explicitShare } from './sharing';
+/**
+ * Players that get read access *because of* field permissions or player knowledge.
+ * A field visible to "all players" only widens access for otherwise secret entries
+ * (legacy behaviour: a secret entry with a public field is findable by everyone);
+ * it never overrides an explicit "Some players" selection.
+ */
+export function derivedPlayers(
+  entity: Pick<Entity, 'isPublic' | 'playerKnowledge' | 'fieldPermissions'>,
+  explicit: string[],
+  players: User[],
+): Set<string> {
+  const out = new Set<string>();
+  for (const [uid, text] of Object.entries(entity.playerKnowledge ?? {})) if (text?.trim()) out.add(uid);
+  for (const perm of Object.values(entity.fieldPermissions ?? {})) {
+    if (perm.isPublic) {
+      if (!entity.isPublic && explicit.length === 0) players.forEach((p) => out.add(p.uid));
+    } else perm.allowedPlayers?.forEach((p) => out.add(p));
+  }
+  return out;
+}
+
+/** The DM's explicit selection for an existing entry (older entries didn't store it separately). */
+export function explicitShare(entity: Entity, players: User[]): string[] {
+  if (entity.sharedWith) return entity.sharedWith;
+  const derived = derivedPlayers({ ...entity, isPublic: true }, [], players); // knowledge + specific fields only
+  const rest = (entity.allowedPlayers ?? []).filter((p) => !derived.has(p));
+  // Old "secret + public field" entries had every player added; that wasn't an explicit choice.
+  const hasPublicField = Object.values(entity.fieldPermissions ?? {}).some((p) => p.isPublic);
+  if (!entity.isPublic && hasPublicField && players.every((p) => rest.includes(p.uid))) return [];
+  return rest;
+}
 
 function computeAllowedPlayers(draft: EntityDraft, isDM: boolean, players: User[]): string[] {
   const explicit = draft.allowedPlayers ?? [];
@@ -164,7 +194,7 @@ export async function saveEntity(draft: EntityDraft, ctx: SaveContext): Promise<
   const sharedWith = isDM ? [...new Set(draft.allowedPlayers ?? [])] : previous?.sharedWith;
   const reveals = [...(previous?.reveals ?? [])];
   if (isDM && draft.type !== 'note') {
-    const before = previous ? (previous.isPublic ? ['*'] : toV3(previous).sharedWith ?? []) : [];
+    const before = previous ? (previous.isPublic ? ['*'] : previous.sharedWith ?? explicitShare(previous, players)) : [];
     if (draft.isPublic && !before.includes('*')) reveals.push({ at: Date.now(), to: ['*'] });
     else if (!draft.isPublic) {
       const added = (sharedWith ?? []).filter((u) => !before.includes(u));
@@ -185,7 +215,7 @@ export async function saveEntity(draft: EntityDraft, ctx: SaveContext): Promise<
     isPublic: !!draft.isPublic,
     allowedPlayers: computeAllowedPlayers(draft, isDM, players),
     sharedWith,
-    shareV: isDM && draft.type !== 'note' ? 3 : previous?.shareV,
+    shareV: isDM && draft.type !== 'note' ? 2 : previous?.shareV,
     reveals: reveals.length ? reveals.slice(-50) : undefined,
     playerKnowledge: draft.playerKnowledge ?? {},
     fieldPermissions: draft.fieldPermissions ?? {},
@@ -284,7 +314,7 @@ export async function quickCreateEntity(opts: QuickCreateOptions): Promise<Entit
     allowedPlayers: opts.type === 'note' && opts.user.uid !== opts.campaign.dmId ? [opts.campaign.dmId] : [],
     playerKnowledge: {},
     fieldPermissions: {},
-    shareV: opts.type !== 'note' ? 3 : undefined,
+    shareV: opts.type !== 'note' ? 2 : undefined,
     locationId: opts.locationId || null,
     gender: null,
     imageUrls: [],
@@ -371,27 +401,36 @@ export async function deleteRelationshipPair(rel: Relationship) {
 // ---------------------------------------------------------------------------
 
 /**
- * The DM's "Reveal": gives the audience access to the entry, shows exactly the chosen fields and,
- * optionally, pops it up on their screens. Logged for the Chronicle.
+ * The DM's one-click "Reveal": gives the chosen players (or everyone) access and, optionally,
+ * pops the entry up on their screens right away. Logged for the Chronicle.
  */
-export async function revealEntity(entity: Entity, opts: RevealAudience & { fields: Iterable<string>; show: boolean; allPlayers: User[] }) {
+export async function revealEntity(
+  entity: Entity,
+  opts: { everyone: boolean; players: string[]; show: boolean; allPlayers: User[] },
+) {
   const now = Date.now();
-  const plan = planReveal(entity, opts, opts.fields, opts.allPlayers, now);
-  const update: Record<string, unknown> = { ...plan.update };
-  if (opts.show) {
-    if (!plan.newAccess.length && !plan.newFields.length) {
-      update.reveals = [...(entity.reveals ?? []), { at: now, to: opts.everyone ? ['*'] : opts.players, showOnly: true }].slice(-50);
-    }
-    update.lastPushedAt = now;
-    update.lastPushedTo = opts.everyone ? [] : opts.players;
+  const explicit = entity.sharedWith ?? explicitShare(entity, opts.allPlayers);
+  const update: Record<string, unknown> = { shareV: 2 };
+  // Older shared entries: keep their players' view unchanged. (Public entries already show
+  // every unlocked field, so revealing to everyone needs no upgrade.)
+  if (!opts.everyone) update.fieldPermissions = upgradeSharing(entity, explicit, permissionKeys(entity.type));
+  const already = entity.isPublic ? opts.allPlayers.map((p) => p.uid) : explicit;
+  const newly = opts.everyone ? (entity.isPublic ? [] : ['*']) : opts.players.filter((u) => !already.includes(u));
+  if (opts.everyone) update.isPublic = true;
+  else if (newly.length) {
+    update.sharedWith = [...new Set([...explicit, ...newly])];
+    update.allowedPlayers = arrayUnion(...newly);
   }
-  await updateDoc(doc(db, 'entities', entity.id), clean(update));
-  return plan;
-}
-
-/** Write a plan made by the sharing helpers (e.g. the per-field switch on an entry). */
-export function applySharingUpdate(entityId: string, update: Partial<Entity>) {
-  return updateDoc(doc(db, 'entities', entityId), clean(update) as Record<string, unknown>);
+  const target = opts.everyone ? [] : opts.players;
+  const events: RevealEvent[] = [];
+  if (newly.length) events.push({ at: now, to: newly });
+  else if (opts.show) events.push({ at: now, to: opts.everyone ? ['*'] : target, showOnly: true });
+  if (events.length) update.reveals = [...(entity.reveals ?? []), ...events].slice(-50);
+  if (opts.show) {
+    update.lastPushedAt = now;
+    update.lastPushedTo = target;
+  }
+  await updateDoc(doc(db, 'entities', entity.id), update);
 }
 
 export function updateMapPins(entityId: string, pins: MapPin[]) {

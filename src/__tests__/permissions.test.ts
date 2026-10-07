@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canViewEntity, canViewField } from '../lib/permissions';
+import { canViewEntity, canViewField, upgradeSharing } from '../lib/permissions';
 import type { Entity } from '../types';
 
 const base = (over: Partial<Entity> = {}): Entity => ({
@@ -46,6 +46,16 @@ describe('sharing model', () => {
     expect(canViewField(p1, e, 'content')).toBe(true);
     expect(canViewField(p1, e, 'age')).toBe(false);
     expect(canViewEntity(p2, e)).toBe(false);
+  });
+  it('upgrading an older shared entry changes nothing for its players', () => {
+    const old = base({ allowedPlayers: ['p1'], fieldPermissions: { race: { isPublic: false, allowedPlayers: ['p1'] } } });
+    const keys = ['content', 'race', 'age'];
+    const upgraded = base({ ...old, shareV: 2, sharedWith: ['p1'], fieldPermissions: upgradeSharing(old, ['p1'], keys) });
+    for (const k of keys) expect(canViewField(p1, upgraded, k)).toBe(canViewField(p1, old, k));
+  });
+  it('leaves public and unshared entries alone when upgrading', () => {
+    expect(upgradeSharing(base({ isPublic: true }), [], ['content'])).toEqual({});
+    expect(upgradeSharing(base(), [], ['content'])).toEqual({});
   });
   it('never shows values of fields that are no longer part of the type', () => {
     const e = base({ isPublic: true, attributes: { oldSecret: 'betrays them' } });

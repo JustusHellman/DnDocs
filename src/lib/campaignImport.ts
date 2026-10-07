@@ -300,7 +300,7 @@ export function buildPlan(raw: unknown, ctx: { campaignId: string; uid: string; 
       isPublic: false,
       allowedPlayers: [],
       sharedWith: [],
-      shareV: storage.type === 'note' ? undefined : 3,
+      shareV: storage.type === 'note' ? undefined : 2,
       playerKnowledge: {},
       fieldPermissions: defaultHiddenFields(type, Object.keys(attributes), !!(e.statBlock || dndStats)),
       locationId: e.parent ? idOf(e.parent) : null,

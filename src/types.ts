@@ -61,8 +61,6 @@ export interface CustomTypeDef {
   base: Exclude<BuiltinType, 'note'>;
   group: 'Adventure' | 'Characters' | 'World';
   fields: CustomFieldDef[];
-  /** Which fields "Reveal" ticks by default (key -> shown). */
-  revealDefaults?: Record<string, boolean>;
 }
 
 export interface TypeOverride {
@@ -73,8 +71,6 @@ export interface TypeOverride {
   extraFields?: CustomFieldDef[];
   /** Hide the type from menus (existing entries stay). */
   hidden?: boolean;
-  /** Which fields "Reveal" ticks by default (key -> shown). Missing keys use the built-in default. */
-  revealDefaults?: Record<string, boolean>;
 }
 
 export interface TypeConfig {
@@ -147,12 +143,10 @@ export interface Entity {
   /** Who the last "show on screen" was for (empty/missing: everyone who can see it). */
   lastPushedTo?: string[];
   /**
-   * How fields without their own setting behave:
-   * 3 = hidden until revealed (current model; every revealed field has an explicit setting).
-   * 2 = visible to everyone who can see the entry.
-   * missing (oldest entries) = visible only when the entry is public.
+   * 2 = fields without their own setting are visible to everyone who can see the entry.
+   * Older entries (missing) only showed such fields when the entry was public.
    */
-  shareV?: 2 | 3;
+  shareV?: 2;
   /** Log of when the DM revealed / showed this entry (for the Chronicle). */
   reveals?: RevealEvent[];
   createdAt: string;
@@ -165,8 +159,6 @@ export interface RevealEvent {
   to: string[];
   /** true when it was only shown on screens (access already existed). */
   showOnly?: boolean;
-  /** Fields that became visible with this reveal. */
-  fields?: string[];
 }
 
 export interface Relationship {
