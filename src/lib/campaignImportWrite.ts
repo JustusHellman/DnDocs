@@ -8,6 +8,7 @@
  */
 import { collection, deleteDoc, doc, getDocFromServer, getDocs, query, setDoc, updateDoc, where } from 'firebase/firestore';
 import { db } from '../firebase';
+import { syncStamp, writeResyncHint } from './sync';
 import type { Entity, MapPin, Relationship } from '../types';
 import { isPackEntityId, isPackMediaId, isPackRelationshipId, type ImportPlan } from './campaignImport';
 
@@ -97,11 +98,11 @@ export async function runImport(
           const data = existing.data() as Entity;
           if (data.campaignId !== opts.campaignId) throw new Error('An entry with this id belongs to another campaign.');
           if (opts.mode === 'update') {
-            await withRetry(() => updateDoc(ref, updatableFields(entity, data)));
+            await withRetry(() => updateDoc(ref, { ...updatableFields(entity, data), ...syncStamp() }));
             summary.updated++;
           } else summary.skipped++;
         } else {
-          await withRetry(() => setDoc(ref, entity));
+          await withRetry(() => setDoc(ref, { ...entity, ...syncStamp() }));
           summary.created++;
         }
       } catch (e) {
@@ -125,7 +126,7 @@ export async function runImport(
         const existing = await withRetry(() => getDocFromServer(ref));
         if (existing.exists()) summary.relationshipsSkipped++;
         else {
-          await withRetry(() => setDoc(ref, rel));
+          await withRetry(() => setDoc(ref, { ...rel, ...syncStamp() }));
           summary.relationshipsCreated++;
         }
       } catch (e) {
@@ -163,7 +164,7 @@ export async function runImport(
         const pins: MapPin[] = [...(data.mapConfig?.pins ?? []), ...m.pins.filter((p) => !pinned.has(p.targetEntityId))];
         if (ownMap === m.media.id && pins.length === (data.mapConfig?.pins ?? []).length && opts.mode === 'skip') summary.mapsSkipped++;
         else {
-          await withRetry(() => updateDoc(ref, { mapConfig: { mediaId: m.media.id, pins }, updatedAt: new Date().toISOString() }));
+          await withRetry(() => updateDoc(ref, { mapConfig: { mediaId: m.media.id, pins }, updatedAt: new Date().toISOString(), ...syncStamp() }));
           summary.mapsSet++;
         }
       } catch (e) {
@@ -172,6 +173,12 @@ export async function runImport(
     },
     tick,
   );
+  // Many changes at once: tell every device to reload in full rather than piecemeal.
+  if (summary.created || summary.updated || summary.relationshipsCreated || summary.mapsSet) {
+    await withRetry(() => writeResyncHint(opts.campaignId)).catch((e) =>
+      summary.failed.push({ id: 'sync', name: 'Telling other devices to reload', error: `${errText(e)} – players can use “Reload campaign data” to catch up.` }),
+    );
+  }
   return summary;
 }
 
@@ -205,7 +212,7 @@ export async function removePack(packId: string, campaignId: string, current: { 
   const mapIds = [...new Set(mine.map((e) => e.mapConfig?.mediaId).filter((id): id is string => !!id && isPackMediaId(packId, id)))];
   await pool(orphans, async (e) => {
     try {
-      await withRetry(() => updateDoc(doc(db, 'entities', e.id), { locationId: null, updatedAt: new Date().toISOString() }));
+      await withRetry(() => updateDoc(doc(db, 'entities', e.id), { locationId: null, updatedAt: new Date().toISOString(), ...syncStamp() }));
       out.detached++;
     } catch {
       out.failed++;
@@ -235,5 +242,6 @@ export async function removePack(packId: string, campaignId: string, current: { 
       out.failed++;
     }
   });
+  await withRetry(() => writeResyncHint(campaignId)).catch(() => out.failed++);
   return out;
 }

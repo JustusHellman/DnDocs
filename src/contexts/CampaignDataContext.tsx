@@ -1,5 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { collection, onSnapshot, query, where, type Query } from 'firebase/firestore';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { collection, query, where, type Query } from 'firebase/firestore';
 import { db } from '../firebase';
 import type { Entity, Relationship, User } from '../types';
 import { useAuth } from './AuthContext';
@@ -13,6 +13,8 @@ import {
   type Viewer,
 } from '../lib/permissions';
 import { logError } from '../lib/errors';
+import { CollectionSync } from '../lib/syncEngine';
+import { pruneSyncHints } from '../lib/sync';
 
 interface CampaignData {
   entities: Entity[];
@@ -32,9 +34,11 @@ interface CampaignData {
   viewer: Viewer | null;
   canView: (e: Entity) => boolean;
   canViewField: (e: Entity, field: string) => boolean;
-  canEdit: (e: Pick<Entity, 'type' | 'ownerId'>) => boolean;
-  canDelete: (e: Pick<Entity, 'type' | 'ownerId'>) => boolean;
+  canEdit: (e: Pick<Entity, 'type' | 'ownerId' | 'playerId'>) => boolean;
+  canDelete: (e: Pick<Entity, 'type' | 'ownerId' | 'playerId'>) => boolean;
   refreshMembers: () => void;
+  /** Download the whole campaign again (ignores what this device has cached). */
+  reloadFromServer: () => void;
 }
 
 const Ctx = createContext<CampaignData | undefined>(undefined);
@@ -44,6 +48,24 @@ const Ctx = createContext<CampaignData | undefined>(undefined);
  * its own listeners (up to 3 per component for players), which was slow and costly.
  */
 const backfilled = new Set<string>();
+
+const PROFILE_TTL_MS = 24 * 3600_000;
+const PROFILE_KEY = 'dndocs-profiles';
+type ProfileCache = Record<string, { at: number; user: User }>;
+function readProfileCache(): ProfileCache {
+  try {
+    return JSON.parse(localStorage.getItem(PROFILE_KEY) || '{}') as ProfileCache;
+  } catch {
+    return {};
+  }
+}
+function writeProfileCache(c: ProfileCache) {
+  try {
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(c));
+  } catch {
+    /* ignore */
+  }
+}
 
 export function CampaignDataProvider({ children }: { children: ReactNode }) {
   const { currentCampaign, user, isDM } = useAuth();
@@ -62,7 +84,9 @@ export function CampaignDataProvider({ children }: { children: ReactNode }) {
   const [members, setMembers] = useState<User[]>([]);
   const [membersVersion, setMembersVersion] = useState(0);
 
-  // Entities
+  // Entities and relationships: incremental sync (lib/syncEngine.ts) — a device that has the
+  // campaign cached only downloads what changed since its last visit.
+  const syncs = useRef<{ entities?: CollectionSync<Entity>; relationships?: CollectionSync<Relationship> }>({});
   useEffect(() => {
     if (!campaignId || !uid) {
       setEntities([]);
@@ -73,7 +97,6 @@ export function CampaignDataProvider({ children }: { children: ReactNode }) {
     setError(null);
     const col = collection(db, 'entities');
     const base = where('campaignId', '==', campaignId);
-
     // Players can only query what the security rules let them read, so we union three queries.
     const queries: Query[] = isDM
       ? [query(col, base)]
@@ -82,46 +105,67 @@ export function CampaignDataProvider({ children }: { children: ReactNode }) {
           query(col, base, where('ownerId', '==', uid)),
           query(col, base, where('allowedPlayers', 'array-contains', uid)),
         ];
-
-    const buckets: (Entity[] | null)[] = queries.map(() => null);
-    const publish = () => {
-      if (buckets.some((b) => b === null)) return;
-      const merged = new Map<string, Entity>();
-      buckets.forEach((b) => b!.forEach((e) => merged.set(e.id, e)));
-      setEntities([...merged.values()]);
-      setLoading(false);
+    const sync = new CollectionSync<Entity>({
+      key: `entities:${campaignId}:${uid}:${isDM ? 'dm' : 'player'}`,
+      campaignId,
+      coll: 'entities',
+      uid,
+      isDM,
+      queries,
+      onData: (docs) => {
+        setEntities(docs);
+        setLoading(false);
+      },
+      onError: setError,
+    });
+    syncs.current.entities = sync;
+    if (import.meta.env.DEV) ((window as unknown as { __sync?: Record<string, unknown> }).__sync ??= {}).entities = sync;
+    sync.start();
+    return () => {
+      sync.stop();
+      if (syncs.current.entities === sync) syncs.current.entities = undefined;
     };
-
-    const unsubs = queries.map((q, i) =>
-      onSnapshot(
-        q,
-        (snap) => {
-          buckets[i] = snap.docs.map((d) => d.data() as Entity);
-          publish();
-        },
-        (err) => {
-          logError('Entity listener', err);
-          buckets[i] = buckets[i] ?? [];
-          setError('Some entries could not be loaded. Check your connection.');
-          publish();
-        },
-      ),
-    );
-    return () => unsubs.forEach((u) => u());
   }, [campaignId, uid, isDM]);
 
-  // Relationships (one listener for the whole campaign)
   useEffect(() => {
     if (!campaignId || !uid) {
       setRelationships([]);
       return;
     }
-    return onSnapshot(
-      query(collection(db, 'relationships'), where('campaignId', '==', campaignId)),
-      (snap) => setRelationships(snap.docs.map((d) => d.data() as Relationship)),
-      (err) => logError('Relationship listener', err),
-    );
-  }, [campaignId, uid]);
+    const sync = new CollectionSync<Relationship>({
+      key: `relationships:${campaignId}:${uid}`,
+      campaignId,
+      coll: 'relationships',
+      uid,
+      isDM,
+      queries: [query(collection(db, 'relationships'), where('campaignId', '==', campaignId))],
+      onData: setRelationships,
+      onError: (msg) => logError('Relationship listener', msg),
+      // Deleting an entry deletes its links in the same go.
+      dropsWith: (gone, r) => gone.coll === 'entities' && (r.sourceId === gone.docId || r.targetId === gone.docId),
+    });
+    syncs.current.relationships = sync;
+    if (import.meta.env.DEV) ((window as unknown as { __sync?: Record<string, unknown> }).__sync ??= {}).relationships = sync;
+    sync.start();
+    return () => {
+      sync.stop();
+      if (syncs.current.relationships === sync) syncs.current.relationships = undefined;
+    };
+  }, [campaignId, uid, isDM]);
+
+  /** Forget the offline bookkeeping and download the campaign again. */
+  const reloadFromServer = useCallback(() => {
+    syncs.current.entities?.resync();
+    syncs.current.relationships?.resync();
+  }, []);
+
+  // The DM's device clears out sync hints older than a week now and then (devices away longer
+  // than that always reload in full).
+  useEffect(() => {
+    if (!isDM || !campaignId) return;
+    const t = setTimeout(() => pruneSyncHints(campaignId, syncs.current.entities?.serverTimeSeen() ?? 0).catch((err) => logError('Tidying sync hints', err)), 30_000);
+    return () => clearTimeout(t);
+  }, [isDM, campaignId]);
 
   // Older entries have images but no inline preview yet: the DM's client fills them in quietly,
   // one at a time, so lists can show pictures without loading full images.
@@ -153,8 +197,24 @@ export function CampaignDataProvider({ children }: { children: ReactNode }) {
       return;
     }
     let cancelled = false;
-    fetchUsers(memberKey.split(','))
-      .then((users) => !cancelled && setMembers(users))
+    // Profiles change rarely: keep them for a day on this device and only fetch missing or old
+    // ones (Members page refreshes them all).
+    const uids = [...new Set(memberKey.split(',').filter(Boolean))];
+    const cached = readProfileCache();
+    const fresh = (u: string) => membersVersion === 0 && cached[u] && Date.now() - cached[u].at < PROFILE_TTL_MS;
+    const have = uids.filter(fresh).map((u) => cached[u].user);
+    const need = uids.filter((u) => !fresh(u));
+    // Show what we have (even if old) while the rest loads, rather than an empty list.
+    setMembers(uids.map((u) => cached[u]?.user).filter((u): u is User => !!u));
+    if (!need.length) return;
+    fetchUsers(need)
+      .then((users) => {
+        if (cancelled) return;
+        const now = Date.now();
+        for (const u of users) cached[u.uid] = { at: now, user: u };
+        writeProfileCache(cached);
+        setMembers([...have, ...users]);
+      })
       .catch((err) => logError('Loading members', err));
     return () => {
       cancelled = true;
@@ -217,8 +277,9 @@ export function CampaignDataProvider({ children }: { children: ReactNode }) {
       canEdit: (e) => canEditEntity(viewer, e),
       canDelete: (e) => canDeleteEntity(viewer, e),
       refreshMembers: () => setMembersVersion((v) => v + 1),
+      reloadFromServer,
     };
-  }, [entities, relationships, members, loading, error, uid, isDM, currentCampaign, typesKey]);
+  }, [entities, relationships, members, loading, error, uid, isDM, currentCampaign, typesKey, reloadFromServer]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

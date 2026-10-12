@@ -13,9 +13,11 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import type { Campaign, DndStats, Entity, EntityType, MapPin, MediaDoc, Relationship, RevealEvent, TypeConfig, User } from '../types';
-import { upgradeSharing } from './permissions';
-import { baseType, fieldsFor, isEntityType, normalizeEntity, permissionKeys, storageType } from './entityTypes';
+import type { Campaign, HouseRules, DndStats, Entity, EntityType, MapPin, MediaDoc, Relationship, RevealEvent, TypeConfig, User } from '../types';
+import { canEditEntity, upgradeSharing } from './permissions';
+import { baseType, fieldsFor, isEntityType, normalizeEntity, permissionKeys, playerCanCreate, storageType } from './entityTypes';
+import { deleteScene } from './battle/sceneService';
+import { addHint, lostAccess, syncStamp } from './sync';
 import { isMediaRef, MEDIA_PREFIX, mediaIdOf, primeMediaCache, forgetMedia, makeThumbnail, resolveImageSrc } from './media';
 
 const nowIso = () => new Date().toISOString();
@@ -110,7 +112,9 @@ export function derivedPlayers(
 export function explicitShare(entity: Entity, players: User[]): string[] {
   if (entity.sharedWith) return entity.sharedWith;
   const derived = derivedPlayers({ ...entity, isPublic: true }, [], players); // knowledge + specific fields only
-  const rest = (entity.allowedPlayers ?? []).filter((p) => !derived.has(p));
+  // A character's player has access because they play it, not because the DM shared it.
+  const player = entity.type === 'character' ? entity.playerId : undefined;
+  const rest = (entity.allowedPlayers ?? []).filter((p) => !derived.has(p) && p !== player);
   // Old "secret + public field" entries had every player added; that wasn't an explicit choice.
   const hasPublicField = Object.values(entity.fieldPermissions ?? {}).some((p) => p.isPublic);
   if (!entity.isPublic && hasPublicField && players.every((p) => rest.includes(p.uid))) return [];
@@ -119,14 +123,57 @@ export function explicitShare(entity: Entity, players: User[]): string[] {
 
 function computeAllowedPlayers(draft: EntityDraft, isDM: boolean, players: User[]): string[] {
   const explicit = draft.allowedPlayers ?? [];
-  if (!isDM) return [...new Set(explicit)];
-  return [...new Set([...explicit, ...derivedPlayers(draft, explicit, players)])];
+  // A character's player can always read it (and find it with the "shared with me" query).
+  const player = draft.type === 'character' && draft.playerId ? [draft.playerId] : [];
+  if (!isDM) return [...new Set([...explicit, ...player])];
+  return [...new Set([...explicit, ...derivedPlayers(draft, explicit, players), ...player])];
+}
+
+/**
+ * What a player may change on a character (the security rules allow the same list).
+ * Sharing, DM secrets, player knowledge and who plays it stay as the DM left them; the player
+ * who created the character may also choose whether the party can see it (`isPublic`).
+ */
+export const PLAYER_CHARACTER_FIELDS = [
+  'name',
+  'content',
+  'tags',
+  'locationId',
+  'gender',
+  'imageUrls',
+  'coverThumb',
+  'attributes',
+  'statBlock',
+  'dndStats',
+  'mapConfig',
+  'updatedAt',
+] as const;
+
+/** Keeps everything a player may not change exactly as it was (including fields that were missing). */
+function keepProtectedFields(entity: Entity, previous: Entity, mayShare: boolean): Entity {
+  const allowed = new Set<string>([...PLAYER_CHARACTER_FIELDS, ...(mayShare ? ['isPublic'] : [])]);
+  const out: Record<string, unknown> = { ...entity };
+  const keys = new Set([...Object.keys(entity), ...Object.keys(previous)]);
+  for (const k of keys) {
+    if (allowed.has(k)) continue;
+    if (k in previous) out[k] = (previous as unknown as Record<string, unknown>)[k];
+    else delete out[k];
+  }
+  // `previous` is shown with its campaign type; what's stored is the built-in type.
+  out.type = previous.customType ? storageType(previous.type).type : previous.type;
+  return out as unknown as Entity;
 }
 
 export async function saveEntity(draft: EntityDraft, ctx: SaveContext): Promise<Entity> {
   const { campaign, user, isDM, players, previous } = ctx;
-  if (!isDM && draft.type !== 'note') throw new Error('Only DMs can create or edit entities other than notes.');
+  if (!isDM && !playerCanCreate(draft.type)) throw new Error('Only DMs can create or edit entries other than notes and characters.');
   if (previous && previous.type === 'note' && previous.ownerId !== user.uid) throw new Error('Only the author of a note can edit it.');
+  if (previous && !canEditEntity({ uid: user.uid, isDM }, previous)) throw new Error('Only the DM and the character’s player can edit it.');
+  if (!isDM && previous && previous.type !== draft.type) throw new Error('Only the DM can change what kind of entry this is.');
+  // Who plays a character: the DM picks; a player's own new character is theirs.
+  const playerId =
+    draft.type !== 'character' ? undefined : isDM ? draft.playerId || null : previous ? previous.playerId ?? null : user.uid;
+  draft = { ...draft, playerId };
 
   // Random ids: no lookups needed to avoid collisions (old slug ids keep working).
   const id = previous?.id ?? newEntityId();
@@ -204,7 +251,7 @@ export async function saveEntity(draft: EntityDraft, ctx: SaveContext): Promise<
 
   const coverThumb = await coverThumbFor(imageUrls[0], draft.imageUrls?.[0], previous);
 
-  const entity: Entity = clean({
+  let entity: Entity = clean({
     id,
     campaignId: campaign.id,
     ...keepCustomType(storageType(draft.type), draft.type, previous),
@@ -220,6 +267,7 @@ export async function saveEntity(draft: EntityDraft, ctx: SaveContext): Promise<
     playerKnowledge: draft.playerKnowledge ?? {},
     fieldPermissions: draft.fieldPermissions ?? {},
     locationId: draft.locationId || null,
+    playerId,
     gender: baseType(draft.type) === 'npc' ? draft.gender || null : previous?.gender ?? null,
     imageUrls,
     coverThumb,
@@ -233,8 +281,14 @@ export async function saveEntity(draft: EntityDraft, ctx: SaveContext): Promise<
     createdAt: previous?.createdAt ?? now,
     updatedAt: now,
   });
+  // A player editing a character changes only what the security rules let them change.
+  if (!isDM && previous && previous.type === 'character') entity = keepProtectedFields(entity, previous, previous.ownerId === user.uid);
 
-  batch.set(doc(db, 'entities', id), entity);
+  batch.set(doc(db, 'entities', id), { ...entity, ...syncStamp() });
+  // Players who can't read it any more: their devices are told to check (see lib/sync.ts).
+  if (previous) {
+    if (lostAccess(previous, entity).length) addHint(batch, { campaignId: campaign.id, coll: 'entities', docId: id, kind: 'access' });
+  }
 
   // 4. Relationships queued while creating/editing.
   for (const rel of ctx.pendingRelationships ?? []) {
@@ -249,7 +303,7 @@ export async function saveEntity(draft: EntityDraft, ctx: SaveContext): Promise<
 /** One-off: give an older entry (saved before previews existed) its inline preview. */
 export async function backfillCoverThumb(entity: Entity) {
   const coverThumb = await coverThumbFor(entity.imageUrls?.[0], undefined);
-  await updateDoc(doc(db, 'entities', entity.id), { coverThumb });
+  await updateDoc(doc(db, 'entities', entity.id), { coverThumb, ...syncStamp() });
 }
 
 /** An entry whose custom type was deleted shows as its base type; saving it keeps the link. */
@@ -301,6 +355,9 @@ interface QuickCreateOptions {
 export async function quickCreateEntity(opts: QuickCreateOptions): Promise<Entity> {
   const id = newEntityId();
   const now = nowIso();
+  const isDM = opts.user.uid === opts.campaign.dmId || !!opts.campaign.coDms?.includes(opts.user.uid);
+  // A player's own character: theirs to play and visible to the party; the DM assigns one later.
+  const ownCharacter = opts.type === 'character' && !isDM;
   const entity: Entity = clean({
     id,
     campaignId: opts.campaign.id,
@@ -309,12 +366,13 @@ export async function quickCreateEntity(opts: QuickCreateOptions): Promise<Entit
     content: opts.content ?? '',
     tags: opts.tags ?? [],
     ownerId: opts.user.uid,
-    isPublic: false,
+    isPublic: ownCharacter,
     // Player-authored notes are visible to the DM by default; DM-created entities start secret.
-    allowedPlayers: opts.type === 'note' && opts.user.uid !== opts.campaign.dmId ? [opts.campaign.dmId] : [],
+    allowedPlayers: opts.type === 'note' && opts.user.uid !== opts.campaign.dmId ? [opts.campaign.dmId] : ownCharacter ? [opts.user.uid] : [],
+    playerId: ownCharacter ? opts.user.uid : undefined,
     playerKnowledge: {},
     fieldPermissions: {},
-    shareV: opts.type !== 'note' ? 2 : undefined,
+    shareV: opts.type !== 'note' && !ownCharacter ? 2 : undefined,
     locationId: opts.locationId || null,
     gender: null,
     imageUrls: [],
@@ -322,7 +380,7 @@ export async function quickCreateEntity(opts: QuickCreateOptions): Promise<Entit
     createdAt: now,
     updatedAt: now,
   });
-  await setDoc(doc(db, 'entities', id), entity);
+  await setDoc(doc(db, 'entities', id), { ...entity, ...syncStamp() });
   return normalizeEntity(entity);
 }
 
@@ -343,17 +401,21 @@ export async function deleteEntity(entity: Entity, opts: { isDM: boolean; childr
       getDocs(query(rels, where('campaignId', '==', entity.campaignId), where('sourceId', '==', entity.id))),
       getDocs(query(rels, where('campaignId', '==', entity.campaignId), where('targetId', '==', entity.id))),
     ]);
+    // (Other devices drop these links when they see the entry's deletion hint.)
     [...outgoing.docs, ...incoming.docs].forEach((d) => batch.delete(d.ref));
 
     // Things located here move up one level instead of becoming orphans.
     for (const child of opts.children) {
-      batch.update(doc(db, 'entities', child.id), { locationId: entity.locationId ?? null, updatedAt: nowIso() });
+      batch.update(doc(db, 'entities', child.id), { locationId: entity.locationId ?? null, updatedAt: nowIso(), ...syncStamp() });
     }
   }
 
   batch.delete(doc(db, 'entities', entity.id));
+  addHint(batch, { campaignId: entity.campaignId, coll: 'entities', docId: entity.id, kind: 'deleted' });
   await batch.commit();
   await deleteMediaQuietly(mediaIds);
+  // Its battle map, if it had one.
+  if (opts.isDM && entity.mapConfig?.mediaId) await deleteScene(entity.id, entity.campaignId).catch(() => undefined);
 }
 
 // ---------------------------------------------------------------------------
@@ -381,7 +443,7 @@ function addRelationshipPairToBatch(
     v: 2,
     createdAt: nowIso(),
   };
-  batch.set(ref, record);
+  batch.set(ref, { ...record, ...syncStamp() });
 }
 
 export async function createRelationshipPair(campaignId: string, source: { id: string; name: string }, rel: PendingRelationship) {
@@ -391,9 +453,15 @@ export async function createRelationshipPair(campaignId: string, source: { id: s
 }
 
 export async function deleteRelationshipPair(rel: Relationship) {
-  await deleteDoc(doc(db, 'relationships', rel.id));
+  const del = (id: string) => {
+    const batch = writeBatch(db);
+    batch.delete(doc(db, 'relationships', id));
+    addHint(batch, { campaignId: rel.campaignId, coll: 'relationships', docId: id, kind: 'deleted' });
+    return batch.commit();
+  };
+  await del(rel.id);
   // The reverse half may already be gone (rules reject deleting a missing doc) – ignore that.
-  if (rel.reverseId) await deleteDoc(doc(db, 'relationships', rel.reverseId)).catch(() => undefined);
+  if (rel.reverseId) await del(rel.reverseId).catch(() => undefined);
 }
 
 // ---------------------------------------------------------------------------
@@ -430,15 +498,26 @@ export async function revealEntity(
     update.lastPushedAt = now;
     update.lastPushedTo = target;
   }
-  await updateDoc(doc(db, 'entities', entity.id), update);
+  await updateDoc(doc(db, 'entities', entity.id), { ...update, ...syncStamp() });
+}
+
+/** Quick HP change from the character page (touches only the HP values). */
+export function updateCharacterHp(entityId: string, hp: { currentHp: string; tempHp: string; deathSaves?: string }) {
+  return updateDoc(doc(db, 'entities', entityId), {
+    'attributes.currentHp': hp.currentHp,
+    'attributes.tempHp': hp.tempHp,
+    ...(hp.deathSaves !== undefined ? { 'attributes.deathSaves': hp.deathSaves } : {}),
+    updatedAt: nowIso(),
+    ...syncStamp(),
+  });
 }
 
 export function updateMapPins(entityId: string, pins: MapPin[]) {
-  return updateDoc(doc(db, 'entities', entityId), { 'mapConfig.pins': pins });
+  return updateDoc(doc(db, 'entities', entityId), { 'mapConfig.pins': pins, ...syncStamp() });
 }
 
 export function setEntityLocation(entityId: string, locationId: string | null) {
-  return updateDoc(doc(db, 'entities', entityId), { locationId, updatedAt: nowIso() });
+  return updateDoc(doc(db, 'entities', entityId), { locationId, updatedAt: nowIso(), ...syncStamp() });
 }
 
 // ---------------------------------------------------------------------------
@@ -541,6 +620,10 @@ export function removePlayer(campaignId: string, uid: string) {
 
 export function updateTypeConfig(campaignId: string, typeConfig: TypeConfig) {
   return updateDoc(doc(db, 'campaigns', campaignId), { typeConfig: clean(typeConfig) });
+}
+
+export function setHouseRules(campaignId: string, rules: HouseRules) {
+  return updateDoc(doc(db, 'campaigns', campaignId), { houseRules: rules });
 }
 
 export function renameCampaign(campaignId: string, name: string) {

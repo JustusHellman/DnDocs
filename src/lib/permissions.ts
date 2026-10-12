@@ -10,6 +10,7 @@ export interface Viewer {
 export function canViewEntity(viewer: Viewer | null, entity: Entity): boolean {
   if (!viewer) return false;
   if (entity.ownerId === viewer.uid) return true;
+  if (isPlayerOf(viewer, entity)) return true;
   if (entity.isPublic) return true;
   if (entity.allowedPlayers?.includes(viewer.uid)) return true;
   if (viewer.isDM) return entity.type !== 'note';
@@ -21,10 +22,19 @@ export function canViewField(viewer: Viewer | null, entity: Entity, fieldKey: st
   if (!canViewEntity(viewer, entity)) return false;
   if (entity.ownerId === viewer.uid) return true;
   if (viewer.isDM) return true;
+  // A player always sees the whole of their own character (DM secrets are never shown to players).
+  if (isPlayerOf(viewer, entity)) return true;
   // Values left over from a field the DM removed (or a type change) have no lock of their own.
   if (!permissionKeys(entity.type).includes(fieldKey)) return false;
 
   const perm = entity.fieldPermissions?.[fieldKey];
+  // Current model (shareV 3): a field is shown only when it's been revealed. "Revealed to everyone
+  // who can see it" means players who can open the whole entry, not those with only a note.
+  if (entity.shareV === 3) {
+    if (!perm) return false;
+    if (perm.allowedPlayers?.includes(viewer.uid)) return true;
+    return perm.isPublic && (entity.isPublic || !!entity.sharedWith?.includes(viewer.uid));
+  }
   if (perm) {
     if (perm.isPublic) return true;
     return perm.allowedPlayers?.includes(viewer.uid) ?? false;
@@ -54,13 +64,23 @@ export function upgradeSharing(
   return perms;
 }
 
-export function canEditEntity(viewer: Viewer | null, entity: Pick<Entity, 'type' | 'ownerId'>): boolean {
+/** Whether the viewer is the player who plays this character. */
+export function isPlayerOf(viewer: Viewer | null, entity: Pick<Entity, 'type' | 'playerId'>): boolean {
+  return !!viewer && entity.type === 'character' && !!entity.playerId && entity.playerId === viewer.uid;
+}
+
+/**
+ * Notes: only their author. Player characters: the DM, the player who made it and the player
+ * who plays it. Everything else: the DM.
+ */
+export function canEditEntity(viewer: Viewer | null, entity: Pick<Entity, 'type' | 'ownerId' | 'playerId'>): boolean {
   if (!viewer) return false;
   if (entity.type === 'note') return entity.ownerId === viewer.uid;
+  if (entity.type === 'character') return viewer.isDM || entity.ownerId === viewer.uid || isPlayerOf(viewer, entity);
   return viewer.isDM;
 }
 
-export function canDeleteEntity(viewer: Viewer | null, entity: Pick<Entity, 'type' | 'ownerId'>): boolean {
+export function canDeleteEntity(viewer: Viewer | null, entity: Pick<Entity, 'type' | 'ownerId' | 'playerId'>): boolean {
   if (!viewer) return false;
   if (entity.ownerId === viewer.uid) return true;
   return viewer.isDM && entity.type !== 'note';

@@ -5,7 +5,7 @@ import EntityPicker from './EntityPicker';
 import { useAuth } from '../../contexts/AuthContext';
 import { useCampaignData, useVisibleEntities } from '../../contexts/CampaignDataContext';
 import { useToast } from '../../contexts/ToastContext';
-import { menuTypes, ENTITY_TYPES, typeMeta } from '../../lib/entityTypes';
+import { menuTypes, playerCanCreate, typeMeta } from '../../lib/entityTypes';
 import { quickCreateEntity } from '../../lib/entityService';
 import type { Entity, EntityType } from '../../types';
 
@@ -42,7 +42,7 @@ export default function QuickCreateModal({ open, onClose, onCreated, initialName
     setType(suggested);
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const allowedTypes = isDM ? menuTypes() : ENTITY_TYPES.filter((t) => t.value === 'note');
+  const allowedTypes = isDM ? menuTypes() : menuTypes().filter((t) => playerCanCreate(t.value));
   const locationOptions = visible.filter((e) => typeMeta(type).parents.includes(e.type));
 
   const submit = async (e: React.FormEvent) => {

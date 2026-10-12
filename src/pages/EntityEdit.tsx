@@ -6,7 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useCampaignData, useIsDescendant, useVisibleEntities } from '../contexts/CampaignDataContext';
 import { useToast } from '../contexts/ToastContext';
 import { useConfirm } from '../contexts/ConfirmContext';
-import { baseType, menuTypes, ENTITY_TYPES, fieldsFor, isEntityType, permissionKeys, typeMeta, type FieldSchema } from '../lib/entityTypes';
+import { baseType, ENTITY_TYPES, fieldsFor, isEntityType, permissionKeys, playerCanCreate, typeMeta, type FieldSchema } from '../lib/entityTypes';
 import { upgradeSharing } from '../lib/permissions';
 import { defaultAttributes, explicitShare, saveEntity, type EntityDraft, type PendingRelationship } from '../lib/entityService';
 import type { Entity, EntityType, FieldPermission, User } from '../types';
@@ -41,6 +41,7 @@ function draftFromEntity(e: Entity, players: User[], isDM: boolean): EntityDraft
     fieldPermissions: isDM ? upgradeSharing(e, explicitShare(e, players), permissionKeys(e.type)) : e.fieldPermissions ?? {},
     playerKnowledge: e.playerKnowledge ?? {},
     locationId: e.locationId ?? '',
+    playerId: e.playerId ?? '',
     gender: e.gender ?? '',
     imageUrls: images,
     attributes: e.attributes ?? {},
@@ -52,15 +53,18 @@ function draftFromEntity(e: Entity, players: User[], isDM: boolean): EntityDraft
   };
 }
 
-function newDraft(type: EntityType, locationId: string, dmId: string, isDM: boolean): EntityDraft {
+function newDraft(type: EntityType, locationId: string, dmId: string, isDM: boolean, uid: string): EntityDraft {
+  const ownCharacter = !isDM && type === 'character';
   return {
     type,
     name: '',
     content: '',
     tags: [],
-    isPublic: false,
+    // A player's own character is visible to the party by default.
+    isPublic: ownCharacter,
     // Players' notes are shared with the DM by default.
-    allowedPlayers: !isDM && type === 'note' ? [dmId] : [],
+    allowedPlayers: !isDM && type === 'note' ? [dmId] : ownCharacter ? [uid] : [],
+    playerId: ownCharacter ? uid : '',
     fieldPermissions: {},
     playerKnowledge: {},
     locationId,
@@ -132,8 +136,8 @@ export default function EntityEdit() {
     if (draft || !currentCampaign) return;
     if (isNew) {
       const t = params.get('type');
-      const type: EntityType = isDM ? (isEntityType(t) ? t : 'npc') : 'note';
-      const d = newDraft(type, params.get('locationId') ?? '', currentCampaign.dmId, isDM);
+      const type: EntityType = isDM ? (isEntityType(t) ? t : 'npc') : playerCanCreate(t ?? '') ? (t as EntityType) : 'note';
+      const d = newDraft(type, params.get('locationId') ?? '', currentCampaign.dmId, isDM, user?.uid ?? '');
       setDraft(d);
       initialJson.current = JSON.stringify(d);
     } else if (existing) {
@@ -150,7 +154,7 @@ export default function EntityEdit() {
       }
       setCustomSelect(custom);
     }
-  }, [isNew, existing, draft, currentCampaign, params, isDM, players]);
+  }, [isNew, existing, draft, currentCampaign, params, isDM, players, user?.uid]);
 
   const dirty = !!draft && (JSON.stringify(draft) !== initialJson.current || pendingRels.length > 0);
 
@@ -269,7 +273,11 @@ export default function EntityEdit() {
     return (
       <Page>
         <EmptyState icon={Lock} title="You can’t edit this" action={<button className="btn btn-secondary" onClick={() => navigate(-1)}>Go back</button>}>
-          {existing.type === 'note' ? 'Only the author of a note can edit it.' : 'Only the DM can edit this entry.'}
+          {existing.type === 'note'
+            ? 'Only the author of a note can edit it.'
+            : existing.type === 'character'
+              ? 'Only the DM and the character’s player can edit it.'
+              : 'Only the DM can edit this entry.'}
         </EmptyState>
       </Page>
     );
@@ -278,6 +286,9 @@ export default function EntityEdit() {
 
   const meta = typeMeta(draft.type);
   const schema = fieldsFor(draft.type);
+  const isCharacter = draft.type === 'character';
+  // A player who created their character decides whether the party sees it; one the DM made, the DM shares.
+  const playerMayShare = !isDM && isCharacter && (!existing || existing.ownerId === user?.uid);
   const showFieldPerms = isDM && draft.type !== 'note';
   // Fields without their own setting follow the entry: visible to whoever can see it.
   const inheritsPublic = !!draft.isPublic || (draft.type !== 'note' && (draft.allowedPlayers?.length ?? 0) > 0);
@@ -534,8 +545,11 @@ export default function EntityEdit() {
             </Card>
           )}
 
-          {(baseType(draft.type) === 'npc' || baseType(draft.type) === 'monster') && (
-            <Card title="Stat block" description="Optional combat stats, shown as a D&D-style block.">
+          {(baseType(draft.type) === 'npc' || baseType(draft.type) === 'monster' || isCharacter) && (
+            <Card
+              title="Stat block"
+              description={isCharacter ? 'Armor class, maximum hit points, speed and ability scores. The HP tracker uses the hit points here as the maximum.' : 'Optional combat stats, shown as a D&D-style block.'}
+            >
               {showFieldPerms && (
                 <div className="-mt-2 mb-3 flex justify-end">
                   <FieldPermissionToggle permission={draft.fieldPermissions?.statBlock} onChange={(p) => setFieldPerm('statBlock', p)} players={players} inheritsPublic={inheritsPublic} fieldLabel="Stat block" />
@@ -608,8 +622,57 @@ export default function EntityEdit() {
 
         {/* Side column */}
         <div className="min-w-0 space-y-4 lg:sticky lg:top-18 lg:self-start">
-          {isDM ? (
-            <Card title="Visibility" description="Who can find this entry.">
+          {isCharacter && (
+            <Card title="Played by" description={isDM ? 'That player can edit this character too.' : undefined}>
+              {isDM ? (
+                <select className="input" aria-label="Played by" value={draft.playerId ?? ''} onChange={(e) => set('playerId', e.target.value)}>
+                  <option value="">No one (run by the DM)</option>
+                  {players.map((p) => (
+                    <option key={p.uid} value={p.uid}>
+                      {p.displayName}
+                    </option>
+                  ))}
+                  {draft.playerId && !players.some((p) => p.uid === draft.playerId) && <option value={draft.playerId}>A former member</option>}
+                </select>
+              ) : (
+                <p className="text-sm text-stone-300">
+                  {!draft.playerId || draft.playerId === user?.uid ? 'You. You and the DM can edit this character.' : 'Another player.'}
+                </p>
+              )}
+            </Card>
+          )}
+
+          {!isDM && isCharacter ? (
+            <Card title="Sharing" description="The DM can always see your character.">
+              {playerMayShare ? (
+                <div className="space-y-1.5">
+                  {[
+                    { v: false, label: 'Only me and the DM', icon: Lock },
+                    { v: true, label: 'The whole party', icon: Globe },
+                  ].map((o) => (
+                    <button
+                      key={String(o.v)}
+                      type="button"
+                      role="radio"
+                      aria-checked={!!draft.isPublic === o.v}
+                      onClick={() => set('isPublic', o.v)}
+                      className={clsx(
+                        'flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm',
+                        !!draft.isPublic === o.v ? 'border-amber-500/60 bg-amber-500/10 text-amber-100' : 'border-stone-800 text-stone-300 hover:border-stone-700',
+                      )}
+                    >
+                      <o.icon size={15} className="shrink-0" />
+                      <span className="flex-1">{o.label}</span>
+                      {!!draft.isPublic === o.v && <Check size={14} />}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-stone-400">The DM created this character and decides who else can see it.</p>
+              )}
+            </Card>
+          ) : isDM ? (
+            <Card title="Visibility" description={isCharacter ? 'Who can find this character. Its player always can.' : 'Who can find this entry.'}>
               <Segmented
                 className="w-full"
                 value={dmVisibility}

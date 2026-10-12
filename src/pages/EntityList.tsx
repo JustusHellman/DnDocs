@@ -3,7 +3,7 @@ import { Link, Navigate, useParams } from 'react-router-dom';
 import { LayoutGrid, List, Plus, Search, SearchX } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useCampaignData, useVisibleEntities } from '../contexts/CampaignDataContext';
-import { isEntityType, typeMeta } from '../lib/entityTypes';
+import { isEntityType, playerCanCreate, typeMeta } from '../lib/entityTypes';
 import { visibilityOf, type Visibility } from '../lib/permissions';
 import { parseQuery, scoreEntity } from '../lib/search';
 import type { Entity } from '../types';
@@ -56,7 +56,7 @@ export default function EntityList() {
     const q = parseQuery(term);
     return visible
       .filter((e) => e.type === type)
-      .filter((e) => (vis === 'all' ? true : vis === 'mine' ? e.ownerId === user?.uid : visibilityOf(e) === vis))
+      .filter((e) => (vis === 'all' ? true : vis === 'mine' ? e.ownerId === user?.uid || e.playerId === user?.uid : visibilityOf(e) === vis))
       .filter((e) => !term.trim() || scoreEntity(e, q, canViewField) > 0)
       .sort((a, b) =>
         sort === 'updated' ? b.updatedAt.localeCompare(a.updatedAt) : sort === 'created' ? b.createdAt.localeCompare(a.createdAt) : a.name.localeCompare(b.name),
@@ -65,7 +65,7 @@ export default function EntityList() {
 
   if (!isEntityType(type)) return <Navigate to="/search" replace />;
   const meta = typeMeta(type);
-  const canCreate = isDM || type === 'note';
+  const canCreate = isDM || playerCanCreate(type);
 
   const groups: { title: string | null; items: Entity[] }[] =
     type === 'quest'
@@ -76,7 +76,7 @@ export default function EntityList() {
       : [{ title: null, items }];
 
   const filterOptions =
-    type === 'note'
+    type === 'note' || (type === 'character' && !isDM)
       ? [
           { value: 'all' as const, label: 'All' },
           { value: 'mine' as const, label: 'Mine' },
@@ -148,7 +148,7 @@ export default function EntityList() {
               )
             }
           >
-            {isDM || type === 'note' ? undefined : 'Your DM hasn’t shared any yet.'}
+            {isDM || playerCanCreate(type) ? undefined : 'Your DM hasn’t shared any yet.'}
           </EmptyState>
         )
       ) : (

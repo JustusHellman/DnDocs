@@ -284,7 +284,7 @@ export function buildPlan(raw: unknown, ctx: { campaignId: string; uid: string; 
         dndStats = s as unknown as DndStats;
       }
     }
-    if ((e.statBlock || dndStats) && !['monster', 'npc'].includes(storage.type)) warn(where, 'Stat blocks only show on monsters and NPCs.');
+    if ((e.statBlock || dndStats) && !['monster', 'npc', 'character'].includes(storage.type)) warn(where, 'Stat blocks only show on monsters, NPCs and player characters.');
     if (e.gender && storage.type !== 'npc') warn(where, 'Gender only shows on NPCs.');
 
     const id = idOf(e.key);

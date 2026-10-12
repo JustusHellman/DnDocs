@@ -13,7 +13,9 @@ import {
   Plus,
   Skull,
   Sparkles,
+  Swords,
   Trash2,
+  UserRound,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
@@ -21,10 +23,10 @@ import { useAncestors, useCampaignData } from '../../contexts/CampaignDataContex
 import { usePeek } from '../../contexts/PeekContext';
 import { useToast } from '../../contexts/ToastContext';
 import { useConfirm } from '../../contexts/ConfirmContext';
-import { baseType, fieldsFor, QUEST_STATUS_TONE, typeMeta, type FieldSchema } from '../../lib/entityTypes';
+import { baseType, fieldsFor, HP_KEYS, QUEST_STATUS_TONE, typeMeta, type FieldSchema } from '../../lib/entityTypes';
 import { deleteEntity } from '../../lib/entityService';
 import RevealButton from './RevealButton';
-import { visibilityOf } from '../../lib/permissions';
+import { isPlayerOf, visibilityOf } from '../../lib/permissions';
 import { excerpt, timeAgo } from '../../lib/text';
 import type { Entity } from '../../types';
 import { Avatar, EmptyState, Spinner, TypeBadge, TypeIcon, VisibilityBadge } from '../ui/bits';
@@ -33,10 +35,12 @@ import { MenuItem, Popover } from '../ui/Popover';
 import { Markdown } from './Markdown';
 import { ImageThumb, Lightbox } from './Images';
 import { StatBlock } from './StatBlock';
+import { HitPoints } from './HitPoints';
 import { LocationTree, useVisibleChildren } from './LocationTree';
 import { RelationshipsSection } from './Relationships';
 import QuickCreateModal from './QuickCreateModal';
 import { useImageSrc } from '../../hooks/useImageSrc';
+import { useActiveBattles } from '../../contexts/ActiveScenesContext';
 
 function Section({ title, children, action, className }: { title: string; children: ReactNode; action?: ReactNode; className?: string }) {
   return (
@@ -92,8 +96,10 @@ function useVisibleAttributes(entity: Entity) {
   const { canViewField } = useCampaignData();
   return useMemo(() => {
     const schema = fieldsFor(entity.type);
+    // A character's HP has its own tracker.
+    const skip: readonly string[] = entity.type === 'character' ? HP_KEYS : [];
     const entries = Object.entries(entity.attributes ?? {}).filter(
-      ([key, v]) => v !== undefined && v !== null && v !== '' && canViewField(entity, key),
+      ([key, v]) => v !== undefined && v !== null && v !== '' && !skip.includes(key) && canViewField(entity, key),
     );
     // Keep the schema order; unknown (legacy) keys go last.
     const order = (k: string) => {
@@ -150,6 +156,7 @@ export default function EntityView({ entityId, variant = 'page' }: { entityId: s
   const [lightbox, setLightbox] = useState<number | null>(null);
   const [expandAll, setExpandAll] = useState(false);
   const [quickCreate, setQuickCreate] = useState(false);
+  const battles = useActiveBattles();
 
   const entity = entityMap.get(entityId);
   const ancestors = useAncestors(entity);
@@ -177,13 +184,18 @@ export default function EntityView({ entityId, variant = 'page' }: { entityId: s
   const showContent = canViewField(entity, 'content');
   const knowledge = !isDM && user ? entity.playerKnowledge?.[user.uid] : undefined;
   const kind = baseType(entity.type);
-  const hasStatBlock = (kind === 'npc' || kind === 'monster') && (entity.statBlock || entity.dndStats) && canViewField(entity, 'statBlock');
+  const isCharacter = entity.type === 'character';
+  const hasStatBlock = (kind === 'npc' || kind === 'monster' || isCharacter) && (entity.statBlock || entity.dndStats) && canViewField(entity, 'statBlock');
   const status = entity.type === 'quest' ? entity.attributes?.status : undefined;
-  const isDead = kind === 'npc' && entity.attributes?.isAlive === false && canViewField(entity, 'isAlive');
+  const isDead = (kind === 'npc' || isCharacter) && entity.attributes?.isAlive === false && canViewField(entity, 'isAlive');
   const isBoss = kind === 'monster' && entity.attributes?.isUnique === true && canViewField(entity, 'isUnique');
   const editable = canEdit(entity);
+  const showHp = isCharacter && (editable || canViewField(entity, 'currentHp'));
+  const hpMax = canViewField(entity, 'statBlock') ? entity.dndStats?.hitPoints : undefined;
   const deletable = canDelete(entity);
   const hasMap = !!entity.mapConfig?.mediaId;
+  /** Places where a fight can happen (others get no "Make a battle map"). */
+  const PLACE_TYPES = ['geography', 'country', 'settlement', 'landmark', 'shop'];
   const shortDescription = attrs.long.find(([, k]) => k === 'shortDescription');
   const longAttrs = attrs.long.filter(([, k]) => k !== 'shortDescription');
   const location = entity.locationId ? entityMap.get(entity.locationId) : undefined;
@@ -295,6 +307,17 @@ export default function EntityView({ entityId, variant = 'page' }: { entityId: s
                     Open map
                   </MenuItem>
                 )}
+                {hasMap && (isDM || battles.some((b) => b.id === entity.id)) && (
+                  <MenuItem icon={Swords} onClick={() => (setMenuOpen(false), panel && closePeek(), navigate(`/battle/${entity.id}`))}>
+                    {isDM ? 'Battle map' : 'Join battle'}
+                  </MenuItem>
+                )}
+                {!hasMap && isDM && PLACE_TYPES.includes(baseType(entity.type)) && (
+                  // No map yet: the battle page offers Battlemap Forge (or adding an image).
+                  <MenuItem icon={Swords} onClick={() => (setMenuOpen(false), panel && closePeek(), navigate(`/battle/${entity.id}`))}>
+                    Make a battle map
+                  </MenuItem>
+                )}
                 {panel && (
                   <MenuItem icon={BookOpen} onClick={() => (setMenuOpen(false), closePeek(), navigate(`/entity/${entity.id}`))}>
                     Open full page
@@ -314,7 +337,12 @@ export default function EntityView({ entityId, variant = 'page' }: { entityId: s
 
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <TypeBadge type={entity.type} />
-            {(isDM || entity.ownerId === user?.uid) && <VisibilityBadge entity={entity} />}
+            {(isDM || entity.ownerId === user?.uid || isPlayerOf(data.viewer, entity)) && <VisibilityBadge entity={entity} />}
+            {isCharacter && entity.playerId && (
+              <span className="chip text-stone-300 ring-stone-600/60">
+                <UserRound size={11} /> {entity.playerId === user?.uid ? 'Your character' : `Played by ${memberName(entity.playerId)}`}
+              </span>
+            )}
             {status && canViewField(entity, 'status') && <span className={clsx('chip', QUEST_STATUS_TONE[status] ?? 'text-stone-300 ring-stone-600')}>{status}</span>}
             {isDead && (
               <span className="chip text-stone-300 bg-stone-500/10 ring-stone-500/30">
@@ -335,9 +363,16 @@ export default function EntityView({ entityId, variant = 'page' }: { entityId: s
               ))}
           </div>
           {hasMap && !panel && (
-            <Link to={`/map/${entity.id}`} className="btn btn-secondary btn-sm mt-3">
-              <MapIcon size={14} /> Open map
-            </Link>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Link to={`/map/${entity.id}`} className="btn btn-secondary btn-sm">
+                <MapIcon size={14} /> Open map
+              </Link>
+              {(isDM || battles.some((b) => b.id === entity.id)) && (
+                <Link to={`/battle/${entity.id}`} className={clsx('btn btn-sm', battles.some((b) => b.id === entity.id) ? 'btn-primary' : 'btn-ghost')}>
+                  <Swords size={14} /> {battles.some((b) => b.id === entity.id) ? (isDM ? 'Battle on' : 'Join battle') : 'Battle map'}
+                </Link>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -345,6 +380,7 @@ export default function EntityView({ entityId, variant = 'page' }: { entityId: s
       {/* Body */}
       <div className={clsx('grid gap-4', !panel && '@4xl:grid-cols-[minmax(0,1fr)_320px]', panel && 'px-3 pb-6')}>
         <div className="min-w-0 space-y-4">
+          {showHp && <HitPoints entity={entity} maxText={hpMax} editable={editable} />}
           {details('@4xl:hidden')}
           {knowledge && (
             <section className="rounded-2xl border border-amber-700/40 bg-amber-950/20 p-4 sm:p-5">

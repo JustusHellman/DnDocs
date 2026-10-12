@@ -10,6 +10,7 @@ import type { EntityType } from '../types';
 import { EmptyState, Page, PageHeader } from '../components/ui/bits';
 import DMPackImport from '../components/DMPackImport';
 import DMCampaignExport from '../components/DMCampaignExport';
+import BattleMapsCard from '../components/battle/BattleMapsCard';
 
 const pick = <T,>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)];
 
@@ -212,6 +213,7 @@ export default function DMTools() {
         subtitle="Quick inspiration when the party goes off-script."
       />
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <BattleMapsCard />
         <DiceRoller />
         <Generator
           title="Tavern"

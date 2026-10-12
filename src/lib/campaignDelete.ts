@@ -9,6 +9,7 @@
 import { collection, deleteDoc, doc, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import type { Campaign } from '../types';
+import { deleteCampaignScenes } from './battle/sceneService';
 
 export interface DeleteSummary {
   entities: number;
@@ -59,12 +60,25 @@ export async function deleteCampaignCompletely(campaign: Campaign, onProgress?: 
       }
     }
   };
-  // Links and images first, entries next.
+  // Battle maps (with their tokens and drawings), links and images first, entries next.
+  try {
+    await deleteCampaignScenes(campaign.id);
+  } catch {
+    out.failed++;
+  }
   await pool(rels.docs, remove('relationships'), tick);
   await pool(media.docs, remove('media'), tick);
   await pool(ents.docs, remove('entities'), tick);
 
   if (out.failed > 0) return out; // leave the campaign so the deletion can be run again
+
+  // Sync hints (tiny bookkeeping documents, see lib/sync.ts).
+  try {
+    const hints = await getDocs(query(collection(db, 'syncHints'), where_));
+    await pool(hints.docs, (d) => deleteDoc(d.ref).catch(() => undefined), () => undefined);
+  } catch {
+    /* harmless leftovers */
+  }
 
   // The join code is looked up by code, so it is deleted by id (older campaigns may not have one).
   try {

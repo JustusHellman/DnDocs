@@ -8,7 +8,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useCampaignData, useVisibleEntities } from '../../contexts/CampaignDataContext';
 import { usePeek } from '../../contexts/PeekContext';
 import { parseQuery, scoreEntity } from '../../lib/search';
-import { menuTypes, typeMeta } from '../../lib/entityTypes';
+import { menuTypes, playerCanCreate, typeMeta } from '../../lib/entityTypes';
 import { navGroups } from './nav';
 
 interface Command {
@@ -85,7 +85,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
         list.push({ key: `nav-${i.to}`, label: `Go to ${i.label}`, icon: <i.icon size={16} className="text-stone-400" />, run: done(() => navigate(i.to)) }),
       );
 
-    menuTypes().filter((ty) => (isDM || ty.value === 'note') && (!t || `new ${ty.label}`.toLowerCase().includes(t) || (t.startsWith('new') && ty.label.toLowerCase().includes(t.slice(4)))))
+    menuTypes().filter((ty) => (isDM || playerCanCreate(ty.value)) && (!t || `new ${ty.label}`.toLowerCase().includes(t) || (t.startsWith('new') && ty.label.toLowerCase().includes(t.slice(4)))))
       .slice(0, t ? 3 : 0)
       .forEach((ty) =>
         list.push({

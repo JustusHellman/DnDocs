@@ -1,0 +1,15 @@
+{
+  "name": "dndocs-rules-tests",
+  "private": true,
+  "type": "module",
+  "description": "Checks firestore.rules against the real Firestore emulator.",
+  "scripts": {
+    "pretest": "node -e \"require('fs').copyFileSync('../firestore.rules','firestore.rules')\"",
+    "test": "firebase emulators:exec --only firestore --project demo-dndocs \"node --test firestore-rules.check.mjs\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
+    "firebase": "^12.10.0",
+    "firebase-tools": "^15.0.0"
+  }
+}

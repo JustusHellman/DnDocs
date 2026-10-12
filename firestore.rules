@@ -29,7 +29,7 @@ service cloud.firestore {
     // Fields:
     //   - id: string (required, max 100)
     //   - campaignId: string (required)
-    //   - type: string (required, 'npc', 'settlement', 'landmark', 'country', 'faction', 'shop', 'item', 'note')
+    //   - type: string (required, 'npc', 'settlement', 'landmark', 'country', 'faction', 'shop', 'item', 'note', 'geography', 'monster', 'quest', 'character')
     //   - name: string (required, max 200)
     //   - content: string (required, max 100000)
     //   - tags: list of strings (required, max 100 items)
@@ -38,6 +38,7 @@ service cloud.firestore {
     //   - allowedPlayers: list of strings (required)
     //   - playerKnowledge: map (optional)
     //   - locationId: string (optional)
+    //   - playerId: string (optional, characters: the player who plays it)
     //   - gender: string (optional)
     //   - imageUrls: list of strings (optional)
     //   - attributes: map (optional)
@@ -59,6 +60,10 @@ service cloud.firestore {
     // Collection: joinCodes
     // Document ID: {joinCode}
     // Fields: campaignId, dmId
+    //
+    // Collection: scenes (battle maps) – see the rules further down for the sub-collections.
+    // Document ID: {entityId}; fields: id, campaignId, entityId, name, active, grid, fog, walls,
+    //   doors, openDoors, combat, createdAt, updatedAt
     //
     // Collection: media
     // Document ID: {mediaId}
@@ -131,7 +136,7 @@ service cloud.firestore {
       return data.keys().hasAll(['id', 'campaignId', 'type', 'name', 'content', 'tags', 'ownerId', 'isPublic', 'allowedPlayers', 'createdAt', 'updatedAt']) &&
              data.id is string && data.id.size() > 0 && data.id.size() < 100 &&
              data.campaignId is string && data.campaignId.size() > 0 &&
-             data.type in ['npc', 'settlement', 'landmark', 'country', 'faction', 'shop', 'item', 'note', 'geography', 'monster', 'quest'] &&
+             data.type in ['npc', 'settlement', 'landmark', 'country', 'faction', 'shop', 'item', 'note', 'geography', 'monster', 'quest', 'character'] &&
              data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
              data.content is string && data.content.size() < 100000 &&
              data.tags is list && data.tags.size() <= 100 &&
@@ -143,12 +148,34 @@ service cloud.firestore {
              (!('playerKnowledge' in data) || data.playerKnowledge is map) &&
              (!('fieldPermissions' in data) || data.fieldPermissions is map) &&
              (!('locationId' in data) || data.locationId == null || data.locationId is string) &&
+             (!('playerId' in data) || data.playerId == null || data.playerId is string) &&
              (!('gender' in data) || data.gender == null || data.gender is string) &&
              (!('imageUrls' in data) || data.imageUrls is list) &&
              (!('attributes' in data) || data.attributes is map) &&
              (!('statBlock' in data) || data.statBlock == null || data.statBlock is string) &&
              (!('dndStats' in data) || data.dndStats == null || data.dndStats is map) &&
-             (!('dmNotes' in data) || data.dmNotes == null || data.dmNotes is string);
+             (!('dmNotes' in data) || data.dmNotes == null || data.dmNotes is string) &&
+             validSyncAt();
+    }
+
+    // Incremental sync: every write stamps `syncAt` with the server's time, so other devices can
+    // ask for "everything changed since" and miss nothing (see src/lib/sync.ts).
+    function validSyncAt() {
+      return 'syncAt' in request.resource.data && request.resource.data.syncAt == request.time;
+    }
+
+    // A player editing a character they created or play. They may not change sharing (except the
+    // creator's public/private choice), DM secrets, player knowledge, reveals or who plays it.
+    function isPlayerCharacterEdit() {
+      let before = resource.data;
+      let after = request.resource.data;
+      let changed = after.diff(before).affectedKeys();
+      let isCreator = before.ownerId == request.auth.uid;
+      return before.type == 'character' && after.type == 'character' &&
+             (isCreator || before.get('playerId', null) == request.auth.uid) &&
+             changed.hasOnly(['name', 'content', 'tags', 'isPublic', 'locationId', 'gender', 'imageUrls',
+                              'coverThumb', 'attributes', 'statBlock', 'dndStats', 'mapConfig', 'updatedAt', 'syncAt']) &&
+             (isCreator || !changed.hasAny(['isPublic']));
     }
 
     function isValidRelationship() {
@@ -157,7 +184,8 @@ service cloud.firestore {
              data.id is string && data.campaignId is string &&
              data.sourceId is string && data.targetId is string &&
              data.targetName is string && data.label is string &&
-             data.reverseId is string && data.createdAt is string;
+             data.reverseId is string && data.createdAt is string &&
+             validSyncAt();
     }
 
     function isValidMedia() {
@@ -212,6 +240,7 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (resource == null || isAdmin() || (isCampaignMember(resource.data.campaignId) && (
         resource.data.isPublic == true || 
         resource.data.ownerId == request.auth.uid || 
+        resource.data.get('playerId', null) == request.auth.uid ||
         request.auth.uid in resource.data.allowedPlayers || 
         isCampaignDM(resource.data.campaignId)
       )));
@@ -220,14 +249,19 @@ service cloud.firestore {
         isValidEntity() && 
         request.resource.data.ownerId == request.auth.uid && 
         request.resource.data.id == entityId &&
-        (isCampaignDM(request.resource.data.campaignId) || request.resource.data.type == 'note')
+        (isCampaignDM(request.resource.data.campaignId) ||
+         request.resource.data.type == 'note' ||
+         // Players create their own characters (which they then play).
+         (request.resource.data.type == 'character' && request.resource.data.get('playerId', null) == request.auth.uid))
       ));
       allow update: if isAuthenticated() && (isAdmin() || (
         isCampaignMember(resource.data.campaignId) && 
         isValidEntity() && 
         request.resource.data.ownerId == resource.data.ownerId && 
         request.resource.data.id == resource.data.id &&
-        (isCampaignDM(resource.data.campaignId) || (resource.data.type == 'note' && request.resource.data.type == 'note'))
+        (isCampaignDM(resource.data.campaignId) ||
+         (resource.data.type == 'note' && request.resource.data.type == 'note' && resource.data.ownerId == request.auth.uid) ||
+         isPlayerCharacterEdit())
       ));
       allow delete: if isAuthenticated() && (isAdmin() || (
         isCampaignMember(resource.data.campaignId) && 
@@ -235,11 +269,144 @@ service cloud.firestore {
       ));
     }
 
+    // Incremental sync hints (see src/lib/sync.ts): which document was deleted or may have become
+    // unreadable for whom. Only ids, never content. Written together with the change; never edited.
+    match /syncHints/{hintId} {
+      allow read: if isAuthenticated() && (resource == null || isCampaignMember(resource.data.campaignId));
+      allow create: if isAuthenticated() && isValidSyncHint(hintId);
+      allow update: if false;
+      allow delete: if isAuthenticated() && isCampaignDM(resource.data.campaignId);
+    }
+
+    // A hint must be true: "deleted" only once the document is gone, "access" only from the DM or
+    // the entry's owner (who can change who sees it), "resync" (bulk changes) only from the DM.
+    function isValidSyncHint(hintId) {
+      let h = request.resource.data;
+      return isCampaignMember(h.campaignId) &&
+             h.keys().hasOnly(['id', 'campaignId', 'coll', 'docId', 'kind', 'at']) &&
+             h.id == hintId &&
+             h.coll in ['entities', 'relationships'] &&
+             h.docId is string && h.docId.size() < 200 &&
+             h.at == request.time &&
+             (
+               (h.kind == 'resync' && h.docId == '' && isCampaignDM(h.campaignId)) ||
+               (h.kind == 'deleted' && h.docId.size() > 0 &&
+                !existsAfter(/databases/$(database)/documents/$(h.coll)/$(h.docId))) ||
+               (h.kind == 'access' && h.coll == 'entities' && h.docId.size() > 0 &&
+                existsAfter(/databases/$(database)/documents/entities/$(h.docId)) &&
+                (isCampaignDM(h.campaignId) ||
+                 getAfter(/databases/$(database)/documents/entities/$(h.docId)).data.ownerId == request.auth.uid))
+             );
+    }
+
     match /relationships/{relId} {
       allow read: if isAuthenticated() && (resource == null || isAdmin() || isCampaignMember(resource.data.campaignId));
       allow create: if isAuthenticated() && (isAdmin() || (isCampaignDM(request.resource.data.campaignId) && isValidRelationship()));
       allow update: if isAuthenticated() && (isAdmin() || (isCampaignDM(resource.data.campaignId) && isValidRelationship()));
       allow delete: if isAuthenticated() && (isAdmin() || isCampaignDM(resource.data.campaignId));
+    }
+
+    // ===============================================================
+    // Battle maps: scenes/{entityId} with tokens, drawings, live marks and DM-only secrets.
+    // Sub-collection docs carry campaignId so membership checks don't need the scene doc.
+    // ===============================================================
+    function sceneCampaign(sceneId) {
+      return get(/databases/$(database)/documents/scenes/$(sceneId)).data.campaignId;
+    }
+
+    function isValidToken() {
+      let d = request.resource.data;
+      return d.keys().hasAll(['id', 'campaignId', 'name', 'x', 'y', 'size', 'controlledBy', 'hidden']) &&
+             d.name is string && d.name.size() < 120 &&
+             d.x is number && d.y is number && d.size is number && d.size > 0 && d.size <= 10 &&
+             d.controlledBy is list && d.controlledBy.size() <= 20 &&
+             d.hidden is bool &&
+             (!('conditions' in d) || (d.conditions is list && d.conditions.size() <= 30)) &&
+             (!('initiative' in d) || d.initiative == null || d.initiative is number) &&
+             (!('initTie' in d) || d.initTie == null || d.initTie is number) &&
+             (!('img' in d) || d.img == null || (d.img is string && d.img.size() < 60000)) &&
+             (!('known' in d) || d.known is bool) &&
+             (!('timers' in d) || d.timers is map) &&
+             (!('aura' in d) || d.aura == null || d.aura is map) &&
+             (!('elevation' in d) || d.elevation is number);
+    }
+
+    match /scenes/{sceneId} {
+      allow read: if isAuthenticated() && (resource == null || isAdmin() || isCampaignMember(resource.data.campaignId));
+      allow create: if isAuthenticated() && (isAdmin() || (
+        isCampaignDM(request.resource.data.campaignId) && request.resource.data.id == sceneId));
+      allow update: if isAuthenticated() && (isAdmin() || (
+        request.resource.data.campaignId == resource.data.campaignId && (
+          isCampaignDM(resource.data.campaignId) ||
+          (isCampaignMember(resource.data.campaignId) && (
+            // Players open and close doors…
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['openDoors', 'updatedAt']) ||
+            // …and pass the turn on when it's one of their tokens' turn.
+            (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['combat', 'updatedAt']) &&
+             request.resource.data.combat.diff(resource.data.combat).affectedKeys().hasOnly(['turn', 'round']) &&
+             resource.data.combat.turn is string &&
+             request.auth.uid in get(/databases/$(database)/documents/scenes/$(sceneId)/tokens/$(resource.data.combat.turn)).data.controlledBy))))));
+      allow delete: if isAuthenticated() && (isAdmin() || isCampaignDM(resource.data.campaignId));
+
+      match /tokens/{tokenId} {
+        // Hidden tokens never reach players (their query asks for hidden == false), except their own:
+        // a hidden (e.g. invisible) character is still there for the player who moves it.
+        allow read: if isAuthenticated() && (resource == null || isAdmin() || (
+          isCampaignMember(resource.data.campaignId) && (resource.data.hidden == false ||
+            request.auth.uid in resource.data.controlledBy || isCampaignDM(resource.data.campaignId))));
+        allow create: if isAuthenticated() && (isAdmin() || (
+          isValidToken() && request.resource.data.id == tokenId &&
+          request.resource.data.campaignId == sceneCampaign(sceneId) &&
+          (isCampaignDM(request.resource.data.campaignId) ||
+           // A player places their own token (visible, controlled by them alone).
+           (isCampaignMember(request.resource.data.campaignId) &&
+            request.resource.data.controlledBy == [request.auth.uid] && request.resource.data.hidden == false))));
+        allow update: if isAuthenticated() && (isAdmin() || (
+          isValidToken() && request.resource.data.campaignId == resource.data.campaignId && request.resource.data.id == resource.data.id && (
+            isCampaignDM(resource.data.campaignId) ||
+            (request.auth.uid in resource.data.controlledBy && isCampaignMember(resource.data.campaignId) &&
+             request.resource.data.diff(resource.data).affectedKeys().hasOnly(['x', 'y', 'initiative', 'initTie', 'conditions', 'timers', 'aura', 'elevation', 'updatedAt']) &&
+             // Players reroll (which clears the tie order); only the DM sets the order itself.
+             (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['initTie']) || request.resource.data.initTie == null)))));
+        allow delete: if isAuthenticated() && (isAdmin() || isCampaignDM(resource.data.campaignId) ||
+          (request.auth.uid in resource.data.controlledBy && isCampaignMember(resource.data.campaignId)));
+      }
+
+      // Players' drawings are always shared; the DM's stay private until the DM shares them
+      // (players' queries ask for shared == true).
+      match /drawings/{drawingId} {
+        allow read: if isAuthenticated() && (resource == null || isAdmin() || (
+          isCampaignMember(resource.data.campaignId) && (resource.data.shared == true || isCampaignDM(resource.data.campaignId))));
+        allow create: if isAuthenticated() && (isAdmin() || (
+          // Your own drawing; or the DM putting one back (undo after erasing a player's drawing).
+          (request.resource.data.by == request.auth.uid || isCampaignDM(request.resource.data.campaignId)) &&
+          request.resource.data.campaignId == sceneCampaign(sceneId) &&
+          isCampaignMember(request.resource.data.campaignId) &&
+          request.resource.data.shared is bool &&
+          (request.resource.data.shared == true || isCampaignDM(request.resource.data.campaignId)) &&
+          request.resource.data.points is string && request.resource.data.points.size() < 20000));
+        allow update: if isAuthenticated() && (isAdmin() || (
+          isCampaignDM(resource.data.campaignId) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['shared']) &&
+          request.resource.data.shared is bool));
+        allow delete: if isAuthenticated() && (isAdmin() || isCampaignDM(resource.data.campaignId) ||
+          (resource.data.by == request.auth.uid && isCampaignMember(resource.data.campaignId)));
+      }
+
+      // Each person's latest ping (id = uid) and measurement (id = uid + '-m').
+      match /live/{markId} {
+        allow read: if isAuthenticated() && (resource == null || isAdmin() || isCampaignMember(resource.data.campaignId));
+        allow create, update: if isAuthenticated() && (markId == request.auth.uid || markId == request.auth.uid + '-m') &&
+          request.resource.data.campaignId == sceneCampaign(sceneId) &&
+          isCampaignMember(request.resource.data.campaignId);
+        allow delete: if isAuthenticated() && (markId == request.auth.uid || markId == request.auth.uid + '-m' ||
+          isCampaignDM(resource.data.campaignId));
+      }
+
+      // Monster HP and other numbers players must not see.
+      match /secret/{docId} {
+        allow read, write: if isAuthenticated() && (isAdmin() || isCampaignDM(sceneCampaign(sceneId)));
+      }
     }
 
     match /media/{mediaId} {

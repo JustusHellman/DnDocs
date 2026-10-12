@@ -5,9 +5,9 @@ import { useAuth } from '../contexts/AuthContext';
 import { useCampaignData } from '../contexts/CampaignDataContext';
 import { useToast } from '../contexts/ToastContext';
 import { useConfirm } from '../contexts/ConfirmContext';
-import { removePlayer, renameCampaign, setCoDm, updateProfile } from '../lib/entityService';
+import { removePlayer, renameCampaign, setCoDm, setHouseRules, updateProfile } from '../lib/entityService';
 import type { User } from '../types';
-import { Avatar, Page, PageHeader } from '../components/ui/bits';
+import { Avatar, Page, PageHeader, Toggle } from '../components/ui/bits';
 import { GiMeepleGroup } from 'react-icons/gi';
 import { Modal } from '../components/ui/Modal';
 import { MenuItem, Popover } from '../components/ui/Popover';
@@ -70,7 +70,11 @@ function MemberMenu({ member }: { member: User }) {
 
 export default function Members() {
   const { currentCampaign, user, isOwner, isDM } = useAuth();
-  const { members, refreshMembers } = useCampaignData();
+  const { members, refreshMembers, reloadFromServer } = useCampaignData();
+  // Names and pictures are cached for a day elsewhere; this page shows them fresh.
+  useEffect(() => {
+    refreshMembers();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const toast = useToast();
   const [params, setParams] = useSearchParams();
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -199,12 +203,48 @@ export default function Members() {
               </button>
             </div>
           )}
+          <div className="mt-4 flex items-start gap-3 border-t border-stone-800 pt-4">
+            <div className="min-w-0 flex-1">
+              <div className="text-stone-100">Massive damage kills outright</div>
+              <p className="text-xs text-stone-500">
+                5e rule: when damage takes a character to 0 HP and what's left over is at least their hit point maximum, they die. Off: they just fall unconscious.
+              </p>
+            </div>
+            <Toggle
+              label="Massive damage kills outright"
+              checked={currentCampaign?.houseRules?.massiveDamage !== false}
+              onChange={(on) =>
+                currentCampaign &&
+                setHouseRules(currentCampaign.id, { ...(currentCampaign.houseRules ?? {}), massiveDamage: on }).catch((err) => toast.error(err, 'Table rules'))
+              }
+            />
+          </div>
           <div className="mt-4 border-t border-stone-800 pt-4">
             <div className="text-xs text-stone-500">Join code</div>
             <div className="font-mono text-lg tracking-[0.25em] text-amber-300">{currentCampaign?.joinCode}</div>
           </div>
         </section>
       )}
+
+      <section className="card mt-6 flex flex-wrap items-center gap-3 p-5">
+        <div className="min-w-0 flex-1">
+          <h2 className="section-title mb-1">This device</h2>
+          <p className="text-sm text-stone-400">
+            Keeps a copy of the campaign and only downloads what changed since your last visit. If anything looks out of date, reload it.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          onClick={() => {
+            reloadFromServer();
+            refreshMembers();
+            toast.success('Reloading the campaign from the server');
+          }}
+        >
+          Reload campaign data
+        </button>
+      </section>
 
       {isOwner && <DeleteCampaignCard />}
 

@@ -1,6 +1,6 @@
 import { Suspense, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { History, Menu, Plus, Search } from 'lucide-react';
+import { History, Menu, Plus, Search, Swords, X } from 'lucide-react';
 import { GiBookmarklet, GiOpenBook, GiTreasureMap } from 'react-icons/gi';
 import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
@@ -8,7 +8,7 @@ import { useCampaignData } from '../../contexts/CampaignDataContext';
 import { usePeek } from '../../contexts/PeekContext';
 import { useToast } from '../../contexts/ToastContext';
 import { useIsDesktop, useMediaQuery } from '../../hooks/useMediaQuery';
-import { menuTypes, TYPE_META } from '../../lib/entityTypes';
+import { menuTypes, playerCanCreate, TYPE_META } from '../../lib/entityTypes';
 import { Spinner } from '../ui/bits';
 import { useEscape, useScrollLock } from '../ui/Modal';
 import { MenuItem, Popover } from '../ui/Popover';
@@ -16,6 +16,7 @@ import Sidebar from './Sidebar';
 import CommandPalette from './CommandPalette';
 import { Desk, PageDropZone, PeekSheet } from './PeekPanel';
 import { DragProvider } from './drag';
+import { ActiveScenesProvider, useActiveBattles } from '../../contexts/ActiveScenesContext';
 
 function readCompact() {
   try {
@@ -69,7 +70,10 @@ function NewButton({ compact }: { compact?: boolean }) {
   const [open, setOpen] = useState(false);
   const typeFromPath = location.pathname.match(/^\/entities\/([^/]+)/)?.[1];
 
-  if (!isDM) {
+  // Players can make notes and their own characters (unless the DM hid the character type).
+  const choices = menuTypes().filter((t) => isDM || playerCanCreate(t.value));
+
+  if (!isDM && choices.length <= 1) {
     return (
       <button type="button" className={compact ? 'btn-icon' : 'btn btn-primary'} onClick={() => navigate('/entity/new?type=note')} aria-label="New note">
         <Plus size={18} />
@@ -84,9 +88,7 @@ function NewButton({ compact }: { compact?: boolean }) {
         {!compact && 'New'}
       </button>
       <Popover anchorRef={anchor} open={open} onClose={() => setOpen(false)} width={220}>
-        {menuTypes()
-          .filter((t) => isDM || t.value === 'note')
-          .map((t) => (
+        {choices.map((t) => (
           <MenuItem
             key={t.value}
             icon={t.icon}
@@ -101,6 +103,31 @@ function NewButton({ compact }: { compact?: boolean }) {
         ))}
       </Popover>
     </>
+  );
+}
+
+/** "Join battle" for everyone while the DM has a battle map switched on. */
+function BattleBanner() {
+  const battles = useActiveBattles();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [dismissed, setDismissed] = useState<string[]>([]);
+  const battle = battles.find((b) => !dismissed.includes(b.id) && location.pathname !== `/battle/${b.id}`);
+  if (!battle) return null;
+  return (
+    <div className="flex shrink-0 items-center gap-2 border-b border-amber-700/40 bg-amber-500/15 px-3 py-1.5 text-sm text-amber-100 sm:px-4">
+      <Swords size={16} className="shrink-0 text-amber-400" />
+      <span className="min-w-0 flex-1 truncate">
+        {battle.combat?.active ? 'Combat' : 'A battle'} at <strong>{battle.name}</strong>
+        {battle.combat?.active && battle.combat.round > 0 ? ` · round ${battle.combat.round}` : ''}
+      </span>
+      <button type="button" className="btn btn-primary btn-sm" onClick={() => navigate(`/battle/${battle.id}`)}>
+        Join battle
+      </button>
+      <button type="button" className="btn-icon-sm" aria-label="Hide" onClick={() => setDismissed((d) => [...d, battle.id])}>
+        <X size={15} />
+      </button>
+    </div>
   );
 }
 
@@ -219,6 +246,7 @@ export default function AppShell() {
   }, []);
 
   return (
+    <ActiveScenesProvider>
     <DragProvider>
     <div className="flex h-dvh overflow-hidden">
       {isTablet && (
@@ -256,6 +284,7 @@ export default function AppShell() {
           </div>
         </header>
 
+        <BattleBanner />
         <main ref={mainRef} id="main" className="@container min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[calc(env(safe-area-inset-bottom)+4.5rem)] md:pb-0">
           <Suspense fallback={<Spinner className="py-24" />}>
             <Outlet />
@@ -271,5 +300,6 @@ export default function AppShell() {
       <PushListener />
     </div>
     </DragProvider>
+    </ActiveScenesProvider>
   );
 }

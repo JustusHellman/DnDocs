@@ -385,6 +385,7 @@ body {
 .tone-note { --tone: #5c4a35; }
 .tone-item { --tone: #2e5b72; }
 .tone-npc { --tone: #2d6a43; }
+.tone-character { --tone: #8a2f5c; }
 .tone-monster { --tone: #8e2020; }
 .tone-shop { --tone: #9a5518; }
 .tone-geography { --tone: #56702a; }

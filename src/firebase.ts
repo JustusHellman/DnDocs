@@ -12,6 +12,9 @@ import firebaseConfig from '../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
 
+/** Whether the offline cache survives a reload (incremental sync relies on it). */
+export let cacheIsPersistent = false;
+
 /**
  * Offline cache: Firestore keeps a copy of the campaign in the browser (IndexedDB), so the app
  * opens instantly, keeps working on bad Wi-Fi at the table, and only downloads what changed —
@@ -19,11 +22,14 @@ const app = initializeApp(firebaseConfig);
  */
 function createDb(): Firestore {
   try {
-    return initializeFirestore(
+    const db = initializeFirestore(
       app,
-      { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) },
+      // Room for the campaign plus its map images, so the offline copy isn't trimmed away.
+      { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager(), cacheSizeBytes: 150 * 1024 * 1024 }) },
       firebaseConfig.firestoreDatabaseId,
     );
+    cacheIsPersistent = typeof indexedDB !== 'undefined';
+    return db;
   } catch {
     return initializeFirestore(app, { localCache: memoryLocalCache() }, firebaseConfig.firestoreDatabaseId);
   }

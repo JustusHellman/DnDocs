@@ -11,7 +11,7 @@ const failOnce = new Set<string>(); // fails once (a network blip the retry shou
 const failAlways = new Set<string>(); // keeps failing until cleared
 let writerUid = 'dm1';
 const CAMPAIGN = { dmId: 'dm1' };
-const BUILTIN = ['npc', 'settlement', 'landmark', 'country', 'faction', 'shop', 'item', 'note', 'geography', 'monster', 'quest'];
+const BUILTIN = ['npc', 'settlement', 'landmark', 'country', 'faction', 'shop', 'item', 'note', 'geography', 'monster', 'quest', 'character'];
 
 function validEntity(d: any, id: string) {
   const need = ['id', 'campaignId', 'type', 'name', 'content', 'tags', 'ownerId', 'isPublic', 'allowedPlayers', 'createdAt', 'updatedAt'];
@@ -36,7 +36,20 @@ vi.mock('firebase/firestore', () => {
   const snap = (r: any) => ({ id: r.id, exists: () => store.has(r.path), data: () => store.get(r.path) });
   return {
     collection: (_db: unknown, col: string) => ({ col }),
-    doc: (_db: unknown, col: string, id: string) => ref(col, id),
+    doc: (base: any, col?: string, id?: string) => (col ? ref(col, id!) : ref(base.col, `auto${Math.random().toString(36).slice(2)}`)),
+    serverTimestamp: () => ({ serverTime: true }),
+    Timestamp: { fromMillis: (ms: number) => ({ ms }) },
+    limit: (n: number) => ({ limit: n }),
+    writeBatch: () => {
+      const ops: (() => void)[] = [];
+      return {
+        set: (r: any, data: any) => ops.push(() => store.set(r.path, JSON.parse(JSON.stringify(data)))),
+        commit: async () => {
+          if (!isDM()) throw new Error('permission-denied');
+          ops.forEach((f) => f());
+        },
+      };
+    },
     where: (field: string, _op: string, value: unknown) => ({ field, value }),
     query: (c: any, w: any) => ({ ...c, w }),
     getDocFromServer: async (r: any) => snap(r),

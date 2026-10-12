@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canViewEntity, canViewField, upgradeSharing } from '../lib/permissions';
+import { canDeleteEntity, canEditEntity, canViewEntity, canViewField, upgradeSharing } from '../lib/permissions';
 import type { Entity } from '../types';
 
 const base = (over: Partial<Entity> = {}): Entity => ({
@@ -61,5 +61,37 @@ describe('sharing model', () => {
     const e = base({ isPublic: true, attributes: { oldSecret: 'betrays them' } });
     expect(canViewField(p1, e, 'oldSecret')).toBe(false);
     expect(canViewField(dm, e, 'oldSecret')).toBe(true);
+  });
+});
+
+describe('player characters', () => {
+  const pc = (over: Partial<Entity> = {}) => base({ type: 'character', ownerId: 'p1', playerId: 'p1', ...over });
+  it('can be edited by the player who made it and by the DM, not by other players', () => {
+    expect(canEditEntity(p1, pc())).toBe(true);
+    expect(canEditEntity(dm, pc())).toBe(true);
+    expect(canEditEntity(p2, pc({ isPublic: true }))).toBe(false);
+  });
+  it('made by the DM can be edited by the player who plays it', () => {
+    const e = pc({ ownerId: 'dm', playerId: 'p2' });
+    expect(canEditEntity(p2, e)).toBe(true);
+    expect(canEditEntity(p1, e)).toBe(false);
+  });
+  it('are always visible to their player, in full', () => {
+    const e = pc({ ownerId: 'dm', playerId: 'p2', fieldPermissions: { currentHp: { isPublic: false, allowedPlayers: [] } } });
+    expect(canViewEntity(p2, e)).toBe(true);
+    expect(canViewField(p2, e, 'currentHp')).toBe(true);
+    expect(canViewEntity(p1, e)).toBe(false);
+  });
+  it('are visible to the DM even when the player keeps them private', () => {
+    expect(canViewEntity(dm, pc())).toBe(true);
+    expect(canViewEntity(p2, pc())).toBe(false);
+  });
+  it('can be deleted by their creator and the DM only', () => {
+    expect(canDeleteEntity(p1, pc())).toBe(true);
+    expect(canDeleteEntity(dm, pc())).toBe(true);
+    expect(canDeleteEntity(p2, pc({ ownerId: 'dm', playerId: 'p2' }))).toBe(false);
+  });
+  it('do not make other entries editable for players', () => {
+    expect(canEditEntity(p1, base({ playerId: 'p1' }))).toBe(false);
   });
 });

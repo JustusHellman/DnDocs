@@ -12,6 +12,7 @@ import {
 import { clearIndexedDbPersistence, doc, getDoc, onSnapshot, setDoc, terminate } from 'firebase/firestore';
 import { auth, db, googleProvider } from '../firebase';
 import type { Campaign, User } from '../types';
+import { forgetSyncState, stopSavingSyncState } from '../lib/sync';
 import { logError } from '../lib/errors';
 import { registerJoinCode } from '../lib/entityService';
 
@@ -79,7 +80,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Auth state + live user profile
   useEffect(() => {
     let unsubUser: (() => void) | undefined;
+    let authRun = 0;
     const unsubAuth = onAuthStateChanged(auth, async (fUser) => {
+      const run = ++authRun;
       unsubUser?.();
       unsubUser = undefined;
       setFirebaseUser(fUser);
@@ -90,16 +93,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setAuthReady(true);
         return;
       }
-      try {
-        setUser(await ensureUserDoc(fUser));
-      } catch (err) {
-        logError('Loading user profile', err);
-      }
-      unsubUser = onSnapshot(
-        doc(db, 'users', fUser.uid),
-        (snap) => snap.exists() && setUser(snap.data() as User),
-        (err) => logError('User profile listener', err),
-      );
+      // One listener gives the profile (the cached copy at once, then the server's): no separate
+      // read first. A brand-new account gets its profile document created here.
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        let creating = false;
+        const finish = () => {
+          if (!settled) {
+            settled = true;
+            resolve();
+          }
+        };
+        const create = () => {
+          if (creating) return;
+          creating = true;
+          ensureUserDoc(fUser)
+            .then((u) => run === authRun && setUser(u))
+            .catch((err) => logError('Loading user profile', err))
+            .finally(finish);
+        };
+        // Offline with nothing cached: don't keep the app waiting forever.
+        setTimeout(finish, 10_000);
+        unsubUser = onSnapshot(
+          doc(db, 'users', fUser.uid),
+          (snap) => {
+            if (run !== authRun) return;
+            const fromCache = snap.metadata.fromCache;
+            if (snap.exists()) {
+              setUser(snap.data() as User);
+              finish();
+            } else if (!fromCache) create();
+          },
+          (err) => {
+            logError('User profile listener', err);
+            create();
+          },
+        );
+      });
+      if (run !== authRun) return;
       setAuthReady(true);
     });
     return () => {
@@ -181,6 +212,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       },
       logout: async () => {
         setCurrentCampaign(null);
+        // Nothing may write this device's sync bookkeeping back once we're signing out.
+        stopSavingSyncState();
+        forgetSyncState();
+        try {
+          localStorage.removeItem('dndocs-profiles');
+        } catch {
+          /* ignore */
+        }
         await signOut(auth);
         // Don't leave the campaign in this browser's offline cache (shared table laptops).
         try {

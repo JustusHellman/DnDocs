@@ -39,6 +39,7 @@ import {
   GiTreasureMap,
   GiTreeBranch,
   GiVillage,
+  GiVisoredHelm,
   GiWolfHead,
 } from 'react-icons/gi';
 import type { BuiltinType, CustomFieldDef, CustomTypeDef, Entity, EntityType, FieldKind, TypeConfig } from '../types';
@@ -124,7 +125,7 @@ const BUILTIN_DEFS: Omit<EntityTypeMeta, 'group'>[] = [
     icon: GiQuillInk,
     tone: 'tone tone-note',
     level: 0,
-    parents: ['geography', 'country', 'settlement', 'landmark', 'faction', 'shop', 'npc', 'monster', 'item', 'quest', 'note'],
+    parents: ['geography', 'country', 'settlement', 'landmark', 'faction', 'shop', 'npc', 'character', 'monster', 'item', 'quest', 'note'],
     summaryKeys: ['sessionNumber', 'date'],
     fields: [
       { key: 'sessionNumber', label: 'Session Number', type: 'text', description: 'Which game session does this note belong to?' },
@@ -138,7 +139,7 @@ const BUILTIN_DEFS: Omit<EntityTypeMeta, 'group'>[] = [
     icon: GiLockedChest,
     tone: 'tone tone-item',
     level: 2,
-    parents: ['npc', 'shop', 'settlement', 'landmark'],
+    parents: ['npc', 'character', 'shop', 'settlement', 'landmark'],
     summaryKeys: ['itemCategory', 'damageDie'],
     fields: [
       {
@@ -179,6 +180,28 @@ const BUILTIN_DEFS: Omit<EntityTypeMeta, 'group'>[] = [
       { key: 'characterSheetLink', label: 'Character Sheet Link', type: 'text', description: 'URL to D&D Beyond or other character sheet.' },
       { key: 'isAlive', label: 'Is Alive?', type: 'boolean', defaultValue: true },
       { key: 'codeOfConduct', label: 'Code of Conduct', type: 'textarea', description: 'Personal rules or moral compass.' },
+    ],
+  },
+  {
+    value: 'character',
+    label: 'Player Character',
+    plural: 'Player Characters',
+    icon: GiVisoredHelm,
+    tone: 'tone tone-character',
+    level: 4,
+    parents: ['settlement', 'shop', 'landmark', 'country', 'geography', 'faction'],
+    summaryKeys: ['classLevel', 'species'],
+    fields: [
+      { key: 'classLevel', label: 'Class & Level', type: 'text', description: 'e.g. Rogue 3, or Fighter 2 / Wizard 1' },
+      { key: 'species', label: 'Species', type: 'text', description: 'e.g. Human, Elf, Dwarf' },
+      { key: 'background', label: 'Background', type: 'text', description: 'e.g. Sage, Soldier, Criminal' },
+      { key: 'alignment', label: 'Alignment', type: 'text', description: 'e.g. Neutral Good' },
+      { key: 'currentHp', label: 'Current HP', type: 'text', description: 'Hit points right now. Maximum HP is set in the stat block.' },
+      { key: 'tempHp', label: 'Temporary HP', type: 'text', description: 'Lost before current HP when taking damage.' },
+      { key: 'conditions', label: 'Conditions', type: 'text', description: 'e.g. Poisoned, Prone, Exhaustion 1' },
+      { key: 'characterSheetLink', label: 'Character Sheet Link', type: 'text', description: 'URL to D&D Beyond or another character sheet.' },
+      { key: 'personality', label: 'Personality & Ideals', type: 'textarea', description: 'Traits, ideals, bonds and flaws.' },
+      { key: 'isAlive', label: 'Is Alive?', type: 'boolean', defaultValue: true },
     ],
   },
   {
@@ -352,6 +375,7 @@ const GROUP: Record<BuiltinType, EntityTypeMeta['group']> = {
   note: 'Adventure',
   item: 'Adventure',
   npc: 'Characters',
+  character: 'Characters',
   monster: 'Characters',
   faction: 'Characters',
   country: 'World',
@@ -479,6 +503,16 @@ export function applyTypeConfig(config: TypeConfig | undefined | null): boolean 
 
 applyTypeConfig(null);
 
+/** Types players may create themselves (everything else is DM-only). */
+export const PLAYER_TYPES: readonly string[] = ['note', 'character'];
+
+export function playerCanCreate(type: string | undefined): boolean {
+  return !!type && PLAYER_TYPES.includes(type);
+}
+
+/** The keys of a player character's HP, shown by the HP tracker rather than the details list. */
+export const HP_KEYS = ['currentHp', 'tempHp'] as const;
+
 /** The built-in type an entry behaves like (itself for built-in types). */
 export function baseType(type: string): string {
   return TYPE_META[type]?.base ?? type;
@@ -532,6 +566,15 @@ export function fieldsFor(type: string | undefined): FieldSchema[] {
 /** Every field key that can carry its own visibility setting. */
 export function permissionKeys(type: string): string[] {
   return ['content', 'tags', 'locationId', 'gender', 'imageUrls', 'statBlock', ...fieldsFor(type).map((f) => f.key)];
+}
+
+/**
+ * Fields a first Reveal ticks by default: the description, pictures and the type's headline fields
+ * (the ones shown on its cards, e.g. an NPC's race and profession). Everything else is held back.
+ */
+export function defaultRevealed(type: string, key: string): boolean {
+  if (key === 'content' || key === 'imageUrls' || key === 'gender') return true;
+  return typeMeta(type).summaryKeys?.includes(key) ?? false;
 }
 
 export function fieldLabel(type: string, key: string): string {

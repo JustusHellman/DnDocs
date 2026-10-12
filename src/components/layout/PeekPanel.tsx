@@ -39,7 +39,7 @@ class SlotErrorBoundary extends Component<{ children: ReactNode; onClose: () => 
 }
 
 function ShelfChip({ item }: { item: PeekItem }) {
-  const { slots, activate } = usePeek();
+  const { slots, activate, remove } = usePeek();
   const { entityMap } = useCampaignData();
   const live = entityMap.get(item.id);
   const label = live?.name ?? item.title;
@@ -47,21 +47,34 @@ function ShelfChip({ item }: { item: PeekItem }) {
   const drag = useDragSource({ entryId: item.id, label, type });
   const open = slots.some((s) => slotEntry(s) === item.id);
   return (
-    <button
-      type="button"
-      {...drag}
-      onClick={(e) => activate(item.id, { newSlot: e.ctrlKey || e.metaKey })}
-      aria-pressed={open}
-      title="Click to open · drag onto a column (or its edge for a new column)"
+    <div
       className={clsx(
-        'flex max-w-[12rem] shrink-0 cursor-grab items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors select-none active:cursor-grabbing',
+        'group flex max-w-[13rem] shrink-0 items-center rounded-full border text-xs transition-colors',
         open ? 'border-amber-500/60 bg-amber-500/10 text-amber-300' : 'border-stone-800 bg-stone-900 text-stone-400 hover:text-stone-200',
         item.flash && !open && 'animate-flash border-amber-500/60 text-amber-300',
       )}
     >
-      <TypeIcon type={type} size={12} className="shrink-0" />
-      <span className="truncate">{label}</span>
-    </button>
+      <button
+        type="button"
+        {...drag}
+        onClick={(e) => activate(item.id, { newSlot: e.ctrlKey || e.metaKey })}
+        aria-pressed={open}
+        title="Click to open · drag onto a column (or its edge for a new column)"
+        className="flex min-w-0 cursor-grab items-center gap-1.5 py-1 pr-1 pl-2.5 select-none active:cursor-grabbing"
+      >
+        <TypeIcon type={type} size={12} className="shrink-0" />
+        <span className="truncate">{label}</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => remove(item.id)}
+        aria-label={`Remove ${label} from quick view`}
+        title="Remove from quick view"
+        className="mr-1 flex size-5 shrink-0 items-center justify-center rounded-full text-stone-500 hover:bg-stone-800 hover:text-stone-200"
+      >
+        <X size={11} />
+      </button>
+    </div>
   );
 }
 

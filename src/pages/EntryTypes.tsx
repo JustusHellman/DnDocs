@@ -13,7 +13,7 @@ import { updateTypeConfig } from '../lib/entityService';
 import type { BuiltinType, CustomFieldDef, CustomTypeDef, FieldKind, TypeConfig, TypeOverride } from '../types';
 
 const GROUPS = ['Adventure', 'Characters', 'World'] as const;
-const BASES = BUILTIN_TYPES.filter((t): t is CustomTypeDef['base'] => t !== 'note');
+const BASES = BUILTIN_TYPES.filter((t): t is CustomTypeDef['base'] => t !== 'note' && t !== 'character');
 
 const BASE_HINT: Record<string, string> = {
   quest: 'a quest (can be tied to anything)',

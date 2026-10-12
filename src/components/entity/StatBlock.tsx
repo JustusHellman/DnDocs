@@ -51,7 +51,8 @@ export function StatBlock({ stats, text }: { stats?: DndStats | null; text?: str
       )}
       {text && (
         <div className={stats ? 'border-t border-amber-900/40 p-4' : 'p-4'}>
-          <Markdown source={text} className="prose-sm" />
+          {/* Pasted stat blocks put each action on its own line: keep those line breaks. */}
+          <Markdown source={text.replace(/([^\n])\n(?!\n)/g, '$1  \n')} className="prose-sm" />
         </div>
       )}
     </div>
