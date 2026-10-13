@@ -1,10 +1,11 @@
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ListMusic, Music, Pause, Play, SkipForward, Square, Volume1, Volume2, VolumeX } from 'lucide-react';
+import { ListMusic, Music, Pause, Play, SkipForward, Square, ThumbsDown, Volume1, Volume2, VolumeX } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
 import { useJukebox } from '../../contexts/JukeboxContext';
-import { creditLine, formatTime } from '../../lib/jukebox/catalog';
+import { creditLine, formatTime, LEVEL_NAMES, LEVELS } from '../../lib/jukebox/catalog';
+import type { EnvGroup, JukeboxEnvironment, JukeboxLevel } from '../../lib/jukebox/types';
 import { Popover } from '../ui/Popover';
 import { Segmented } from '../ui/bits';
 
@@ -20,7 +21,13 @@ export function VolumeControl({ className }: { className?: string }) {
   const Icon = muted || volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
   return (
     <div className={clsx('flex items-center gap-2', className)}>
-      <button type="button" className="btn-icon-sm shrink-0" onClick={() => setMuted(!muted)} aria-label={muted ? 'Unmute music' : 'Mute music'} aria-pressed={muted}>
+      <button
+        type="button"
+        className="btn-icon-sm shrink-0"
+        onClick={() => setMuted(!muted)}
+        aria-label={muted ? 'Unmute music' : 'Mute music'}
+        aria-pressed={muted}
+      >
         <Icon size={18} />
       </button>
       <input
@@ -39,9 +46,12 @@ export function VolumeControl({ className }: { className?: string }) {
 
 /** Track title, credit and progress. */
 export function NowPlaying({ large }: { large?: boolean }) {
-  const { now, environment, state, ready, libraryError } = useJukebox();
+  const { isDM } = useAuth();
+  const { now, environment, state, ready, libraryError, level, markMisfit } = useJukebox();
   if (state?.envId && !ready) {
-    return <p className="text-sm text-stone-500 italic">{libraryError ? `The music library can't be reached (${libraryError}).` : 'Loading the music library…'}</p>;
+    return (
+      <p className="text-sm text-stone-500 italic">{libraryError ? `The music library can't be reached (${libraryError}).` : 'Loading the music library…'}</p>
+    );
   }
   if (!state?.envId || !now) {
     return <p className={clsx('text-stone-500 italic', large ? 'text-base' : 'text-sm')}>No music playing.</p>;
@@ -52,17 +62,38 @@ export function NowPlaying({ large }: { large?: boolean }) {
       <div className={clsx('flex items-center gap-2 font-display font-semibold text-amber-300', large ? 'text-lg' : 'text-sm')}>
         <span aria-hidden>{environment?.emoji ?? '🎵'}</span>
         <span className="truncate">{environment?.name ?? 'Music'}</span>
+        {level !== 'calm' && <LevelChip level={level} />}
         {!state.playing && <span className="chip text-stone-400 ring-stone-700">Paused</span>}
       </div>
-      <div className={clsx('mt-1 truncate font-semibold text-stone-100', large ? 'text-xl' : 'text-[15px]')} title={now.track.title}>
-        {now.track.title}
+      <div className="mt-1 flex items-center gap-2">
+        <div className={clsx('min-w-0 flex-1 truncate font-semibold text-stone-100', large ? 'text-xl' : 'text-[15px]')} title={now.track.title}>
+          {now.track.title}
+        </div>
+        {isDM && (
+          <button
+            type="button"
+            className="btn-icon-sm shrink-0"
+            onClick={markMisfit}
+            title="Doesn't fit here: take it out of this environment and play the next one"
+            aria-label="Doesn't fit here"
+          >
+            <ThumbsDown size={15} />
+          </button>
+        )}
       </div>
       <div className="truncate text-xs text-stone-500" title={creditLine(now.track)}>
         {creditLine(now.track)}
       </div>
       <div className="mt-2 flex items-center gap-2 text-[11px] tabular-nums text-stone-500">
         <span>{formatTime(now.offset)}</span>
-        <div className="h-1 flex-1 overflow-hidden rounded-full bg-stone-800" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100} aria-label="Track progress">
+        <div
+          className="h-1 flex-1 overflow-hidden rounded-full bg-stone-800"
+          role="progressbar"
+          aria-valuenow={Math.round(pct)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label="Track progress"
+        >
           <div className="h-full rounded-full bg-amber-500/80 transition-[width] duration-1000 ease-linear" style={{ width: `${pct}%` }} />
         </div>
         <span>{formatTime(now.duration)}</span>
@@ -99,32 +130,93 @@ export function TransportControls({ size = 'sm' }: { size?: 'sm' | 'md' }) {
   );
 }
 
+function LevelChip({ level }: { level: JukeboxLevel }) {
+  return <span className={clsx('chip', level === 'danger' ? 'text-rose-300 ring-rose-700/60' : 'text-amber-300 ring-amber-600/60')}>{LEVEL_NAMES[level]}</span>;
+}
+
+/** Calm / Tense / Danger for environments that have them (DM). */
+export function LevelControl() {
+  const { environment, level, setLevel } = useJukebox();
+  if (!environment?.levels) return null;
+  return (
+    <div className="flex items-center gap-2">
+      <span className="label mb-0">Intensity</span>
+      <Segmented
+        size="sm"
+        options={LEVELS.filter((l) => l === 'calm' || environment.levels?.[l]?.length).map((l) => ({ value: l, label: LEVEL_NAMES[l] }))}
+        value={level}
+        onChange={(v) => setLevel(v)}
+      />
+    </div>
+  );
+}
+
+/** One-shot sounds over the music (DM). */
+export function StingerButtons() {
+  const { catalog, fireSting, ready } = useJukebox();
+  if (!ready || !catalog.stingers.length) return null;
+  return (
+    <div>
+      <div className="label">Stingers</div>
+      <div className="flex flex-wrap gap-1.5">
+        {catalog.stingers.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => fireSting(s.id)}
+            title={`Play a ${s.name.toLowerCase()} sting for everyone`}
+          >
+            <span aria-hidden>{s.emoji}</span> {s.name}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export const GROUP_NAMES: Record<EnvGroup, string> = { custom: 'Your environments', places: 'Places', action: 'Action', moods: 'Moods' };
+export const GROUP_ORDER: EnvGroup[] = ['custom', 'places', 'action', 'moods'];
+
+export function groupEnvironments(envs: JukeboxEnvironment[]) {
+  return GROUP_ORDER.map((g) => ({ group: g, envs: envs.filter((e) => (e.group ?? 'places') === g) })).filter((x) => x.envs.length);
+}
+
 /** Environment buttons (DM: click to play). */
 export function EnvironmentChips({ onPicked }: { onPicked?: () => void }) {
   const { catalog, state, playEnvironment, ready } = useJukebox();
   if (!ready) return null;
   return (
-    <div className="grid grid-cols-2 gap-1.5">
-      {catalog.environments.map((e) => {
-        const active = state?.envId === e.id;
-        return (
-          <button
-            key={e.id}
-            type="button"
-            onClick={() => (playEnvironment(e.id), onPicked?.())}
-            title={e.description}
-            className={clsx(
-              'flex min-w-0 items-center gap-2 rounded-md border px-2 py-1.5 text-left text-[13px] font-medium transition-colors',
-              active ? 'border-amber-500/60 bg-amber-500/15 text-amber-200' : 'border-stone-800 bg-stone-950/40 text-stone-300 hover:border-stone-600 hover:text-stone-50',
-            )}
-          >
-            <span aria-hidden className="text-base leading-none">
-              {e.emoji}
-            </span>
-            <span className="truncate">{e.name}</span>
-          </button>
-        );
-      })}
+    <div className="space-y-2">
+      {groupEnvironments(catalog.environments).map(({ group, envs }) => (
+        <div key={group}>
+          <div className="mb-1 text-[10px] font-bold tracking-[0.14em] text-stone-500 uppercase">{GROUP_NAMES[group]}</div>
+          <div className="grid grid-cols-2 gap-1.5">
+            {envs.map((e) => {
+              const active = state?.envId === e.id;
+              return (
+                <button
+                  key={e.id}
+                  type="button"
+                  onClick={() => (playEnvironment(e.id), onPicked?.())}
+                  title={e.description}
+                  className={clsx(
+                    'flex min-w-0 items-center gap-2 rounded-md border px-2 py-1.5 text-left text-[13px] font-medium transition-colors',
+                    active
+                      ? 'border-amber-500/60 bg-amber-500/15 text-amber-200'
+                      : 'border-stone-800 bg-stone-950/40 text-stone-300 hover:border-stone-600 hover:text-stone-50',
+                  )}
+                >
+                  <span aria-hidden className="text-base leading-none">
+                    {e.emoji}
+                  </span>
+                  <span className="truncate">{e.name}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -166,14 +258,20 @@ export function JukeboxButton() {
         <div className="space-y-3 p-2">
           <NowPlaying />
           {isDM && <TransportControls />}
+          {isDM && <LevelControl />}
           <VolumeControl />
+          {isDM && <StingerButtons />}
           {isDM && (
             <div className="border-t border-stone-800 pt-3">
               <div className="label">Environment</div>
               <div className="max-h-64 overflow-y-auto pr-1">
                 <EnvironmentChips />
               </div>
-              {!jb.ready && <p className="text-sm text-stone-500 italic">{jb.libraryError ? `Music library unavailable: ${jb.libraryError}` : 'Loading the music library…'}</p>}
+              {!jb.ready && (
+                <p className="text-sm text-stone-500 italic">
+                  {jb.libraryError ? `Music library unavailable: ${jb.libraryError}` : 'Loading the music library…'}
+                </p>
+              )}
             </div>
           )}
           <button type="button" className="btn btn-ghost btn-sm w-full" onClick={() => (setOpen(false), navigate('/music'))}>

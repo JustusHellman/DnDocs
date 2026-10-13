@@ -42,15 +42,20 @@ Icons: [game-icons.net](https://game-icons.net) by Lorc, Delapouite and contribu
   repo: DnDocs loads it from `VITE_FORGE_URL` (default `https://justushellman.github.io/BattlemapForge/`,
   the same site as DnDocs on GitHub Pages), so there is one copy of its code.
 - **Jukebox** – background music everyone hears at the same moment. The DM picks an environment
-  (tavern, forest, bustling city, combat, boss battle, underwater, travel… 25 of them) from the ♫
-  button in the top bar or the *Jukebox* page, and DnDocs shuffles fitting tracks from the
-  [DnDocs Jukebox](https://github.com/JustusHellman/DnDJukebox) library, crossfading between
-  tracks and smoothly fading when the scene changes (quick / smooth / slow). The DM can pause, skip,
-  stop, play a specific track, see what's up next, make their own environments, add or remove
-  tracks (from the library, or any direct link to an audio file) and hide environments they don't
-  use. Players get a volume slider and mute (kept per device) and the track's credit. Nobody needs an
-  account anywhere: the music is Creative Commons (mostly Kevin MacLeod, incompetech.com) and is
-  served from its own GitHub Pages site, loaded from `VITE_JUKEBOX_URL` (default
+  (tavern, forest, bustling city, chase, skirmish, battle, boss battle, epic finale, underwater…
+  28 of them) from the ♫ button in the top bar or the *Jukebox* page, and DnDocs shuffles fitting
+  tracks from the [DnDJukebox](https://github.com/JustusHellman/DnDJukebox) library, crossfading
+  between tracks and fading smoothly when the scene changes (quick / smooth / slow). Many places have
+  **Calm / Tense / Danger** levels the DM can switch without changing scene; fights and chases start
+  each track where it gets going. **Stingers** (roll initiative, victory, dramatic reveal, a death…)
+  play once for everyone over the music. The DM can pause, skip, stop, play a specific track, see
+  what's up next, press 👎 *Doesn't fit here* (the track leaves that environment for the campaign,
+  with undo), make their own environments, add or remove tracks (from the library, or any direct
+  link to an audio file) and hide environments they don't use; their changes to library environments
+  can be downloaded as a review file for the library repo. Players get a volume slider and mute
+  (kept per device) and the track's credit. Nobody needs an account anywhere: the music is Creative
+  Commons (Kevin MacLeod, incompetech.com, and Scott Buckley, scottbuckley.com.au) and is served from
+  its own GitHub Pages site, loaded from `VITE_JUKEBOX_URL` (default
   `https://justushellman.github.io/DnDJukebox/`). Browsers only play sound after you've clicked
   somewhere on the page, so a player who opens DnDocs mid-song gets a one-tap *Listen* banner.
 - **Battle here** – a fight breaks out in the city? On the place's world map, *Battle here* offers:

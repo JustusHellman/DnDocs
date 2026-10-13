@@ -3,12 +3,12 @@ import { onSnapshot } from 'firebase/firestore';
 import { useAuth } from './AuthContext';
 import { useToast } from './ToastContext';
 import { logError } from '../lib/errors';
-import { durationsOf, loadLibrary, mergeCatalog, type MergedCatalog } from '../lib/jukebox/catalog';
+import { durationsOf, editKey, levelTracks, loadLibrary, mergeCatalog, startsFor, type MergedCatalog } from '../lib/jukebox/catalog';
 import { JukeboxEngine } from '../lib/jukebox/engine';
 import { BLEND, buildSequence, positionAt, type Playhead, type SlotInfo } from '../lib/jukebox/schedule';
 import * as act from '../lib/jukebox/actions';
-import { applyChange, jukeboxDoc, patchConfig, setFade } from '../lib/jukebox/service';
-import type { JukeboxConfig, JukeboxDoc, JukeboxEnvironment, JukeboxState, JukeboxTrack, LibraryCatalog } from '../lib/jukebox/types';
+import { applyChange, jukeboxDoc, patchConfig, removed, setFade } from '../lib/jukebox/service';
+import type { JukeboxConfig, JukeboxDoc, JukeboxEnvironment, JukeboxLevel, JukeboxState, JukeboxTrack, LibraryCatalog } from '../lib/jukebox/types';
 
 interface JukeboxApi {
   /** The library could be loaded (false while loading or when it failed). */
@@ -18,6 +18,8 @@ interface JukeboxApi {
   config: JukeboxConfig;
   state: JukeboxState | null;
   environment: JukeboxEnvironment | null;
+  /** Calm, Tense or Danger (environments with levels). */
+  level: JukeboxLevel;
   /** What plays right now, and how far in. */
   now: (Playhead & { track: JukeboxTrack }) | null;
   upNext: (SlotInfo & { track: JukeboxTrack })[];
@@ -28,8 +30,20 @@ interface JukeboxApi {
   setVolume: (v: number) => void;
   setMuted: (m: boolean) => void;
   // DM only
-  playEnvironment: (envId: string) => void;
-  playTrack: (trackId: string, envId?: string | null) => void;
+  playEnvironment: (envId: string, level?: JukeboxLevel) => void;
+  setLevel: (level: JukeboxLevel) => void;
+  playTrack: (trackId: string, envId?: string | null, level?: JukeboxLevel) => void;
+  /** Fire a stinger (everyone hears it once, over the music). */
+  fireSting: (stingerId: string) => void;
+  /** Take the playing track out of this environment (for this campaign) and go to the next one. */
+  markMisfit: () => void;
+  /** The DM's changes to library environments, as a review file for the library repo. */
+  libraryChanges: () => {
+    version: 1;
+    source: string;
+    createdAt: string;
+    changes: { action: 'add' | 'remove'; env: string; track: string; level?: JukeboxLevel }[];
+  };
   skip: () => void;
   togglePause: () => void;
   stop: () => void;
@@ -109,13 +123,15 @@ export function JukeboxProvider({ children }: { children: ReactNode }) {
   const catalog = useMemo(() => mergeCatalog(library, config), [library, config]);
   const durations = useMemo(() => durationsOf(catalog.tracks), [catalog.tracks]);
   const state = docData?.state?.envId !== undefined ? (docData.state as JukeboxState) : null;
-  const envTracks = useCallback((envId: string) => catalog.environments.concat(catalog.hidden).find((e) => e.id === envId)?.tracks ?? [], [catalog]);
+  const findEnv = useCallback((envId: string) => catalog.environments.concat(catalog.hidden).find((e) => e.id === envId) ?? null, [catalog]);
+  const envTracks = useCallback((envId: string, level?: JukeboxLevel) => levelTracks(findEnv(envId), level), [findEnv]);
+  const starts = useCallback((envId: string) => startsFor(findEnv(envId), catalog.tracks), [findEnv, catalog.tracks]);
 
   const sequence = useMemo(() => {
     if (!state?.envId) return null;
-    return buildSequence(state, state.tracks ?? envTracks(state.envId), durations);
+    return buildSequence(state, state.tracks ?? envTracks(state.envId, state.level), durations, starts(state.envId));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state?.envId, state?.seed, state?.lead, state?.avoid?.join(), state?.tracks?.join(), durations, envTracks]);
+  }, [state?.envId, state?.level, state?.seed, state?.lead, state?.avoid?.join(), state?.tracks?.join(), durations, envTracks, starts]);
 
   // The engine lives as long as the campaign is open.
   useEffect(() => {
@@ -199,7 +215,7 @@ export function JukeboxProvider({ children }: { children: ReactNode }) {
   }, [state, sequence, catalog.tracks, nowPlaying?.key]);
 
   // ------------------------------------------------------------------ DM actions
-  const ctx = useCallback((): act.ActionContext => ({ envTracks, durations, config }), [envTracks, durations, config]);
+  const ctx = useCallback((): act.ActionContext => ({ envTracks, starts, durations, config }), [envTracks, starts, durations, config]);
   const commit = useCallback(
     (change: act.Change | null) => {
       if (!change || !campaignId || !user || !isDM) return;
@@ -215,7 +231,8 @@ export function JukeboxProvider({ children }: { children: ReactNode }) {
     catalog,
     config,
     state,
-    environment: state?.envId ? (catalog.environments.concat(catalog.hidden).find((e) => e.id === state.envId) ?? null) : null,
+    environment: state?.envId ? findEnv(state.envId) : null,
+    level: state?.level ?? 'calm',
     now: nowPlaying,
     upNext,
     blocked: blocked && !!nowPlaying,
@@ -233,19 +250,57 @@ export function JukeboxProvider({ children }: { children: ReactNode }) {
       setMutedState(m);
       store('jukebox:muted', m ? '1' : '0');
     },
-    playEnvironment: (envId) => {
-      if (!envTracks(envId).some((id) => durations[id] > 0)) {
+    playEnvironment: (envId, level) => {
+      if (!envTracks(envId, level).some((id) => durations[id] > 0)) {
         toast.show('That environment has no tracks yet.');
         return;
       }
-      commit(act.playEnvironment(state ?? undefined, envId, ctx()));
+      commit(act.playEnvironment(state ?? undefined, envId, ctx(), { level }));
     },
-    playTrack: (trackId, envId) => {
+    setLevel: (level) => commit(act.setLevel(state ?? undefined, level, ctx())),
+    playTrack: (trackId, envId, level) => {
       try {
-        commit(act.playTrack(state ?? undefined, trackId, envId ?? null, ctx()));
+        commit(act.playTrack(state ?? undefined, trackId, envId ?? null, ctx(), level));
       } catch (err) {
         toast.error(err);
       }
+    },
+    fireSting: (stingerId) => {
+      const s = catalog.stingers.find((x) => x.id === stingerId);
+      if (!s?.tracks.length) return;
+      const track = s.tracks[Math.floor(Math.random() * s.tracks.length)];
+      commit(act.sting(state ?? undefined, s.id, track, {}));
+    },
+    markMisfit: () => {
+      const env = state?.envId ? findEnv(state.envId) : null;
+      const trackId = nowPlaying?.trackId;
+      if (!state || !env || !trackId || !campaignId || !user || !isDM) return;
+      const level = state.level ?? 'calm';
+      const remaining = (state.tracks ?? envTracks(env.id, level)).filter((id) => id !== trackId);
+      const { patch, undo } = misfitPatch(env, level, trackId, config);
+      // Go on with the rest right away (the removal is saved alongside).
+      if (remaining.some((id) => durations[id] > 0)) {
+        commit(act.playEnvironment(state, env.id, { ...ctx(), envTracks: () => remaining }, { level }));
+      } else commit(act.stop(state, ctx()));
+      const title = catalog.tracks[trackId]?.title ?? 'That track';
+      patchConfig(campaignId, user.uid, patch)
+        .then(() =>
+          toast.show(`“${title}” won't play in ${env.name} any more.`, {
+            action: { label: 'Undo', onClick: () => patchConfig(campaignId, user.uid, undo).catch((err) => toast.error(err, 'Jukebox')) },
+          }),
+        )
+        .catch((err) => toast.error(err, 'Jukebox'));
+    },
+    libraryChanges: () => {
+      const changes: ReturnType<JukeboxApi['libraryChanges']>['changes'] = [];
+      const libraryIds = new Set((library?.environments ?? []).map((e) => e.id));
+      for (const [key, edit] of Object.entries(config.envEdits ?? {})) {
+        const [env, lv] = key.split('~') as [string, JukeboxLevel | undefined];
+        if (!libraryIds.has(env)) continue;
+        for (const track of edit.remove ?? []) changes.push({ action: 'remove', env, track, ...(lv ? { level: lv } : {}) });
+        for (const track of edit.add ?? []) if (!catalog.tracks[track]?.custom) changes.push({ action: 'add', env, track, ...(lv ? { level: lv } : {}) });
+      }
+      return { version: 1, source: 'DnDocs', createdAt: new Date().toISOString(), changes };
     },
     skip: () => commit(act.skip(state ?? undefined, ctx())),
     togglePause: () => commit(state?.playing ? act.pause(state, ctx()) : act.resume(state ?? undefined, ctx())),
@@ -265,6 +320,21 @@ export function JukeboxProvider({ children }: { children: ReactNode }) {
     },
   };
 
+  // Stingers: play each one once, when it's fresh (not old ones found when opening the campaign).
+  const lastSting = useRef<number | null>(null);
+  useEffect(() => {
+    const sting = state?.sting;
+    if (!sting || !library) return;
+    const first = lastSting.current === null;
+    if (lastSting.current === sting.n) return;
+    lastSting.current = sting.n;
+    const age = act.now() - sting.at;
+    if (age > (first ? 4000 : 10000)) return;
+    const t = catalog.tracks[sting.track];
+    if (t) engineRef.current?.playSting(t.url, t.cors);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state?.sting?.n, library]);
+
   // After an edit to the playing environment, re-read its tracks once the new config has arrived.
   const pendingRefresh = useRef<string | null>(null);
   useEffect(() => {
@@ -276,6 +346,26 @@ export function JukeboxProvider({ children }: { children: ReactNode }) {
   }, [catalog]);
 
   return <Ctx.Provider value={api}>{children}</Ctx.Provider>;
+}
+
+/** The config change that takes a track out of an environment's list, and the one that puts it back. */
+function misfitPatch(env: JukeboxEnvironment, level: JukeboxLevel, trackId: string, config: JukeboxConfig) {
+  if (env.custom) {
+    const stored = config.customEnvs?.[env.id];
+    if (!stored) return { patch: {}, undo: {} };
+    return {
+      patch: { customEnvs: { [env.id]: { ...stored, tracks: stored.tracks.filter((id) => id !== trackId) } } },
+      undo: { customEnvs: { [env.id]: stored } },
+    };
+  }
+  const key = editKey(env.id, level);
+  const edit = config.envEdits?.[key];
+  const wasAdded = !!edit?.add?.includes(trackId);
+  // A track the DM added themselves just leaves the add list; one from the library goes on the remove list.
+  const next = wasAdded
+    ? { add: edit!.add!.filter((id) => id !== trackId), remove: edit?.remove ?? [] }
+    : { add: edit?.add ?? [], remove: [...new Set([...(edit?.remove ?? []), trackId])] };
+  return { patch: { envEdits: { [key]: next } }, undo: { envEdits: { [key]: edit ?? removed() } } };
 }
 
 export function useJukebox() {

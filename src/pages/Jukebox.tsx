@@ -6,14 +6,53 @@ import { useAuth } from '../contexts/AuthContext';
 import { useConfirm } from '../contexts/ConfirmContext';
 import { useJukebox } from '../contexts/JukeboxContext';
 import { useToast } from '../contexts/ToastContext';
-import { JUKEBOX_URL, formatTime, measureDuration } from '../lib/jukebox/catalog';
+import { JUKEBOX_URL, editKey, formatTime, LEVEL_NAMES, LEVELS, measureDuration } from '../lib/jukebox/catalog';
 import { newId, removed } from '../lib/jukebox/service';
-import type { JukeboxEnvironment, JukeboxTrack } from '../lib/jukebox/types';
-import { NowPlaying, TransportControls, VolumeControl } from '../components/jukebox/JukeboxControls';
+import type { JukeboxEnvironment, JukeboxLevel, JukeboxTrack } from '../lib/jukebox/types';
+import {
+  GROUP_NAMES,
+  groupEnvironments,
+  LevelControl,
+  NowPlaying,
+  StingerButtons,
+  TransportControls,
+  VolumeControl,
+} from '../components/jukebox/JukeboxControls';
 import { Modal } from '../components/ui/Modal';
-import { EmptyState, Page, PageHeader } from '../components/ui/bits';
+import { EmptyState, Page, PageHeader, Segmented, Toggle } from '../components/ui/bits';
 
-const EMOJIS = ['🎵', '🏰', '🌲', '🍺', '⚔️', '🐉', '🌊', '🏜️', '❄️', '🔥', '💀', '🕯️', '🔮', '👑', '🛕', '⛵', '🏙️', '🏡', '🌋', '🌙', '🕸️', '🎪', '⚓', '🗻', '🌧️', '🥀', '🏆', '🤡', '🧙', '🐺'];
+const EMOJIS = [
+  '🎵',
+  '🏰',
+  '🌲',
+  '🍺',
+  '⚔️',
+  '🐉',
+  '🌊',
+  '🏜️',
+  '❄️',
+  '🔥',
+  '💀',
+  '🕯️',
+  '🔮',
+  '👑',
+  '🛕',
+  '⛵',
+  '🏙️',
+  '🏡',
+  '🌋',
+  '🌙',
+  '🕸️',
+  '🎪',
+  '⚓',
+  '🗻',
+  '🌧️',
+  '🥀',
+  '🏆',
+  '🤡',
+  '🧙',
+  '🐺',
+];
 
 export default function Jukebox() {
   const { isDM } = useAuth();
@@ -42,7 +81,9 @@ export default function Jukebox() {
       <section className="card mb-8 space-y-4 p-4 sm:p-5">
         <NowPlaying large />
         {isDM && <TransportControls size="md" />}
+        {isDM && <LevelControl />}
         <VolumeControl className="max-w-sm" />
+        {isDM && <StingerButtons />}
         {isDM && jb.upNext.length > 0 && (
           <div>
             <div className="label">Up next</div>
@@ -63,19 +104,29 @@ export default function Jukebox() {
         <>
           <h2 className="section-title mb-3">Environments</h2>
           {!jb.ready ? (
-            <p className="text-sm text-stone-500 italic">{jb.libraryError ? `The music library can't be reached: ${jb.libraryError}` : 'Loading the music library…'}</p>
+            <p className="text-sm text-stone-500 italic">
+              {jb.libraryError ? `The music library can't be reached: ${jb.libraryError}` : 'Loading the music library…'}
+            </p>
           ) : jb.catalog.environments.length === 0 ? (
             <EmptyState icon={GiMusicalNotes} title="No environments">
               Make one with “New environment”.
             </EmptyState>
           ) : (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {jb.catalog.environments.map((e) => (
-                <EnvironmentCard key={e.id} env={e} onEdit={() => setEditing(e.id)} />
+            <div className="space-y-6">
+              {groupEnvironments(jb.catalog.environments).map(({ group, envs }) => (
+                <div key={group}>
+                  <div className="mb-2 text-[11px] font-bold tracking-[0.14em] text-stone-500 uppercase">{GROUP_NAMES[group]}</div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {envs.map((e) => (
+                      <EnvironmentCard key={e.id} env={e} onEdit={() => setEditing(e.id)} />
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           )}
           {jb.catalog.hidden.length > 0 && <HiddenEnvironments />}
+          <LibraryChanges />
         </>
       )}
 
@@ -84,7 +135,7 @@ export default function Jukebox() {
         <a className="link" href={JUKEBOX_URL} target="_blank" rel="noreferrer">
           DnDocs Jukebox library <ExternalLink size={11} className="inline" />
         </a>
-        , mostly by Kevin MacLeod (incompetech.com), licensed under{' '}
+        , mostly by Kevin MacLeod (incompetech.com) and Scott Buckley (scottbuckley.com.au), licensed under{' '}
         <a className="link" href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">
           Creative Commons: By Attribution 4.0
         </a>
@@ -99,7 +150,8 @@ export default function Jukebox() {
 function EnvironmentCard({ env, onEdit }: { env: JukeboxEnvironment; onEdit: () => void }) {
   const jb = useJukebox();
   const active = jb.state?.envId === env.id;
-  const minutes = Math.round(env.tracks.reduce((a, id) => a + (jb.catalog.tracks[id]?.duration ?? 0), 0) / 60);
+  const all = [...new Set([...env.tracks, ...Object.values(env.levels ?? {}).flat()])];
+  const minutes = Math.round(all.reduce((a, id) => a + (jb.catalog.tracks[id]?.duration ?? 0), 0) / 60);
   return (
     <div className={clsx('card flex items-stretch overflow-hidden transition-colors', active && 'ring-2 ring-amber-500/60')}>
       <button type="button" onClick={() => jb.playEnvironment(env.id)} className="flex min-w-0 flex-1 items-start gap-3 p-3 text-left hover:bg-stone-800/40">
@@ -113,7 +165,9 @@ function EnvironmentCard({ env, onEdit }: { env: JukeboxEnvironment; onEdit: () 
           </span>
           <span className="line-clamp-2 text-xs text-stone-500">{env.description || (env.custom ? 'Your environment' : '')}</span>
           <span className="mt-1 block text-[11px] text-stone-600">
-            {env.tracks.length} tracks · {minutes} min
+            {all.length} tracks · {minutes} min
+            {env.levels ? ' · Calm/Tense/Danger' : ''}
+            {env.hitStart ? ' · starts at the action' : ''}
           </span>
         </span>
       </button>
@@ -153,25 +207,29 @@ function EnvironmentEditor({ envId, onClose }: { envId: string | null; onClose: 
   const [emoji, setEmoji] = useState(env?.emoji ?? '🎵');
   const [description, setDescription] = useState(env?.description ?? '');
   const [adding, setAdding] = useState<'library' | 'link' | null>(null);
-  const tracks = env?.tracks ?? stored?.tracks ?? [];
+  const [hitStart, setHitStart] = useState(!!stored?.hitStart);
+  const [level, setLevel] = useState<JukeboxLevel>('calm');
+  const levelsHere = custom ? (['calm'] as JukeboxLevel[]) : LEVELS.filter((l) => l === 'calm' || env?.levels?.[l] || jb.config.envEdits?.[editKey(id, l)]);
+  const tracks = (level === 'calm' ? env?.tracks : env?.levels?.[level]) ?? (level === 'calm' ? stored?.tracks : null) ?? [];
+  const key = editKey(id, level);
 
   /** Write the environment's track list. */
   const saveTracks = async (next: string[], extra: Record<string, unknown> = {}) => {
     if (custom) {
-      await jb.saveConfig({ ...extra, customEnvs: { [id]: { name: name.trim() || 'New environment', emoji, description, tracks: next } } }, id);
+      await jb.saveConfig({ ...extra, customEnvs: { [id]: { name: name.trim() || 'New environment', emoji, description, tracks: next, hitStart } } }, id);
       return;
     }
     // Library environment: store the difference from the library's list.
-    const original = new Set(libraryTracks(jb, id));
+    const original = new Set(libraryTracks(jb, id, level));
     const add = next.filter((t) => !original.has(t));
     const remove = [...original].filter((t) => !next.includes(t));
-    await jb.saveConfig({ ...extra, envEdits: { [id]: { add, remove } } }, id);
+    await jb.saveConfig({ ...extra, envEdits: { [key]: { add, remove } } }, id);
   };
 
   const saveDetails = async () => {
     if (!custom) return onClose();
     if (!name.trim()) return toast.show('Give the environment a name.');
-    await jb.saveConfig({ customEnvs: { [id]: { name: name.trim(), emoji, description: description.trim(), tracks } } }, id);
+    await jb.saveConfig({ customEnvs: { [id]: { name: name.trim(), emoji, description: description.trim(), tracks, hitStart } } }, id);
     onClose();
   };
 
@@ -179,11 +237,12 @@ function EnvironmentEditor({ envId, onClose }: { envId: string | null; onClose: 
     const t = jb.catalog.tracks[trackId];
     const next = tracks.filter((x) => x !== trackId);
     // A link the DM added and nothing else uses: forget it too.
-    const usedElsewhere = jb.catalog.environments.some((e) => e.id !== id && e.tracks.includes(trackId));
+    const uses = jb.catalog.environments.flatMap((e) => [e.tracks, ...Object.values(e.levels ?? {})]).filter((list) => list?.includes(trackId)).length;
+    const usedElsewhere = uses > 1;
     await saveTracks(next, t?.custom && !usedElsewhere ? { customTracks: { [trackId]: removed() } } : {});
   };
 
-  const libraryEdited = !custom && !!(jb.config.envEdits?.[id]?.add?.length || jb.config.envEdits?.[id]?.remove?.length);
+  const libraryEdited = !custom && !!(jb.config.envEdits?.[key]?.add?.length || jb.config.envEdits?.[key]?.remove?.length);
 
   return (
     <Modal
@@ -199,7 +258,15 @@ function EnvironmentEditor({ envId, onClose }: { envId: string | null; onClose: 
               type="button"
               className="btn btn-danger mr-auto"
               onClick={async () => {
-                if (!(await confirm({ title: `Delete “${env.name}”?`, message: 'The tracks you added by link stay available.', confirmLabel: 'Delete', danger: true }))) return;
+                if (
+                  !(await confirm({
+                    title: `Delete “${env.name}”?`,
+                    message: 'The tracks you added by link stay available.',
+                    confirmLabel: 'Delete',
+                    danger: true,
+                  }))
+                )
+                  return;
                 if (jb.state?.envId === id) jb.stop();
                 await jb.saveConfig({ customEnvs: { [id]: removed() } });
                 onClose();
@@ -241,22 +308,52 @@ function EnvironmentEditor({ envId, onClose }: { envId: string | null; onClose: 
               <label className="label" htmlFor="env-name">
                 Name
               </label>
-              <input id="env-name" className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Goblin warrens" maxLength={60} autoFocus={!env} />
+              <input
+                id="env-name"
+                className="input"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Goblin warrens"
+                maxLength={60}
+                autoFocus={!env}
+              />
             </div>
           </div>
           <div>
             <label className="label" htmlFor="env-desc">
               Description
             </label>
-            <input id="env-desc" className="input" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="When it's used (optional)" maxLength={200} />
+            <input
+              id="env-desc"
+              className="input"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="When it's used (optional)"
+              maxLength={200}
+            />
           </div>
+          <label className="flex items-center gap-3 text-sm text-stone-300">
+            <Toggle checked={hitStart} onChange={setHitStart} label="Start tracks at the action" />
+            Start tracks where they get going (skip quiet intros), for fights and chases
+          </label>
+        </div>
+      )}
+      {levelsHere.length > 1 && (
+        <div className="mb-3">
+          <Segmented
+            size="sm"
+            options={levelsHere.map((l) => ({ value: l, label: LEVEL_NAMES[l] }))}
+            value={level}
+            onChange={(v) => setLevel(v as JukeboxLevel)}
+          />
+          <p className="hint">The DM picks Calm, Tense or Danger while it plays; each has its own tracks.</p>
         </div>
       )}
 
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <div className="label mb-0 flex-1">{tracks.length} tracks</div>
         {libraryEdited && (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => jb.saveConfig({ envEdits: { [id]: removed() } }, id)}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => jb.saveConfig({ envEdits: { [key]: removed() } }, id)}>
             <RotateCcw size={14} /> Reset
           </button>
         )}
@@ -278,10 +375,17 @@ function EnvironmentEditor({ envId, onClose }: { envId: string | null; onClose: 
           const playing = jb.now?.trackId === tid;
           return (
             <li key={tid} className={clsx('flex items-center gap-2 px-2 py-1.5', playing && 'bg-amber-500/10')}>
-              <button type="button" className="btn-icon-sm shrink-0" onClick={() => jb.playTrack(tid, id)} aria-label={`Play ${t.title} now`} title="Play now for everyone">
+              <button
+                type="button"
+                className="btn-icon-sm shrink-0"
+                onClick={() => jb.playTrack(tid, id, level)}
+                aria-label={`Play ${t.title} now`}
+                title="Play now for everyone"
+              >
                 <Play size={15} />
               </button>
               <TrackLabel track={t} />
+              {t.intensity !== undefined && <IntensityMeter value={t.intensity} />}
               <span className="text-xs text-stone-500 tabular-nums">{formatTime(t.duration)}</span>
               <button type="button" className="btn-icon-sm shrink-0" onClick={() => removeTrack(tid)} aria-label={`Remove ${t.title}`}>
                 <X size={15} />
@@ -305,12 +409,51 @@ function EnvironmentEditor({ envId, onClose }: { envId: string | null; onClose: 
   );
 }
 
-function libraryTracks(jb: ReturnType<typeof useJukebox>, envId: string) {
+/** The library's own list for an environment (before this campaign's edits). */
+function libraryTracks(jb: ReturnType<typeof useJukebox>, envId: string, level: JukeboxLevel) {
   const env = jb.catalog.environments.concat(jb.catalog.hidden).find((e) => e.id === envId);
   if (!env) return [];
-  const edit = jb.config.envEdits?.[envId];
+  const edit = jb.config.envEdits?.[editKey(envId, level)];
   const add = new Set(edit?.add ?? []);
-  return [...env.tracks.filter((t) => !add.has(t)), ...(edit?.remove ?? [])];
+  const current = (level === 'calm' ? env.tracks : env.levels?.[level]) ?? [];
+  return [...current.filter((t) => !add.has(t)), ...(edit?.remove ?? [])];
+}
+
+function IntensityMeter({ value }: { value: number }) {
+  return (
+    <span className="h-1.5 w-10 shrink-0 overflow-hidden rounded-full bg-stone-800" title={`Intensity ${value}/100`}>
+      <span className="block h-full rounded-full bg-gradient-to-r from-lime-600 via-amber-500 to-rose-600" style={{ width: `${value}%` }} />
+    </span>
+  );
+}
+
+/** The DM's edits to library environments, as a file for the library repo (scripts/apply-review.mjs). */
+function LibraryChanges() {
+  const jb = useJukebox();
+  const file = jb.libraryChanges();
+  if (!file.changes.length) return null;
+  const download = () => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(file, null, 2)], { type: 'application/json' }));
+    a.download = 'jukebox-review.json';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+  const removedCount = file.changes.filter((c) => c.action === 'remove').length;
+  return (
+    <div className="surface mt-6 flex flex-wrap items-center gap-3 p-3 text-sm">
+      <div className="min-w-0 flex-1 text-stone-300">
+        <strong>Your changes to the library’s environments</strong>
+        <div className="text-xs text-stone-500">
+          {removedCount} removed, {file.changes.length - removedCount} added (“Doesn’t fit here” and your edits). They only apply to this campaign; to improve
+          the library for everyone, download them and run <code>node scripts/apply-review.mjs jukebox-review.json</code> in the DnDJukebox repo.
+        </div>
+      </div>
+      <button type="button" className="btn btn-secondary btn-sm" onClick={download}>
+        Download changes
+      </button>
+    </div>
+  );
 }
 
 function TrackLabel({ track }: { track: JukeboxTrack }) {
@@ -382,14 +525,26 @@ function LibraryPicker({ exclude, onAdd, onClose }: { exclude: string[]; onAdd: 
         </>
       }
     >
-      <input className="input mb-3" placeholder="e.g. dark, celtic, Combat…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus aria-label="Search the library" />
+      <input
+        className="input mb-3"
+        placeholder="e.g. dark, celtic, Combat…"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        autoFocus
+        aria-label="Search the library"
+      />
       <ul className="divide-y divide-stone-800/70 rounded-md border border-stone-800">
         {results.map((t) => {
           const on = picked.includes(t.id);
           return (
             <li key={t.id}>
               <label className={clsx('flex cursor-pointer items-center gap-3 px-3 py-2', on && 'bg-amber-500/10')}>
-                <input type="checkbox" className="size-4 accent-amber-500" checked={on} onChange={() => setPicked((p) => (on ? p.filter((x) => x !== t.id) : [...p, t.id]))} />
+                <input
+                  type="checkbox"
+                  className="size-4 accent-amber-500"
+                  checked={on}
+                  onChange={() => setPicked((p) => (on ? p.filter((x) => x !== t.id) : [...p, t.id]))}
+                />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm text-stone-200">{t.title}</div>
                   <div className="truncate text-[11px] text-stone-500">{[t.feel, ...(where.get(t.id) ?? [])].filter(Boolean).join(' · ')}</div>
@@ -405,7 +560,13 @@ function LibraryPicker({ exclude, onAdd, onClose }: { exclude: string[]; onAdd: 
   );
 }
 
-function LinkTrackForm({ onAdd, onClose }: { onAdd: (t: { title: string; artist: string; url: string; duration: number; license: string; sourceUrl?: string }) => Promise<void>; onClose: () => void }) {
+function LinkTrackForm({
+  onAdd,
+  onClose,
+}: {
+  onAdd: (t: { title: string; artist: string; url: string; duration: number; license: string; sourceUrl?: string }) => Promise<void>;
+  onClose: () => void;
+}) {
   const toast = useToast();
   const [url, setUrl] = useState('');
   const [title, setTitle] = useState('');
@@ -456,7 +617,15 @@ function LinkTrackForm({ onAdd, onClose }: { onAdd: (t: { title: string; artist:
           <label className="label" htmlFor="tr-url">
             Link
           </label>
-          <input id="tr-url" className="input" inputMode="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/music/dragon.mp3" autoFocus />
+          <input
+            id="tr-url"
+            className="input"
+            inputMode="url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://example.com/music/dragon.mp3"
+            autoFocus
+          />
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
@@ -479,8 +648,8 @@ function LinkTrackForm({ onAdd, onClose }: { onAdd: (t: { title: string; artist:
           <input id="tr-license" className="input" value={license} onChange={(e) => setLicense(e.target.value)} placeholder="CC BY 4.0" maxLength={120} />
         </div>
         <p className="hint">
-          Tip: tracks that should be part of every campaign belong in the music library repo instead (see its README); they also get even loudness and smooth fades on
-          iPhones.
+          Tip: tracks that should be part of every campaign belong in the music library repo instead (see its README); they also get even loudness and smooth
+          fades on iPhones.
         </p>
       </div>
     </Modal>

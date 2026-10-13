@@ -22,12 +22,14 @@ export interface SlotInfo {
   start: number;
   /** Seconds until the next track starts (track length minus the blend). */
   length: number;
-  /** Full length of the track. */
+  /** Full length of the track's file. */
   duration: number;
+  /** Seconds skipped at the start of the file (environments that start at the hit). */
+  skip: number;
 }
 
 export interface Playhead extends SlotInfo {
-  /** Seconds into the track. */
+  /** Seconds into the track's file. */
   offset: number;
 }
 
@@ -81,17 +83,23 @@ export interface Sequence {
  * The play order for an environment.
  * @param trackIds the environment's tracks
  * @param durations seconds per track id (tracks without a length are skipped)
+ * @param starts seconds to skip at the start of a track (optional, per track id)
  */
 export function buildSequence(
   state: Pick<JukeboxState, 'seed' | 'lead' | 'avoid'>,
   trackIds: string[],
   durations: Record<string, number>,
+  starts: Record<string, number> = {},
 ): Sequence {
   const ok = (id: string) => (durations[id] ?? 0) > 0;
+  const skipOf = (id: string) => {
+    const s = starts[id] ?? 0;
+    return s > 0 && s < durations[id] - 10 ? s : 0;
+  };
   const pool = [...new Set(trackIds.filter(ok))].sort();
   const lead = state.lead && ok(state.lead) ? state.lead : null;
   const avoid = new Set(state.avoid ?? []);
-  const len = (id: string) => slotLength(durations[id]);
+  const len = (id: string) => slotLength(durations[id] - skipOf(id));
   const poolLength = pool.reduce((a, id) => a + len(id), 0);
 
   const rounds = new Map<number, string[]>();
@@ -127,7 +135,7 @@ export function buildSequence(
 
   function slot(round: number, index: number, start: number): SlotInfo {
     const trackId = order(round)[index];
-    return { trackId, key: `${trackId}:${round}:${index}`, round, index, start, length: len(trackId), duration: durations[trackId] };
+    return { trackId, key: `${trackId}:${round}:${index}`, round, index, start, length: len(trackId), duration: durations[trackId], skip: skipOf(trackId) };
   }
 
   function at(pos: number): Playhead | null {
@@ -140,7 +148,7 @@ export function buildSequence(
       const l = len(list[i]);
       if (rem < start - base + l || i === list.length - 1) {
         const s = slot(round, i, start);
-        return { ...s, offset: Math.min(Math.max(0, pos - start), s.duration) };
+        return { ...s, offset: Math.min(s.skip + Math.max(0, pos - start), s.duration) };
       }
       start += l;
     }

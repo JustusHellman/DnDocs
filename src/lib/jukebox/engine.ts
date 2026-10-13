@@ -34,6 +34,9 @@ const MAX_DRIFT = 1.5;
 export class JukeboxEngine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
+  /** Music goes through here, so it can dip while a stinger plays. */
+  private musicBus: GainNode | null = null;
+  private stings = 0;
   private voices: Voice[] = [];
   private preloaded: HTMLAudioElement | null = null;
   private volume = 0.7;
@@ -88,6 +91,8 @@ export class JukeboxEngine {
     this.master = this.ctx.createGain();
     this.master.gain.value = this.masterLevel;
     this.master.connect(this.ctx.destination);
+    this.musicBus = this.ctx.createGain();
+    this.musicBus.connect(this.master);
     return this.ctx;
   }
 
@@ -113,7 +118,13 @@ export class JukeboxEngine {
   play(target: PlayTarget) {
     const current = this.voices.filter((v) => !v.dying).at(-1);
     // Same file at about the same spot (e.g. the DM refreshed the track list): keep it going.
-    if (current && current.key !== target.key && current.url === target.url && !current.el.paused && Math.abs(current.el.currentTime - target.offset) < MAX_DRIFT) {
+    if (
+      current &&
+      current.key !== target.key &&
+      current.url === target.url &&
+      !current.el.paused &&
+      Math.abs(current.el.currentTime - target.offset) < MAX_DRIFT
+    ) {
       current.key = target.key;
     }
     if (current && current.key === target.key) {
@@ -143,6 +154,51 @@ export class JukeboxEngine {
       this.mediaSession(null);
       this.emit();
     }
+  }
+
+  /** Play a one-shot sound over the music (which dips while it plays). */
+  playSting(url: string, cors: boolean) {
+    const ctx = cors ? this.ensureContext() : null;
+    const el = new Audio();
+    if (cors) el.crossOrigin = 'anonymous';
+    let source: MediaElementAudioSourceNode | null = null;
+    if (ctx && this.master) {
+      try {
+        source = ctx.createMediaElementSource(el);
+        source.connect(this.master);
+      } catch {
+        source = null;
+      }
+    }
+    if (!source) el.volume = Math.min(1, this.masterLevel);
+    const duck = (to: number, secs: number) => {
+      if (!this.musicBus || !this.ctx) return;
+      const g = this.musicBus.gain,
+        now = this.ctx.currentTime;
+      g.cancelScheduledValues(now);
+      g.setValueAtTime(g.value, now);
+      g.linearRampToValueAtTime(to, now + secs);
+    };
+    this.stings++;
+    duck(0.3, 0.25);
+    const done = () => {
+      el.onended = el.onerror = null;
+      if (--this.stings <= 0) {
+        this.stings = 0;
+        duck(1, 1.2);
+      }
+      try {
+        source?.disconnect();
+      } catch {
+        /* gone */
+      }
+      el.removeAttribute('src');
+    };
+    el.onended = done;
+    el.onerror = done;
+    el.src = url;
+    if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume().catch(() => undefined);
+    el.play().catch(done);
   }
 
   /** Warm the browser cache for the next track. */
@@ -179,7 +235,7 @@ export class JukeboxEngine {
         voice.source = ctx.createMediaElementSource(el);
         voice.gain = ctx.createGain();
         voice.gain.gain.value = 0;
-        voice.source.connect(voice.gain).connect(this.master);
+        voice.source.connect(voice.gain).connect(this.musicBus ?? this.master);
       } catch {
         voice.source = null;
         voice.gain = null;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as act from '../lib/jukebox/actions';
-import { mergeCatalog } from '../lib/jukebox/catalog';
+import { editKey, levelTracks, mergeCatalog, startsFor } from '../lib/jukebox/catalog';
 import type { LibraryCatalog } from '../lib/jukebox/types';
 
 const durations = { a: 100, b: 200, c: 150, d: 120, x: 60 };
@@ -92,5 +92,62 @@ describe('jukebox catalog', () => {
     expect(m.tracks.a.url).toBe('https://lib.example/Jukebox/audio/a.m4a');
     expect(m.tracks.a.cors).toBe(true);
     expect(m.tracks.t1).toMatchObject({ custom: true, cors: false, artist: 'Unknown' });
+  });
+});
+
+describe('jukebox levels, stingers and intros', () => {
+  const lvEnvs: Record<string, Record<string, string[]>> = { forest: { calm: ['a', 'b'], tense: ['c'], danger: ['d', 'x'] } };
+  const lctx = (at: number): act.ActionContext => ({
+    envTracks: (id, level = 'calm') => lvEnvs[id]?.[level] ?? lvEnvs[id]?.calm ?? [],
+    durations,
+    at,
+  });
+  it('switches between Calm, Tense and Danger', () => {
+    const calm = act.playEnvironment(undefined, 'forest', lctx(0)).state;
+    expect(calm.level).toBe('calm');
+    const danger = act.setLevel(calm, 'danger', lctx(1000))!.state;
+    expect(danger).toMatchObject({ envId: 'forest', level: 'danger', tracks: ['d', 'x'], rev: calm.rev + 1 });
+    expect(['d', 'x']).toContain(act.currentTrack(danger, lctx(1000))!.trackId);
+    expect(act.setLevel(danger, 'danger', lctx(2000))).toBe(null);
+  });
+  it('fires stingers without touching the music', () => {
+    const s = act.playEnvironment(undefined, 'forest', lctx(0)).state;
+    const one = act.sting(s, 'victory', 'hero-theme', { at: 500 }).state;
+    expect(one.sting).toEqual({ id: 'victory', track: 'hero-theme', at: 500, n: 1 });
+    expect(one.rev).toBe(s.rev);
+    expect(act.sting(one, 'victory', 'light-sting', { at: 900 }).state.sting!.n).toBe(2);
+  });
+  it('keeps the place in a track with a skipped intro when the list is refreshed', () => {
+    const c = { ...lctx(0), starts: () => ({ a: 20, b: 20 }) };
+    const st = act.playEnvironment(undefined, 'forest', c).state;
+    const before = act.currentTrack(st, { ...c, at: 10_000 })!;
+    expect(before.offset).toBeCloseTo(30);
+    const after = act.refreshTracks(st, { ...c, at: 10_000 })!.state;
+    const head = act.currentTrack(after, { ...c, at: 10_000 })!;
+    expect(head.trackId).toBe(before.trackId);
+    expect(head.offset).toBeCloseTo(30);
+  });
+});
+
+describe('jukebox catalog: levels and stingers', () => {
+  const library: LibraryCatalog = {
+    version: 2,
+    environments: [{ id: 'combat', name: 'Battle', group: 'action', hitStart: true, tracks: ['a', 'b'], levels: { tense: ['b'] } }],
+    stingers: [{ id: 'victory', name: 'Victory', tracks: ['s', 'gone'] }],
+    tracks: {
+      a: { title: 'A', artist: 'K', file: 'audio/a.m4a', duration: 100, cue: 30 },
+      b: { title: 'B', artist: 'K', file: 'audio/b.m4a', duration: 90, cue: 80 },
+      s: { title: 'S', artist: 'K', file: 'audio/s.m4a', duration: 10 },
+    },
+  };
+  it('applies per-level edits and only usable stingers and intro skips', () => {
+    const m = mergeCatalog(library, { envEdits: { [editKey('combat', 'tense')]: { add: ['a'], remove: ['b'] } } }, 'https://lib.example/');
+    const env = m.environments[0];
+    expect(env).toMatchObject({ group: 'action', hitStart: true, tracks: ['a', 'b'], levels: { tense: ['a'] } });
+    expect(levelTracks(env, 'tense')).toEqual(['a']);
+    expect(levelTracks(env, 'danger')).toEqual(['a', 'b']);
+    expect(m.stingers).toEqual([{ id: 'victory', name: 'Victory', emoji: '🔔', tracks: ['s'] }]);
+    // b's cue is too close to its end to be useful.
+    expect(startsFor(env, m.tracks)).toEqual({ a: 30 });
   });
 });

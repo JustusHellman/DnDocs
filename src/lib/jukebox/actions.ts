@@ -2,7 +2,7 @@
  * The DM's jukebox buttons as pure state changes (unit-tested), plus the shared clock.
  */
 import { buildSequence, newSeed, positionAt } from './schedule';
-import type { JukeboxConfig, JukeboxState } from './types';
+import type { JukeboxConfig, JukeboxLevel, JukeboxState } from './types';
 
 export const DEFAULT_FADE_MS = 3000;
 const RECENT_MAX = 12;
@@ -32,8 +32,10 @@ export async function measureClockSkew() {
 }
 
 export interface ActionContext {
-  /** Track ids of each environment. */
-  envTracks: (envId: string) => string[];
+  /** Track ids of an environment (at a level; default calm). */
+  envTracks: (envId: string, level?: JukeboxLevel) => string[];
+  /** Seconds to skip per track in an environment (environments that start at the hit). */
+  starts?: (envId: string) => Record<string, number>;
   durations: Record<string, number>;
   config?: JukeboxConfig;
   at?: number;
@@ -45,13 +47,29 @@ export interface Change {
   recent?: { envId: string; tracks: string[] };
 }
 
-const blank = (): JukeboxState => ({ envId: null, tracks: [], seed: 0, lead: null, avoid: [], playing: false, anchorAt: 0, anchorPos: 0, fadeMs: DEFAULT_FADE_MS, rev: 0 });
+const blank = (): JukeboxState => ({
+  envId: null,
+  level: 'calm',
+  tracks: [],
+  seed: 0,
+  lead: null,
+  avoid: [],
+  playing: false,
+  anchorAt: 0,
+  anchorPos: 0,
+  fadeMs: DEFAULT_FADE_MS,
+  rev: 0,
+});
+
+/** The play order of the shared state. */
+export function sequenceOf(state: JukeboxState, ctx: ActionContext) {
+  return buildSequence(state, state.tracks ?? ctx.envTracks(state.envId!, state.level), ctx.durations, ctx.starts?.(state.envId!) ?? {});
+}
 
 /** The track playing right now (if any). */
 export function currentTrack(state: JukeboxState | undefined, ctx: ActionContext) {
   if (!state?.envId) return null;
-  const seq = buildSequence(state, state.tracks ?? ctx.envTracks(state.envId), ctx.durations);
-  return seq.at(positionAt(state, ctx.at ?? now()));
+  return sequenceOf(state, ctx).at(positionAt(state, ctx.at ?? now()));
 }
 
 /** Remember what's playing as recently played, so coming back to the environment starts fresh. */
@@ -62,25 +80,63 @@ function remember(state: JukeboxState | undefined, ctx: ActionContext): Change['
   return { envId: state.envId, tracks: [head.trackId, ...prev.filter((id) => id !== head.trackId)].slice(0, RECENT_MAX) };
 }
 
-export function playEnvironment(cur: JukeboxState | undefined, envId: string, ctx: ActionContext, fadeMs?: number): Change {
+export function playEnvironment(
+  cur: JukeboxState | undefined,
+  envId: string,
+  ctx: ActionContext,
+  opts: { fadeMs?: number; level?: JukeboxLevel } = {},
+): Change {
   const base = cur ?? blank();
   const recent = remember(cur, ctx);
   const avoid = recent?.envId === envId ? recent.tracks : (ctx.config?.recent?.[envId] ?? []);
+  const level = opts.level ?? 'calm';
   return {
-    state: { ...base, envId, tracks: ctx.envTracks(envId), seed: newSeed(), lead: null, avoid, playing: true, anchorAt: ctx.at ?? now(), anchorPos: 0, fadeMs: fadeMs ?? base.fadeMs, rev: base.rev + 1 },
+    state: {
+      ...base,
+      envId,
+      level,
+      tracks: ctx.envTracks(envId, level),
+      seed: newSeed(),
+      lead: null,
+      avoid,
+      playing: true,
+      anchorAt: ctx.at ?? now(),
+      anchorPos: 0,
+      fadeMs: opts.fadeMs ?? base.fadeMs,
+      rev: base.rev + 1,
+    },
     recent,
   };
 }
 
+/** Switch the playing environment between Calm, Tense and Danger. */
+export function setLevel(cur: JukeboxState | undefined, level: JukeboxLevel, ctx: ActionContext): Change | null {
+  if (!cur?.envId || (cur.level ?? 'calm') === level) return null;
+  return playEnvironment(cur, cur.envId, ctx, { level });
+}
+
 /** Play a specific track now (in the given environment, or the current one). */
-export function playTrack(cur: JukeboxState | undefined, trackId: string, envId: string | null, ctx: ActionContext): Change {
+export function playTrack(cur: JukeboxState | undefined, trackId: string, envId: string | null, ctx: ActionContext, level?: JukeboxLevel): Change {
   const base = cur ?? blank();
   const env = envId ?? base.envId;
   if (!env) throw new Error('Pick an environment first');
+  const lv = level ?? (env === base.envId ? (base.level ?? 'calm') : 'calm');
   const recent = remember(cur, ctx);
   const avoid = [...new Set([trackId, ...(recent?.envId === env ? recent.tracks : (ctx.config?.recent?.[env] ?? []))])];
   return {
-    state: { ...base, envId: env, tracks: ctx.envTracks(env), seed: newSeed(), lead: trackId, avoid, playing: true, anchorAt: ctx.at ?? now(), anchorPos: 0, rev: base.rev + 1 },
+    state: {
+      ...base,
+      envId: env,
+      level: lv,
+      tracks: ctx.envTracks(env, lv),
+      seed: newSeed(),
+      lead: trackId,
+      avoid,
+      playing: true,
+      anchorAt: ctx.at ?? now(),
+      anchorPos: 0,
+      rev: base.rev + 1,
+    },
     recent,
   };
 }
@@ -111,16 +167,30 @@ export function stop(cur: JukeboxState | undefined, ctx: ActionContext): Change 
   return { state: { ...cur, envId: null, playing: false, lead: null, rev: cur.rev + 1 }, recent: remember(cur, ctx) };
 }
 
+/** Fire a stinger: every device plays it once (it doesn't touch the music's order). */
+export function sting(cur: JukeboxState | undefined, stingerId: string, trackId: string, ctx: Pick<ActionContext, 'at'>): Change {
+  const base = cur ?? blank();
+  return { state: { ...base, sting: { id: stingerId, track: trackId, at: ctx.at ?? now(), n: (base.sting?.n ?? 0) + 1 } } };
+}
+
 /**
  * After the DM edits the environment that's playing: take the new track list, keeping the current
  * track going where it is (it becomes the first of a new order, so nothing audibly changes).
  */
 export function refreshTracks(cur: JukeboxState | undefined, ctx: ActionContext): Change | null {
   if (!cur?.envId) return null;
-  const tracks = ctx.envTracks(cur.envId);
+  const tracks = ctx.envTracks(cur.envId, cur.level);
   const head = currentTrack(cur, ctx);
   if (!head || !cur.playing) return { state: { ...cur, tracks, seed: newSeed(), lead: null, anchorPos: 0 } };
   return {
-    state: { ...cur, tracks, seed: newSeed(), lead: head.trackId, avoid: [...new Set([head.trackId, ...(cur.avoid ?? [])])], anchorAt: ctx.at ?? now(), anchorPos: head.offset },
+    state: {
+      ...cur,
+      tracks,
+      seed: newSeed(),
+      lead: head.trackId,
+      avoid: [...new Set([head.trackId, ...(cur.avoid ?? [])])],
+      anchorAt: ctx.at ?? now(),
+      anchorPos: head.offset - head.skip,
+    },
   };
 }

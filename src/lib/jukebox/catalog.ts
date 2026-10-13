@@ -2,7 +2,7 @@
  * The music library (the DnDJukebox site, its own repo on GitHub Pages) merged with what the
  * DM added or changed in this campaign.
  */
-import type { JukeboxConfig, JukeboxEnvironment, JukeboxTrack, LibraryCatalog } from './types';
+import type { JukeboxConfig, JukeboxEnvironment, JukeboxLevel, JukeboxStinger, JukeboxTrack, LibraryCatalog } from './types';
 
 /** Where the music library lives. On GitHub Pages it's the same site as DnDocs (…github.io/DnDJukebox/). */
 export const JUKEBOX_URL: string = (import.meta.env.VITE_JUKEBOX_URL as string | undefined) || 'https://justushellman.github.io/DnDJukebox/';
@@ -56,6 +56,30 @@ export interface MergedCatalog {
   environments: JukeboxEnvironment[];
   /** Library environments the DM hid. */
   hidden: JukeboxEnvironment[];
+  stingers: JukeboxStinger[];
+}
+
+export const LEVELS: JukeboxLevel[] = ['calm', 'tense', 'danger'];
+export const LEVEL_NAMES: Record<JukeboxLevel, string> = { calm: 'Calm', tense: 'Tense', danger: 'Danger' };
+
+/** The key of an environment's track list in config.envEdits. */
+export const editKey = (envId: string, level: JukeboxLevel = 'calm') => (level === 'calm' ? envId : `${envId}~${level}`);
+
+/** The tracks of an environment at a level (falls back to Calm when it has no such list). */
+export function levelTracks(env: JukeboxEnvironment | null | undefined, level: JukeboxLevel = 'calm') {
+  if (!env) return [];
+  return level !== 'calm' && env.levels?.[level]?.length ? env.levels[level]! : env.tracks;
+}
+
+/** Seconds to skip at the start of each track, for environments that start at the hit. */
+export function startsFor(env: JukeboxEnvironment | null | undefined, tracks: Record<string, JukeboxTrack>) {
+  const out: Record<string, number> = {};
+  if (!env?.hitStart) return out;
+  for (const id of [...env.tracks, ...Object.values(env.levels ?? {}).flat()]) {
+    const t = tracks[id];
+    if (t?.cue && t.cue < t.duration - 20) out[id] = t.cue;
+  }
+  return out;
 }
 
 export function mergeCatalog(library: LibraryCatalog | null, config: JukeboxConfig | undefined, libraryUrl = JUKEBOX_URL): MergedCatalog {
@@ -73,6 +97,8 @@ export function mergeCatalog(library: LibraryCatalog | null, config: JukeboxConf
       url: new URL(t.file, root).toString(),
       duration: t.duration,
       cors: true,
+      intensity: t.intensity,
+      cue: t.cue,
     };
   }
   for (const [id, t] of Object.entries(config?.customTracks ?? {})) {
@@ -91,25 +117,48 @@ export function mergeCatalog(library: LibraryCatalog | null, config: JukeboxConf
 
   const hiddenIds = new Set(config?.hiddenEnvs ?? []);
   const known = (ids: string[]) => [...new Set(ids)].filter((id) => tracks[id]);
-  const fromLibrary: JukeboxEnvironment[] = (library?.environments ?? []).map((e) => {
-    const edit = config?.envEdits?.[e.id];
+  const edited = (key: string, list: string[]) => {
+    const edit = config?.envEdits?.[key];
     const removed = new Set(edit?.remove ?? []);
+    return known([...list.filter((id) => !removed.has(id)), ...(edit?.add ?? [])]);
+  };
+  const fromLibrary: JukeboxEnvironment[] = (library?.environments ?? []).map((e) => {
+    const levels: JukeboxEnvironment['levels'] = {};
+    for (const l of ['tense', 'danger'] as const) {
+      const list = edited(editKey(e.id, l), e.levels?.[l] ?? []);
+      if (list.length) levels[l] = list;
+    }
     return {
       id: e.id,
       name: e.name,
       emoji: e.emoji || '🎵',
       description: e.description ?? '',
-      tracks: known([...e.tracks.filter((id) => !removed.has(id)), ...(edit?.add ?? [])]),
+      group: e.group ?? 'places',
+      hitStart: e.hitStart || undefined,
+      tracks: edited(e.id, e.tracks),
+      ...(Object.keys(levels).length ? { levels } : {}),
     };
   });
   const custom: JukeboxEnvironment[] = Object.entries(config?.customEnvs ?? {})
     .sort(([, a], [, b]) => (a.order ?? 0) - (b.order ?? 0) || a.name.localeCompare(b.name))
-    .map(([id, e]) => ({ id, name: e.name, emoji: e.emoji || '🎵', description: e.description ?? '', tracks: known(e.tracks), custom: true }));
+    .map(([id, e]) => ({
+      id,
+      name: e.name,
+      emoji: e.emoji || '🎵',
+      description: e.description ?? '',
+      group: 'custom' as const,
+      hitStart: e.hitStart || undefined,
+      tracks: known(e.tracks),
+      custom: true,
+    }));
 
   return {
     tracks,
     environments: [...custom, ...fromLibrary.filter((e) => !hiddenIds.has(e.id))],
     hidden: fromLibrary.filter((e) => hiddenIds.has(e.id)),
+    stingers: (library?.stingers ?? [])
+      .map((s) => ({ id: s.id, name: s.name, emoji: s.emoji || '🔔', tracks: known(s.tracks) }))
+      .filter((s) => s.tracks.length),
   };
 }
 

@@ -82,3 +82,19 @@ describe('jukebox schedule', () => {
     expect(slotLength(5)).toBe(5);
   });
 });
+
+describe('jukebox schedule: starting at the hit', () => {
+  it('skips quiet intros and shortens the slot to match', () => {
+    const seq = buildSequence(state, ['a', 'b'], { a: 100, b: 200 }, { a: 30, b: 500 });
+    const order = [seq.at(0)!, ...seq.upcoming(0, 1)];
+    const a = order.find((p) => p.trackId === 'a')!;
+    const b = order.find((p) => p.trackId === 'b')!;
+    expect(a.skip).toBe(30);
+    expect(a.length).toBe(70 - BLEND);
+    // A start beyond the end of the track is ignored.
+    expect(b.skip).toBe(0);
+    const first = seq.at(0)!;
+    expect(first.offset).toBe(first.skip);
+    expect(seq.at(5)!.offset).toBeCloseTo(first.skip + 5);
+  });
+});
