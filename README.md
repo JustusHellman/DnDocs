@@ -44,14 +44,14 @@ Icons: [game-icons.net](https://game-icons.net) by Lorc, Delapouite and contribu
 - **Jukebox** – background music everyone hears at the same moment. The DM picks an environment
   (tavern, forest, bustling city, combat, boss battle, underwater, travel… 25 of them) from the ♫
   button in the top bar or the *Jukebox* page, and DnDocs shuffles fitting tracks from the
-  [DnDocs Jukebox](https://github.com/JustusHellman/DnDocs-Jukebox) library, crossfading between
+  [DnDocs Jukebox](https://github.com/JustusHellman/DnDJukebox) library, crossfading between
   tracks and smoothly fading when the scene changes (quick / smooth / slow). The DM can pause, skip,
   stop, play a specific track, see what's up next, make their own environments, add or remove
   tracks (from the library, or any direct link to an audio file) and hide environments they don't
   use. Players get a volume slider and mute (kept per device) and the track's credit. Nobody needs an
   account anywhere: the music is Creative Commons (mostly Kevin MacLeod, incompetech.com) and is
   served from its own GitHub Pages site, loaded from `VITE_JUKEBOX_URL` (default
-  `https://justushellman.github.io/DnDocs-Jukebox/`). Browsers only play sound after you've clicked
+  `https://justushellman.github.io/DnDJukebox/`). Browsers only play sound after you've clicked
   somewhere on the page, so a player who opens DnDocs mid-song gets a one-tap *Listen* banner.
 - **Battle here** – a fight breaks out in the city? On the place's world map, *Battle here* offers:
   *On this map* (the whole map is the battlefield), *On a part of this map* (drag a box; that piece is

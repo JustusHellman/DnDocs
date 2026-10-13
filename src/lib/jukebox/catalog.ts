@@ -1,11 +1,11 @@
 /**
- * The music library (the DnDocs-Jukebox site, its own repo on GitHub Pages) merged with what the
+ * The music library (the DnDJukebox site, its own repo on GitHub Pages) merged with what the
  * DM added or changed in this campaign.
  */
 import type { JukeboxConfig, JukeboxEnvironment, JukeboxTrack, LibraryCatalog } from './types';
 
-/** Where the music library lives. On GitHub Pages it's the same site as DnDocs (…github.io/DnDocs-Jukebox/). */
-export const JUKEBOX_URL: string = (import.meta.env.VITE_JUKEBOX_URL as string | undefined) || 'https://justushellman.github.io/DnDocs-Jukebox/';
+/** Where the music library lives. On GitHub Pages it's the same site as DnDocs (…github.io/DnDJukebox/). */
+export const JUKEBOX_URL: string = (import.meta.env.VITE_JUKEBOX_URL as string | undefined) || 'https://justushellman.github.io/DnDJukebox/';
 
 /** This page's address (a stand-in outside the browser, e.g. in tests). */
 const here = () => (typeof location !== 'undefined' ? location.href : 'http://localhost/');

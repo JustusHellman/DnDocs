@@ -26,7 +26,7 @@ export interface JukeboxEnvironment {
   custom?: boolean;
 }
 
-/** catalog.json as published by the DnDocs-Jukebox site. */
+/** catalog.json as published by the DnDJukebox site. */
 export interface LibraryCatalog {
   version: number;
   generatedAt?: string;
