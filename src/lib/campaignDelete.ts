@@ -80,6 +80,13 @@ export async function deleteCampaignCompletely(campaign: Campaign, onProgress?: 
     /* harmless leftovers */
   }
 
+  // The jukebox (what music plays and the DM's own environments).
+  try {
+    await deleteDoc(doc(db, 'jukebox', campaign.id));
+  } catch {
+    /* none, or older rules: harmless */
+  }
+
   // The join code is looked up by code, so it is deleted by id (older campaigns may not have one).
   try {
     await deleteDoc(doc(db, 'joinCodes', campaign.joinCode));

@@ -1,4 +1,4 @@
-import { GiDiceTwentyFacesTwenty, GiMeepleGroup, GiOpenBook, GiScrollUnfurled, GiStack, GiTreasureMap } from 'react-icons/gi';
+import { GiDiceTwentyFacesTwenty, GiMeepleGroup, GiMusicalNotes, GiOpenBook, GiScrollUnfurled, GiStack, GiTreasureMap } from 'react-icons/gi';
 import type { EntityIcon } from '../../lib/entityTypes';
 import { menuTypes, TYPE_META } from '../../lib/entityTypes';
 import type { EntityType } from '../../types';
@@ -45,6 +45,7 @@ export function navGroups(): NavGroup[] {
       label: 'Table',
       items: [
         { to: '/players', label: 'Members', icon: GiMeepleGroup },
+        { to: '/music', label: 'Jukebox', icon: GiMusicalNotes },
         { to: '/tools', label: 'DM tools', icon: GiDiceTwentyFacesTwenty, dmOnly: true },
         { to: '/types', label: 'Entry types', icon: GiStack, dmOnly: true },
       ],

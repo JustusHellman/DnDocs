@@ -65,6 +65,10 @@ service cloud.firestore {
     // Document ID: {entityId}; fields: id, campaignId, entityId, name, active, grid, fog, walls,
     //   doors, openDoors, combat, createdAt, updatedAt
     //
+    // Collection: jukebox
+    // Document ID: {campaignId}; fields: campaignId, state (what plays), config (DM's environments
+    //   and tracks), updatedAt, updatedBy
+    //
     // Collection: media
     // Document ID: {mediaId}
     // Fields:
@@ -407,6 +411,25 @@ service cloud.firestore {
       match /secret/{docId} {
         allow read, write: if isAuthenticated() && (isAdmin() || isCampaignDM(sceneCampaign(sceneId)));
       }
+    }
+
+    // ===============================================================
+    // Jukebox: jukebox/{campaignId} holds what music plays (state) and the DM's own environments
+    // and tracks (config). Everyone in the campaign listens; only DMs choose the music.
+    // ===============================================================
+    function isValidJukebox(campaignId) {
+      let d = request.resource.data;
+      return d.campaignId == campaignId &&
+             d.keys().hasOnly(['campaignId', 'state', 'config', 'updatedAt', 'updatedBy']) &&
+             (!('state' in d) || d.state is map) &&
+             (!('config' in d) || d.config is map) &&
+             (!('updatedBy' in d) || d.updatedBy == request.auth.uid);
+    }
+
+    match /jukebox/{campaignId} {
+      allow read: if isAuthenticated() && (isAdmin() || isCampaignMember(campaignId));
+      allow create, update: if isAuthenticated() && (isAdmin() || isCampaignDM(campaignId)) && isValidJukebox(campaignId);
+      allow delete: if isAuthenticated() && (isAdmin() || isCampaignDM(campaignId));
     }
 
     match /media/{mediaId} {

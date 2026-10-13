@@ -41,6 +41,18 @@ Icons: [game-icons.net](https://game-icons.net) by Lorc, Delapouite and contribu
   Battlemap Forge* reopens it later (tokens, drawings and fog stay). The Forge stays its own site and
   repo: DnDocs loads it from `VITE_FORGE_URL` (default `https://justushellman.github.io/BattlemapForge/`,
   the same site as DnDocs on GitHub Pages), so there is one copy of its code.
+- **Jukebox** – background music everyone hears at the same moment. The DM picks an environment
+  (tavern, forest, bustling city, combat, boss battle, underwater, travel… 25 of them) from the ♫
+  button in the top bar or the *Jukebox* page, and DnDocs shuffles fitting tracks from the
+  [DnDocs Jukebox](https://github.com/JustusHellman/DnDocs-Jukebox) library, crossfading between
+  tracks and smoothly fading when the scene changes (quick / smooth / slow). The DM can pause, skip,
+  stop, play a specific track, see what's up next, make their own environments, add or remove
+  tracks (from the library, or any direct link to an audio file) and hide environments they don't
+  use. Players get a volume slider and mute (kept per device) and the track's credit. Nobody needs an
+  account anywhere: the music is Creative Commons (mostly Kevin MacLeod, incompetech.com) and is
+  served from its own GitHub Pages site, loaded from `VITE_JUKEBOX_URL` (default
+  `https://justushellman.github.io/DnDocs-Jukebox/`). Browsers only play sound after you've clicked
+  somewhere on the page, so a player who opens DnDocs mid-song gets a one-tap *Listen* banner.
 - **Battle here** – a fight breaks out in the city? On the place's world map, *Battle here* offers:
   *On this map* (the whole map is the battlefield), *On a part of this map* (drag a box; that piece is
   copied, enlarged, as a new secret place's battle map, and you pick how many squares across), or
@@ -132,6 +144,9 @@ entry or link to carry the server's time (`syncAt`), so deploy the new app and t
 Deploy the new app first, let each DM open their campaign once (that creates its join-code
 document), then deploy the rules in the Firebase console or with `firebase deploy --only firestore:rules`.
 
+The jukebox adds a `jukebox/{campaignId}` document (everyone in the campaign reads it; only DMs
+write it). Deploy the rules after the app, or players won't hear the music.
+
 Note: field-level visibility is enforced in the UI; anyone who can read an entry's document could
 technically read all of its fields. Truly private DM data would need a separate DM-only collection.
 
@@ -146,5 +161,7 @@ src/
     entity/     entity view, cards, pickers, relationships, stat blocks, images
     editor/     markdown field, image manager, tag input, field visibility toggle
     map/        pan & zoom map viewer
+    jukebox/    music button, now playing, volume, environment picker
+  lib/jukebox/  play order (shared shuffle + clock), audio engine with fades, library + DM changes
   pages/        routed pages
 ```

@@ -17,6 +17,8 @@ import CommandPalette from './CommandPalette';
 import { Desk, PageDropZone, PeekSheet } from './PeekPanel';
 import { DragProvider } from './drag';
 import { ActiveScenesProvider, useActiveBattles } from '../../contexts/ActiveScenesContext';
+import { JukeboxProvider } from '../../contexts/JukeboxContext';
+import { JukeboxBanner, JukeboxButton } from '../jukebox/JukeboxControls';
 
 function readCompact() {
   try {
@@ -247,6 +249,7 @@ export default function AppShell() {
 
   return (
     <ActiveScenesProvider>
+    <JukeboxProvider>
     <DragProvider>
     <div className="flex h-dvh overflow-hidden">
       {isTablet && (
@@ -279,12 +282,14 @@ export default function AppShell() {
                 <Search size={20} />
               </button>
             )}
+            <JukeboxButton />
             <RecentButton />
             <NewButton compact={!isTablet} />
           </div>
         </header>
 
         <BattleBanner />
+        <JukeboxBanner />
         <main ref={mainRef} id="main" className="@container min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[calc(env(safe-area-inset-bottom)+4.5rem)] md:pb-0">
           <Suspense fallback={<Spinner className="py-24" />}>
             <Outlet />
@@ -300,6 +305,7 @@ export default function AppShell() {
       <PushListener />
     </div>
     </DragProvider>
+    </JukeboxProvider>
     </ActiveScenesProvider>
   );
 }

@@ -23,6 +23,7 @@ const Chronicle = lazy(() => import('./pages/Chronicle'));
 const EntryTypes = lazy(() => import('./pages/EntryTypes'));
 const JoinCampaign = lazy(() => import('./pages/JoinCampaign'));
 const BattleMap = lazy(() => import('./pages/BattleMap'));
+const Jukebox = lazy(() => import('./pages/Jukebox'));
 
 /** Remount the editor whenever the edited entry (or "new" type) changes. */
 function EditRoute() {
@@ -85,6 +86,7 @@ export default function App() {
                     <Route path="tools" element={<DMTools />} />
                     <Route path="map/:id?" element={<WorldMap />} />
                     <Route path="battle/:id" element={<BattleMap />} />
+                    <Route path="music" element={<Jukebox />} />
                     <Route path="*" element={<Navigate to="/search" replace />} />
                   </Route>
                 </Routes>

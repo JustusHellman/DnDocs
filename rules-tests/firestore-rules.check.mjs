@@ -283,3 +283,20 @@ describe('drawings, pings and secrets', () => {
     await assertFails(setDoc(doc(as('p1'), 'scenes/cave/secret/dm'), { hp: {} }));
   });
 });
+
+describe('jukebox', () => {
+  const state = { envId: 'tavern', tracks: ['a'], seed: 1, lead: null, avoid: [], playing: true, anchorAt: 1, anchorPos: 0, fadeMs: 3000, rev: 1 };
+  const jb = (uid, id = 'c1') => doc(as(uid), `jukebox/${id}`);
+  it('only the DM picks the music; everyone in the campaign hears it', async () => {
+    await assertSucceeds(setDoc(jb('dm'), { campaignId: 'c1', state, updatedBy: 'dm', updatedAt: 1 }, { merge: true }));
+    await assertSucceeds(getDoc(jb('p1')));
+    await assertFails(setDoc(jb('p1'), { campaignId: 'c1', state: { ...state, envId: 'boss' }, updatedBy: 'p1' }, { merge: true }));
+    await assertFails(getDoc(jb('p1', 'c2')));
+  });
+  it('the document belongs to its own campaign and only holds jukebox fields', async () => {
+    await assertFails(setDoc(jb('dm'), { campaignId: 'c2', state }));
+    await assertFails(setDoc(jb('dm'), { campaignId: 'c1', state, other: 1 }));
+    await assertFails(setDoc(jb('dm'), { campaignId: 'c1', state, updatedBy: 'p1' }));
+    await assertSucceeds(setDoc(jb('dm'), { campaignId: 'c1', config: { customEnvs: { e1: { name: 'Lair', emoji: '🐉', tracks: [] } } } }));
+  });
+});
