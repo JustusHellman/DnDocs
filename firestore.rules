@@ -100,6 +100,10 @@ service cloud.firestore {
       );
     }
 
+    function linksInBundles(campaignId) {
+      return get(/databases/$(database)/documents/campaigns/$(campaignId)).data.get('linksV2', false) == true;
+    }
+
     function isCampaignMember(campaignId) {
       let campaignPath = /databases/$(database)/documents/campaigns/$(campaignId);
       return exists(campaignPath) && (
@@ -303,10 +307,25 @@ service cloud.firestore {
              );
     }
 
+    // Links in bundles (src/lib/links.ts): linkBundles/{campaignId}__{n}, a map of links.
+    // Members read them; DMs write them. The id must belong to the campaign it names.
+    match /linkBundles/{bundleId} {
+      allow read: if isAuthenticated() && (resource == null || isAdmin() || isCampaignMember(resource.data.campaignId));
+      allow create, update: if isAuthenticated() && (isAdmin() || (
+        isCampaignDM(request.resource.data.campaignId) &&
+        bundleId == request.resource.data.campaignId + '__' + string(request.resource.data.n) &&
+        request.resource.data.n is int && request.resource.data.n >= 0 && request.resource.data.n < 64 &&
+        request.resource.data.links is map && request.resource.data.links.size() <= 3500 &&
+        (resource == null || resource.data.campaignId == request.resource.data.campaignId)));
+      allow delete: if isAuthenticated() && (isAdmin() || isCampaignDM(resource.data.campaignId));
+    }
+
     match /relationships/{relId} {
       allow read: if isAuthenticated() && (resource == null || isAdmin() || isCampaignMember(resource.data.campaignId));
-      allow create: if isAuthenticated() && (isAdmin() || (isCampaignDM(request.resource.data.campaignId) && isValidRelationship()));
-      allow update: if isAuthenticated() && (isAdmin() || (isCampaignDM(resource.data.campaignId) && isValidRelationship()));
+      // Once a campaign keeps its links in bundles (linksV2), no new separate link documents:
+      // a device still on the old storage gets a clear error instead of writing where nobody reads.
+      allow create: if isAuthenticated() && (isAdmin() || (isCampaignDM(request.resource.data.campaignId) && isValidRelationship() && !linksInBundles(request.resource.data.campaignId)));
+      allow update: if isAuthenticated() && (isAdmin() || (isCampaignDM(resource.data.campaignId) && isValidRelationship() && !linksInBundles(resource.data.campaignId)));
       allow delete: if isAuthenticated() && (isAdmin() || isCampaignDM(resource.data.campaignId));
     }
 

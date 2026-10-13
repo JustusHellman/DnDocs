@@ -300,3 +300,33 @@ describe('jukebox', () => {
     await assertSucceeds(setDoc(jb('dm'), { campaignId: 'c1', config: { customEnvs: { e1: { name: 'Lair', emoji: '🐉', tracks: [] } } } }));
   });
 });
+
+describe('link bundles', () => {
+  const link = { id: 'l1', campaignId: 'c1', sourceId: 'a', targetId: 'b', targetName: 'B', label: 'Friend', reverseLabel: 'Friend', reverseId: '', v: 2, createdAt: now };
+  const lb = (uid, id = 'c1__3') => doc(as(uid), `linkBundles/${id}`);
+  it('the DM writes links into bundles; players in the campaign read them', async () => {
+    await assertSucceeds(setDoc(lb('dm'), { campaignId: 'c1', n: 3, links: { l1: link } }, { merge: true }));
+    await assertSucceeds(getDoc(lb('p1')));
+    await assertSucceeds(getDocs(query(collection(as('p1'), 'linkBundles'), where('campaignId', '==', 'c1'))));
+    await assertFails(setDoc(lb('p1'), { campaignId: 'c1', n: 3, links: { l2: link } }, { merge: true }));
+  });
+  it('a bundle belongs to the campaign its id names', async () => {
+    await assertFails(setDoc(lb('dm', 'c2__3'), { campaignId: 'c1', n: 3, links: {} }));
+    await assertFails(setDoc(lb('dm', 'c1__4'), { campaignId: 'c1', n: 3, links: {} }));
+    await assertFails(setDoc(lb('dm', 'c2__3'), { campaignId: 'c2', n: 3, links: {} })); // not their campaign
+  });
+  it('outsiders can neither read nor write', async () => {
+    await assertSucceeds(setDoc(lb('dm'), { campaignId: 'c1', n: 3, links: { l1: link } }));
+    await assertFails(getDoc(lb('x')));
+  });
+});
+
+describe('links after the move to bundles', () => {
+  it('no new separate link documents once a campaign uses bundles', async () => {
+    const rel = { id: 'r1', campaignId: 'c1', sourceId: 'a', targetId: 'b', targetName: 'B', label: 'Friend', reverseId: '', createdAt: now, syncAt: serverTimestamp() };
+    await assertSucceeds(setDoc(doc(as('dm'), 'relationships/r1'), rel));
+    await env.withSecurityRulesDisabled((ctx) => updateDoc(doc(ctx.firestore(), 'campaigns/c1'), { linksV2: true }));
+    await assertFails(setDoc(doc(as('dm'), 'relationships/r2'), { ...rel, id: 'r2' }));
+    await assertSucceeds(deleteDoc(doc(as('dm'), 'relationships/r1'))); // tidying up stays possible
+  });
+});

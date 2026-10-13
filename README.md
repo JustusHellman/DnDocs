@@ -91,11 +91,20 @@ Icons: [game-icons.net](https://game-icons.net) by Lorc, Delapouite and contribu
 - **Relationships** between entries (one record, shown from both sides), notes attached to any entry,
   location trees, and DM tools (dice roller, tavern / NPC / loot generators).
 - **Offline cache and incremental sync** – the campaign is kept in the browser, so it opens instantly and
-  survives bad Wi-Fi. A device that has been here in the last three days downloads only the entries and
-  links that changed since its last visit (a handful of reads instead of the whole campaign); deletions
-  and lost access reach it through tiny "sync hints". Every few days, after a pack import, or whenever
-  something looks off it simply loads everything again. Members → *Reload campaign data* forces that.
-  Member names are kept for a day. Signing out clears it all.
+  survives bad Wi-Fi. A device that loaded everything within the last week downloads only the entries
+  that changed since its last visit (a handful of reads instead of the whole campaign); deletions and
+  lost access reach it through tiny "sync hints". Once a week, after a large pack import or removal, or
+  whenever something looks off it simply loads everything again. Members → *Reload campaign data*
+  forces that. Member names are kept for a day. Signing out clears it all.
+- **Links in bundles** – all links between entries live in a few shared documents per campaign
+  (`linkBundles`), so loading every link costs at most 8 reads and importing hundreds of links a few
+  writes. Older campaigns are moved over automatically the first time the owner opens them after the
+  new security rules are deployed (until then everything keeps working the old way).
+- **Campaign packs** (DM tools) – import a whole set of entries from a JSON file. Importing the same pack
+  again only writes what's new or changed (the preview shows how many writes it will take), so editing a
+  pack and re-importing it is cheap. Choose "Update them to match the pack" to make the campaign follow
+  the edited file (text, fields, location, links; optionally deleting entries the file dropped) while
+  keeping reveals, images and your own links. That's far cheaper than removing and re-importing.
 - **Images** are stored as WebP (JPEG on browsers without WebP) at up to 1280 px, with a tiny preview
   on each entry so lists show pictures without loading the full images.
 
@@ -149,6 +158,10 @@ document), then deploy the rules in the Firebase console or with `firebase deplo
 
 The jukebox adds a `jukebox/{campaignId}` document (everyone in the campaign reads it; only DMs
 write it). Deploy the rules after the app, or players won't hear the music.
+
+Link bundles add `linkBundles/{campaignId}__{n}` documents. Deploy the app, then the rules; the next
+time the owner opens a campaign its links are moved into bundles automatically (until the rules are
+deployed that move is refused and everything keeps working the old way).
 
 Note: field-level visibility is enforced in the UI; anyone who can read an entry's document could
 technically read all of its fields. Truly private DM data would need a separate DM-only collection.

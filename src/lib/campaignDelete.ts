@@ -36,12 +36,18 @@ async function pool<T>(items: T[], worker: (item: T) => Promise<void>, onTick?: 
 
 export async function deleteCampaignCompletely(campaign: Campaign, onProgress?: (done: number, total: number) => void): Promise<DeleteSummary> {
   const where_ = where('campaignId', '==', campaign.id);
-  const [rels, media, ents] = await Promise.all([
+  const [rels, media, ents, linkBundles] = await Promise.all([
     getDocs(query(collection(db, 'relationships'), where_)),
     getDocs(query(collection(db, 'media'), where_)),
     getDocs(query(collection(db, 'entities'), where_)),
+    // Bundled links (lib/links.ts); refused before the rules for them are deployed.
+    getDocs(query(collection(db, 'linkBundles'), where_)).catch((e: { code?: string }) => {
+      if (e?.code === 'permission-denied') return null; // rules for bundles not deployed: there are none
+      throw e;
+    }),
   ]);
-  const total = rels.size + media.size + ents.size + 2;
+  const bundleDocs = linkBundles?.docs ?? [];
+  const total = rels.size + bundleDocs.length + media.size + ents.size + 2;
   let done = 0;
   const tick = () => onProgress?.(++done, total);
   onProgress?.(0, total);
@@ -67,6 +73,7 @@ export async function deleteCampaignCompletely(campaign: Campaign, onProgress?: 
     out.failed++;
   }
   await pool(rels.docs, remove('relationships'), tick);
+  await pool(bundleDocs, remove('relationships'), tick);
   await pool(media.docs, remove('media'), tick);
   await pool(ents.docs, remove('entities'), tick);
 

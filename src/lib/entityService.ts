@@ -18,6 +18,7 @@ import { canEditEntity } from './permissions';
 import { derivedPlayers, explicitShare, planReveal, toV3, type RevealAudience } from './sharing';
 import { baseType, fieldsFor, isEntityType, normalizeEntity, permissionKeys, playerCanCreate, storageType } from './entityTypes';
 import { deleteScene } from './battle/sceneService';
+import { addLinkWritesToBatch, fetchLinks, newLinkId, usesBundles, writeLinks } from './links';
 import { addHint, lostAccess, syncStamp } from './sync';
 import { isMediaRef, MEDIA_PREFIX, mediaIdOf, primeMediaCache, forgetMedia, makeThumbnail, resolveImageSrc } from './media';
 
@@ -365,13 +366,18 @@ export async function deleteEntity(entity: Entity, opts: { isDM: boolean; childr
 
   if (opts.isDM) {
     // Remove both directions of every relationship touching this entity.
-    const rels = collection(db, 'relationships');
-    const [outgoing, incoming] = await Promise.all([
-      getDocs(query(rels, where('campaignId', '==', entity.campaignId), where('sourceId', '==', entity.id))),
-      getDocs(query(rels, where('campaignId', '==', entity.campaignId), where('targetId', '==', entity.id))),
-    ]);
-    // (Other devices drop these links when they see the entry's deletion hint.)
-    [...outgoing.docs, ...incoming.docs].forEach((d) => batch.delete(d.ref));
+    if (usesBundles(entity.campaignId)) {
+      const touching = (await fetchLinks(entity.campaignId, { allowCache: true })).filter((r) => r.sourceId === entity.id || r.targetId === entity.id);
+      if (touching.length) addLinkWritesToBatch(batch, entity.campaignId, { remove: touching.map((r) => r.id) });
+    } else {
+      const rels = collection(db, 'relationships');
+      const [outgoing, incoming] = await Promise.all([
+        getDocs(query(rels, where('campaignId', '==', entity.campaignId), where('sourceId', '==', entity.id))),
+        getDocs(query(rels, where('campaignId', '==', entity.campaignId), where('targetId', '==', entity.id))),
+      ]);
+      // (Other devices drop these links when they see the entry's deletion hint.)
+      [...outgoing.docs, ...incoming.docs].forEach((d) => batch.delete(d.ref));
+    }
 
     // Things located here move up one level instead of becoming orphans.
     for (const child of opts.children) {
@@ -398,10 +404,10 @@ function addRelationshipPairToBatch(
   source: { id: string; name: string },
   rel: PendingRelationship,
 ) {
-  const ref = doc(collection(db, 'relationships'));
+  const id = newLinkId();
   const label = rel.label.trim();
   const record: Relationship = {
-    id: ref.id,
+    id,
     campaignId,
     sourceId: source.id,
     targetId: rel.targetId,
@@ -412,7 +418,8 @@ function addRelationshipPairToBatch(
     v: 2,
     createdAt: nowIso(),
   };
-  batch.set(ref, { ...record, ...syncStamp() });
+  if (usesBundles(campaignId)) addLinkWritesToBatch(batch, campaignId, { put: [record] });
+  else batch.set(doc(db, 'relationships', id), { ...record, ...syncStamp() });
 }
 
 export async function createRelationshipPair(campaignId: string, source: { id: string; name: string }, rel: PendingRelationship) {
@@ -422,6 +429,10 @@ export async function createRelationshipPair(campaignId: string, source: { id: s
 }
 
 export async function deleteRelationshipPair(rel: Relationship) {
+  if (usesBundles(rel.campaignId)) {
+    await writeLinks(rel.campaignId, { remove: [rel.id, ...(rel.reverseId ? [rel.reverseId] : [])] });
+    return;
+  }
   const del = (id: string) => {
     const batch = writeBatch(db);
     batch.delete(doc(db, 'relationships', id));

@@ -68,8 +68,11 @@ export function lostAccess(before: Parameters<typeof viewersOf>[0], after: Param
 // ---------------------------------------------------------------------------
 
 export const SYNC_VERSION = 1;
-/** A full download at least this often, whatever happens (catches anything a hint missed). */
-export const FULL_EVERY_MS = 3 * 24 * 3600_000;
+/**
+ * A full download at least this often, whatever happens (catches anything a hint missed).
+ * Must stay below HINT_KEEP_MS, so a device in incremental mode never misses a deletion hint.
+ */
+export const FULL_EVERY_MS = 7 * 24 * 3600_000;
 /** Overlap when asking for "changed since", against small timing differences. */
 export const MARGIN_MS = 2 * 60_000;
 
@@ -126,8 +129,8 @@ export function forgetSyncState(prefix = '') {
   }
 }
 
-/** Hints are kept a week: a device away longer reloads in full anyway (FULL_EVERY_MS). */
-export const HINT_KEEP_MS = 7 * 24 * 3600_000;
+/** Hints are kept eight days: a device away longer reloads in full anyway (FULL_EVERY_MS, a week). */
+export const HINT_KEEP_MS = 8 * 24 * 3600_000;
 const PRUNE_KEY = 'dndocs-hints-pruned';
 
 /**

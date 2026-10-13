@@ -1,10 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { collection, query, where, type Query } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, type Query } from 'firebase/firestore';
 import { db } from '../firebase';
 import type { Entity, Relationship, User } from '../types';
 import { useAuth } from './AuthContext';
 import { backfillCoverThumb, fetchUsers } from '../lib/entityService';
 import { applyTypeConfig, normalizeEntity } from '../lib/entityTypes';
+import { bundlesQuery, linksFromBundles, migrateLinks, setLinksV2, sweepOldLinks } from '../lib/links';
 import {
   canDeleteEntity,
   canEditEntity,
@@ -127,10 +128,21 @@ export function CampaignDataProvider({ children }: { children: ReactNode }) {
     };
   }, [campaignId, uid, isDM]);
 
+  // Links: bundle documents (a few reads for the whole campaign) or, for campaigns not moved over
+  // yet, one document per link with incremental sync.
+  const linksV2 = !!currentCampaign?.linksV2;
   useEffect(() => {
     if (!campaignId || !uid) {
       setRelationships([]);
       return;
+    }
+    setLinksV2(campaignId, linksV2);
+    if (linksV2) {
+      return onSnapshot(
+        bundlesQuery(campaignId),
+        (snap) => setRelationships(linksFromBundles(snap.docs)),
+        (err) => logError('Link listener', err),
+      );
     }
     const sync = new CollectionSync<Relationship>({
       key: `relationships:${campaignId}:${uid}`,
@@ -151,7 +163,36 @@ export function CampaignDataProvider({ children }: { children: ReactNode }) {
       sync.stop();
       if (syncs.current.relationships === sync) syncs.current.relationships = undefined;
     };
-  }, [campaignId, uid, isDM]);
+  }, [campaignId, uid, isDM, linksV2]);
+
+  // The owner's device moves an older campaign's links into bundles, once. If the new security
+  // rules aren't deployed yet the write is refused; it's tried again a day later.
+  const isOwner = !!uid && currentCampaign?.dmId === uid;
+  useEffect(() => {
+    if (!campaignId || !isOwner || linksV2) return;
+    const key = `dndocs-links-migrate:${campaignId}`;
+    try {
+      if (Date.now() - Number(localStorage.getItem(key) || 0) < 24 * 3600_000) return;
+    } catch {
+      return;
+    }
+    const t = setTimeout(() => {
+      try {
+        localStorage.setItem(key, String(Date.now()));
+      } catch {
+        /* ignore */
+      }
+      migrateLinks(campaignId).catch((err) => logError('Moving links into bundles', err));
+    }, 5000);
+    return () => clearTimeout(t);
+  }, [campaignId, isOwner, linksV2]);
+
+  // DMs, once per session: move any link a device still on the old storage wrote separately.
+  useEffect(() => {
+    if (!campaignId || !isDM || !linksV2) return;
+    const t = setTimeout(() => sweepOldLinks(campaignId).catch((err) => logError('Tidying old links', err)), 8000);
+    return () => clearTimeout(t);
+  }, [campaignId, isDM, linksV2]);
 
   /** Forget the offline bookkeeping and download the campaign again. */
   const reloadFromServer = useCallback(() => {

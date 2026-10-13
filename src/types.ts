@@ -17,6 +17,8 @@ export interface Campaign {
   joinCode: string;
   /** The campaign's own entry types and tweaks to the built-in ones. */
   typeConfig?: TypeConfig;
+  /** Links are stored in bundle documents (lib/links.ts) rather than one document each. */
+  linksV2?: boolean;
   /** Table rules the DM can switch (absent = the rules as written). */
   houseRules?: HouseRules;
   createdAt: string;

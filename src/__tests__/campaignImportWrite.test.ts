@@ -7,6 +7,7 @@ import type { Entity } from '../types';
  * import code, including a second run, a partial failure, an update and a full removal.
  */
 const store = new Map<string, Record<string, any>>();
+let writes = 0; // every create / update / delete, like Firestore's daily write quota
 const failOnce = new Set<string>(); // fails once (a network blip the retry should absorb)
 const failAlways = new Set<string>(); // keeps failing until cleared
 let writerUid = 'dm1';
@@ -53,8 +54,26 @@ vi.mock('firebase/firestore', () => {
     where: (field: string, _op: string, value: unknown) => ({ field, value }),
     query: (c: any, w: any) => ({ ...c, w }),
     getDocFromServer: async (r: any) => snap(r),
+    getDocsFromServer: async (q: any) => ({ docs: [...store.entries()].filter(([p, v]) => p.startsWith(`${q.col}/`) && v[q.w.field] === q.w.value).map(([p]) => snap(ref(q.col, p.split('/')[1]))) }),
     getDocs: async (q: any) => ({ docs: [...store.entries()].filter(([p, v]) => p.startsWith(`${q.col}/`) && v[q.w.field] === q.w.value).map(([p]) => snap(ref(q.col, p.split('/')[1]))) }),
-    setDoc: async (r: any, data: any) => {
+    deleteField: () => ({ __delete: true }),
+    setDoc: async (r: any, data: any, opts?: { merge?: boolean }) => {
+      writes++;
+      if (r.col === 'linkBundles') {
+        if (!isDM()) throw new Error('permission-denied');
+        if (r.id !== `${data.campaignId}__${data.n}`) throw new Error('permission-denied: bundle id');
+        const merge = (cur: any, patch: any): any => {
+          const out = { ...(cur ?? {}) };
+          for (const [k, v] of Object.entries(patch)) {
+            if (v && typeof v === 'object' && (v as any).__delete) delete out[k];
+            else if (v && typeof v === 'object' && !Array.isArray(v) && k === 'links') out[k] = merge(out[k], v);
+            else out[k] = JSON.parse(JSON.stringify(v));
+          }
+          return out;
+        };
+        store.set(r.path, opts?.merge ? merge(store.get(r.path), data) : merge({}, data));
+        return;
+      }
       if (failOnce.delete(r.path)) throw new Error('network down');
       if (failAlways.has(r.path)) throw new Error('network down');
       if (!isDM()) throw new Error('permission-denied');
@@ -64,6 +83,7 @@ vi.mock('firebase/firestore', () => {
       store.set(r.path, JSON.parse(JSON.stringify(data)));
     },
     updateDoc: async (r: any, data: any) => {
+      writes++;
       if (!isDM()) throw new Error('permission-denied');
       const cur = store.get(r.path);
       if (!cur) throw new Error('not-found');
@@ -128,9 +148,59 @@ describe('runImport', () => {
     const key = 'entities/seed-p-a';
     store.set(key, { ...store.get(key)!, isPublic: true, imageUrls: ['media:1'], content: 'old' });
     const res = await runImport(plan(), { mode: 'update', campaignId: 'camp' });
-    expect(res.updated).toBe(3);
+    // Only the entry that differs from the pack is written.
+    expect(res.updated).toBe(1);
+    expect(res.unchanged).toBe(2);
     expect(store.get(key)).toMatchObject({ isPublic: true, imageUrls: ['media:1'], ownerId: 'dm1' });
     expect(store.get(key)!.content).toContain('Hello');
+  });
+
+  it('refresh makes the campaign match an edited pack: moves, link wording, dropped links and entries', async () => {
+    await runImport(plan(), { mode: 'skip', campaignId: 'camp' });
+    // The DM's own link to B, and the DM's own entry placed inside C.
+    store.set('relationships/mine', { id: 'mine', campaignId: 'camp', sourceId: 'seed-p-a', targetId: 'seed-p-b', targetName: 'B', label: 'Friend', reverseId: '', createdAt: '' });
+    store.set('entities/own', { ...store.get('entities/seed-p-c')!, id: 'own', name: 'Own', locationId: 'seed-p-c' });
+    const edited = raw();
+    edited.entities = [
+      { key: 'a', type: 'settlement', name: 'A', content: 'Hello [[b]]' },
+      { key: 'b', type: 'npc', name: 'B', parent: null as unknown as string, gender: 'Male', attributes: { race: 'Elf' } }, // moved to the top
+      { key: 'd', type: 'npc', name: 'D', parent: 'a' },
+    ];
+    edited.relationships = [{ source: 'a', target: 'd', label: 'Ruler', reverseLabel: 'Realm' }];
+    const p2 = buildPlan(edited, { campaignId: 'camp', uid: 'dm1' });
+
+    const keep = await runImport(p2, { mode: 'update', campaignId: 'camp' });
+    expect(keep).toMatchObject({ created: 1, updated: 1, unchanged: 1, relationshipsRemoved: 1, removed: 0, failed: [] });
+    expect(store.get('entities/seed-p-b')!.locationId).toBeNull();
+    expect(store.has('relationships/seedrel-p-a--b')).toBe(false); // the pack dropped it
+    expect(store.has('relationships/mine')).toBe(true); // the DM's own link stays
+    expect(store.has('entities/seed-p-c')).toBe(true); // not asked to remove
+
+    const sync = await runImport(p2, { mode: 'update', campaignId: 'camp', removeMissing: true });
+    expect(sync).toMatchObject({ removed: 1, failed: [] });
+    expect(store.has('entities/seed-p-c')).toBe(false);
+    expect(store.get('entities/own')!.locationId).toBeNull();
+
+    // New wording for an existing link.
+    const worded = raw();
+    worded.entities = edited.entities;
+    worded.relationships = [{ source: 'a', target: 'd', label: 'Lord', reverseLabel: 'Realm' }];
+    const p3 = buildPlan(worded, { campaignId: 'camp', uid: 'dm1' });
+    const w = await runImport(p3, { mode: 'update', campaignId: 'camp' });
+    expect(w.relationshipsUpdated).toBe(1);
+    expect(store.get('relationships/seedrel-p-a--d')!.label).toBe('Lord');
+  });
+
+  it('re-importing an unchanged pack writes nothing', async () => {
+    await runImport(plan(), { mode: 'update', campaignId: 'camp' });
+    writes = 0;
+    const again = await runImport(plan(), { mode: 'update', campaignId: 'camp' });
+    expect(again.unchanged).toBe(3);
+    expect(again.updated + again.created + again.relationshipsCreated).toBe(0);
+    expect(writes).toBe(0);
+    writes = 0;
+    await runImport(plan(), { mode: 'skip', campaignId: 'camp' });
+    expect(writes).toBe(0);
   });
 
   it('absorbs a brief network blip with a retry', async () => {
@@ -258,5 +328,38 @@ describe.skipIf(!process.env.PACK_FILE)('a real pack file, end to end', () => {
     const gone = await removePack(pack.pack.id, 'camp', current);
     expect(gone).toMatchObject({ entities: pack.entities.length, relationships: pack.relationships.length, failed: 0 });
     expect(store.size).toBe(0);
+  });
+});
+
+describe('links in bundles', () => {
+  const links = () =>
+    [...store.entries()].filter(([k]) => k.startsWith('linkBundles/')).flatMap(([, v]) => Object.keys(v.links ?? {}));
+  it('imports, refreshes and removes links with one write per bundle', async () => {
+    writes = 0;
+    const first = await runImport(plan(), { mode: 'skip', campaignId: 'camp', bundles: true });
+    expect(first.relationshipsCreated).toBe(1);
+    expect(links()).toEqual(['seedrel-p-a--b']);
+    expect(ids('relationships')).toHaveLength(0);
+    expect(writes).toBe(3 + 1); // three entries, one bundle
+
+    // An unchanged pack: nothing written at all.
+    writes = 0;
+    const again = await runImport(plan(), { mode: 'update', campaignId: 'camp', bundles: true });
+    expect(again.relationshipsSkipped).toBe(1);
+    expect(writes).toBe(0);
+
+    // The pack drops the link and adds another: still a single bundle write per touched bundle.
+    const edited = raw();
+    edited.relationships = [{ source: 'b', target: 'a', label: 'Subject', reverseLabel: 'Ruler' }];
+    const p2 = buildPlan(edited, { campaignId: 'camp', uid: 'dm1' });
+    writes = 0;
+    const sync = await runImport(p2, { mode: 'update', campaignId: 'camp', bundles: true });
+    expect(sync).toMatchObject({ relationshipsCreated: 1, relationshipsRemoved: 1, failed: [] });
+    expect(links()).toEqual(['seedrel-p-b--a']);
+    expect(writes).toBeLessThanOrEqual(2);
+
+    const gone = await removePack('p', 'camp', { entities: [...store.values()].filter((v) => v.type) as Entity[] }, { bundles: true });
+    expect(gone.relationships).toBe(1);
+    expect(links()).toEqual([]);
   });
 });

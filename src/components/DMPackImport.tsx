@@ -6,13 +6,13 @@ import { useCampaignData } from '../contexts/CampaignDataContext';
 import { useConfirm } from '../contexts/ConfirmContext';
 import { useToast } from '../contexts/ToastContext';
 import { buildPlan, isPackEntityId, parsePackText, type ImportPlan } from '../lib/campaignImport';
-import { removePack, runImport, type ImportMode, type ImportSummary } from '../lib/campaignImportWrite';
+import { needsUpdate, removePack, runImport, type ImportMode, type ImportSummary } from '../lib/campaignImportWrite';
 import { typeMeta } from '../lib/entityTypes';
 
 /** DM tools card: preview and import a campaign pack file, or take an imported pack back out. */
 export default function DMPackImport() {
   const { currentCampaign, user } = useAuth();
-  const { entities } = useCampaignData();
+  const { entities, relationships } = useCampaignData();
   const confirm = useConfirm();
   const toast = useToast();
   const fileInput = useRef<HTMLInputElement>(null);
@@ -28,6 +28,40 @@ export default function DMPackImport() {
   const existingIds = useMemo(() => new Set(entities.map((e) => e.id)), [entities]);
   const alreadyThere = plan ? plan.entities.filter((e) => existingIds.has(e.id)).length : 0;
   const importedBefore = plan?.pack ? entities.filter((e) => isPackEntityId(plan.pack!.id, e.id)).length : 0;
+  // Entries whose text differs from the pack (only these are written on "refresh").
+  const changed = useMemo(() => {
+    if (!plan) return 0;
+    const byId = new Map(entities.map((e) => [e.id, e]));
+    return plan.entities.filter((e) => {
+      const cur = byId.get(e.id);
+      return cur && needsUpdate(e, cur);
+    }).length;
+  }, [plan, entities]);
+  const [removeMissing, setRemoveMissing] = useState(false);
+  // What a refresh would do to links, and which of the pack's entries the file no longer has.
+  const diff = useMemo(() => {
+    const none = { newRels: 0, changedRels: 0, staleRels: 0, missing: [] as string[] };
+    if (!plan?.pack) return none;
+    const packId = plan.pack.id;
+    const have = new Map(relationships.map((x) => [x.id, x]));
+    const planRels = new Set(plan.relationships.map((x) => x.id));
+    const inPack = new Set(plan.entities.map((e) => e.id));
+    const missing = entities.filter((e) => isPackEntityId(packId, e.id) && !inPack.has(e.id));
+    const keys = ['sourceId', 'targetId', 'targetName', 'label', 'reverseLabel'] as const;
+    return {
+      newRels: plan.relationships.filter((x) => !have.has(x.id)).length,
+      changedRels: plan.relationships.filter((x) => {
+        const cur = have.get(x.id);
+        return cur && keys.some((k) => (cur[k] ?? '') !== (x[k] ?? ''));
+      }).length,
+      staleRels: relationships.filter((x) => x.id.startsWith(`seedrel-${packId}-`) && !planRels.has(x.id)).length,
+      missing: missing.map((e) => e.name),
+    };
+  }, [plan, relationships, entities]);
+  const newRels = diff.newRels;
+  const fresh = plan ? plan.entities.length - alreadyThere : 0;
+  const refresh = mode === 'update';
+  const writes = fresh + newRels + (refresh ? changed + diff.changedRels + diff.staleRels + (removeMissing ? diff.missing.length : 0) : 0);
 
   if (!currentCampaign || !user) return null;
 
@@ -59,15 +93,32 @@ export default function DMPackImport() {
 
   const doImport = async () => {
     if (!plan?.ok || !plan.pack) return;
-    const fresh = plan.entities.length - alreadyThere;
     const ok = await confirm({
       title: `Import "${plan.pack.name}"?`,
       confirmLabel: 'Import',
       message: (
         <div className="space-y-2">
           <p>
-            This adds <strong>{fresh}</strong> new entries and <strong>{plan.relationships.length}</strong> links to <strong>{currentCampaign.name}</strong>.
-            {alreadyThere > 0 && (mode === 'skip' ? ` ${alreadyThere} entries from this pack are already here and will be left exactly as they are.` : ` ${alreadyThere} entries from this pack are already here and their text will be updated.`)}
+            This adds <strong>{fresh}</strong> new entries and <strong>{newRels}</strong> new links to <strong>{currentCampaign.name}</strong>.
+            {alreadyThere > 0 &&
+              (mode === 'skip'
+                ? ` ${alreadyThere} entries from this pack are already here and will be left exactly as they are.`
+                : ` ${alreadyThere} entries from this pack are already here; ${changed ? `the ${changed} that changed will be updated (text, fields and location), the rest are left alone` : 'none of them changed, so they are left alone'}.`)}
+          </p>
+          {refresh && (diff.changedRels > 0 || diff.staleRels > 0 || (removeMissing && diff.missing.length > 0)) && (
+            <p>
+              {[
+                diff.changedRels ? `${diff.changedRels} links get the pack's new wording` : '',
+                diff.staleRels ? `${diff.staleRels} links the pack no longer has are removed` : '',
+                removeMissing && diff.missing.length ? `${diff.missing.length} entries no longer in the pack are deleted` : '',
+              ]
+                .filter(Boolean)
+                .join('; ')}
+              .
+            </p>
+          )}
+          <p className="text-stone-500">
+            About {writes} database writes (the free plan allows 20,000 a day).
           </p>
           <p>Everything imported is <strong>secret</strong>: your players can't see any of it until you reveal it. You can undo the import afterwards from this card.</p>
         </div>
@@ -78,7 +129,7 @@ export default function DMPackImport() {
     setSummary(null);
     setProgress([0, plan.entities.length + plan.relationships.length + plan.maps.length]);
     try {
-      const s = await runImport(plan, { mode, campaignId: currentCampaign.id, onProgress: (d, t) => setProgress([d, t]) });
+      const s = await runImport(plan, { mode, campaignId: currentCampaign.id, removeMissing: refresh && removeMissing, onProgress: (d, t) => setProgress([d, t]) });
       setSummary(s);
       if (s.failed.length) toast.error(new Error(`${s.failed.length} items didn't import. Run it again to retry just those.`), 'Import');
       else toast.success(`Imported ${s.created + s.updated} entries and ${s.relationshipsCreated} links.`);
@@ -214,14 +265,28 @@ export default function DMPackImport() {
                   <label className="flex items-start gap-2">
                     <input type="radio" name="pack-mode" className="mt-1" checked={mode === 'update'} onChange={() => setMode('update')} />
                     <span>
-                      <strong>Also refresh their text</strong> from the pack. Overwrites edits you made to the text; keeps who can see them, images and map pins.
+                      <strong>Update them to match the pack</strong>
+                      {changed ? ` (${changed} changed)` : ' (none changed)'}: text, fields, location and links follow the pack file; links the pack dropped are removed. Only what differs is written. Keeps who can see them, images, map pins and links you added yourself.
                     </span>
                   </label>
+                  {mode === 'update' && diff.missing.length > 0 && (
+                    <label className="ml-6 flex items-start gap-2">
+                      <input type="checkbox" className="mt-1" checked={removeMissing} onChange={(e) => setRemoveMissing(e.target.checked)} />
+                      <span>
+                        Also delete the <strong>{diff.missing.length}</strong> {diff.missing.length === 1 ? 'entry' : 'entries'} from this pack that the file no longer has
+                        <span className="text-stone-500"> ({diff.missing.slice(0, 4).join(', ')}{diff.missing.length > 4 ? ', …' : ''})</span>.
+                      </span>
+                    </label>
+                  )}
                 </fieldset>
               )}
               <div className="flex flex-wrap items-center gap-2">
                 <button type="button" className="btn btn-primary" disabled={!!busy} onClick={doImport}>
-                  {busy === 'import' ? `Importing… ${progress[0]}/${progress[1]}` : `Import ${plan.entities.length - alreadyThere} new entries`}
+                  {busy === 'import'
+                    ? `Importing… ${progress[0]}/${progress[1]}`
+                    : mode === 'update' && changed
+                      ? `Import ${fresh} new, update ${changed}`
+                      : `Import ${fresh} new entries`}
                 </button>
                 {importedBefore > 0 && (
                   <button type="button" className="btn btn-ghost" disabled={!!busy} onClick={doRemove}>
@@ -242,8 +307,10 @@ export default function DMPackImport() {
           </p>
           <p className="mt-1 text-stone-300">
             {summary.created} entries created{summary.updated ? `, ${summary.updated} updated` : ''}
-            {summary.skipped ? `, ${summary.skipped} left as they were` : ''}; {summary.relationshipsCreated} links created
-            {summary.relationshipsSkipped ? `, ${summary.relationshipsSkipped} already there` : ''}{summary.mapsSet || summary.mapsSkipped ? `; ${summary.mapsSet} maps set${summary.mapsSkipped ? `, ${summary.mapsSkipped} left as they were` : ''}` : ''}.
+            {summary.skipped ? `, ${summary.skipped} left as they were` : ''}
+            {summary.unchanged ? `, ${summary.unchanged} already up to date` : ''}
+            {summary.removed ? `, ${summary.removed} removed` : ''}; {summary.relationshipsCreated} links created
+            {summary.relationshipsUpdated ? `, ${summary.relationshipsUpdated} updated` : ''}{summary.relationshipsRemoved ? `, ${summary.relationshipsRemoved} removed` : ''}{summary.relationshipsSkipped ? `, ${summary.relationshipsSkipped} already there` : ''}{summary.mapsSet || summary.mapsSkipped ? `; ${summary.mapsSet} maps set${summary.mapsSkipped ? `, ${summary.mapsSkipped} left as they were` : ''}` : ''}.
           </p>
           {summary.failed.length > 0 && (
             <>
