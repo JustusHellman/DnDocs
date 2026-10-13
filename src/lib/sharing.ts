@@ -38,7 +38,9 @@ export function derivedPlayers(
 export function explicitShare(entity: Entity, players: User[]): string[] {
   if (entity.sharedWith) return entity.sharedWith;
   const derived = derivedPlayers({ ...entity, isPublic: true, shareV: undefined }, [], players); // knowledge + specific fields only
-  const rest = (entity.allowedPlayers ?? []).filter((p) => !derived.has(p));
+  // A character's player has access because they play it, not because the DM shared it.
+  const player = entity.type === 'character' ? entity.playerId : undefined;
+  const rest = (entity.allowedPlayers ?? []).filter((p) => !derived.has(p) && p !== player);
   // Old "secret + public field" entries had every player added; that wasn't an explicit choice.
   const hasPublicField = Object.values(entity.fieldPermissions ?? {}).some((p) => p.isPublic);
   if (!entity.isPublic && hasPublicField && players.every((p) => rest.includes(p.uid))) return [];
@@ -58,7 +60,9 @@ export function lockableKeys(entity: Pick<Entity, 'type' | 'attributes'>): strin
  */
 export function toV3(entity: Entity): Entity {
   if (entity.shareV === 3) return { ...entity, sharedWith: entity.sharedWith ?? [], fieldPermissions: { ...(entity.fieldPermissions ?? {}) } };
-  const openers = entity.isPublic ? entity.sharedWith ?? [] : [...new Set(entity.allowedPlayers ?? [])];
+  // (A character's own player isn't "shared with": they always see their character.)
+  const player = entity.type === 'character' ? entity.playerId : undefined;
+  const openers = entity.isPublic ? entity.sharedWith ?? [] : [...new Set(entity.allowedPlayers ?? [])].filter((p) => p !== player);
   const out: Perms = {};
   const old = entity.fieldPermissions ?? {};
   const schema = new Set(permissionKeys(entity.type));

@@ -84,6 +84,8 @@ export interface EntityTypeMeta {
   base?: BuiltinType;
   /** Key in TYPE_ICONS (custom types). */
   iconKey?: string;
+  /** The DM's choice of fields "Reveal" ticks by default. */
+  revealDefaults?: Record<string, boolean>;
 }
 
 const r = (key: string, label: string, description: string): FieldSchema => ({
@@ -465,6 +467,7 @@ export function applyTypeConfig(config: TypeConfig | undefined | null): boolean 
       label: o.label?.trim() || t.label,
       plural: o.plural?.trim() || t.plural,
       hidden: !!o.hidden && t.value !== 'note',
+      revealDefaults: o.revealDefaults,
       parents: [...t.parents],
       fields: [...t.fields.filter((f) => !hidden.has(f.key)), ...(o.extraFields ?? []).map(toSchema)],
       summaryKeys: t.summaryKeys.filter((k) => !hidden.has(k)),
@@ -486,6 +489,7 @@ export function applyTypeConfig(config: TypeConfig | undefined | null): boolean 
       summaryKeys: c.fields.filter((f) => f.type !== 'textarea').slice(0, 2).map((f) => f.key),
       fields: c.fields.map(toSchema),
       group: c.group,
+      revealDefaults: c.revealDefaults,
       custom: true,
       base: c.base,
     });
@@ -563,16 +567,23 @@ export function fieldsFor(type: string | undefined): FieldSchema[] {
   return typeMeta(type).fields;
 }
 
+/** Whether "Reveal" ticks a field by default (the DM can change this per type on Entry types). */
+export function defaultRevealed(type: string, key: string): boolean {
+  const choice = typeMeta(type).revealDefaults?.[key];
+  if (choice !== undefined) return choice;
+  return builtinRevealDefault(type, key);
+}
+
 /** Every field key that can carry its own visibility setting. */
 export function permissionKeys(type: string): string[] {
   return ['content', 'tags', 'locationId', 'gender', 'imageUrls', 'statBlock', ...fieldsFor(type).map((f) => f.key)];
 }
 
 /**
- * Fields a first Reveal ticks by default: the description, pictures and the type's headline fields
+ * The default before any DM choice: the description, pictures and the type's headline fields
  * (the ones shown on its cards, e.g. an NPC's race and profession). Everything else is held back.
  */
-export function defaultRevealed(type: string, key: string): boolean {
+export function builtinRevealDefault(type: string, key: string): boolean {
   if (key === 'content' || key === 'imageUrls' || key === 'gender') return true;
   return typeMeta(type).summaryKeys?.includes(key) ?? false;
 }

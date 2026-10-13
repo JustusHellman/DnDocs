@@ -48,22 +48,6 @@ export function canViewField(viewer: Viewer | null, entity: Entity, fieldKey: st
   return false;
 }
 
-/**
- * Moves an older entry to the simpler sharing model without changing what anyone can see:
- * in the old model, players an entry was shared with saw only fields revealed one by one,
- * so those fields get an explicit "hidden" setting before the new default applies.
- */
-export function upgradeSharing(
-  entity: Pick<Entity, 'shareV' | 'isPublic' | 'type' | 'fieldPermissions' | 'attributes'>,
-  explicitlySharedWith: string[],
-  fieldKeys: string[],
-): NonNullable<Entity['fieldPermissions']> {
-  const perms = { ...(entity.fieldPermissions ?? {}) };
-  if (entity.shareV === 2 || entity.isPublic || entity.type === 'note' || explicitlySharedWith.length === 0) return perms;
-  for (const k of [...fieldKeys, ...Object.keys(entity.attributes ?? {})]) if (!perms[k]) perms[k] = { isPublic: false, allowedPlayers: [] };
-  return perms;
-}
-
 /** Whether the viewer is the player who plays this character. */
 export function isPlayerOf(viewer: Viewer | null, entity: Pick<Entity, 'type' | 'playerId'>): boolean {
   return !!viewer && entity.type === 'character' && !!entity.playerId && entity.playerId === viewer.uid;
