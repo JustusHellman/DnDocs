@@ -8,6 +8,7 @@ import {
   getDoc,
   getDocs,
   increment,
+  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -18,6 +19,18 @@ import { type FieldOp, type CodexPack, NEW_PARTY, type PackDoc } from './state';
 export const partyRef = (campaignId: string) => doc(db, 'codex', campaignId);
 export const satchelRef = (campaignId: string, uid: string) => doc(db, 'codex', campaignId, 'satchels', uid);
 export const packsCol = (campaignId: string) => collection(db, 'codex', campaignId, 'packs');
+/** Gifts on their way to a player: others can drop things here, only the owner takes them out. */
+export const inboxCol = (campaignId: string, uid: string) => collection(db, 'codex', campaignId, 'satchels', uid, 'inbox');
+
+/** Something one player gave another in the codex. */
+export interface Gift {
+  from: string;
+  fromName: string;
+  items: Record<string, number>;
+  /** Coin, in copper pieces. */
+  cp: number;
+  at?: unknown;
+}
 
 /** Pack documents can't hold every character a name might use. */
 const packId = (name: string) => name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').slice(0, 80) || 'pack';
@@ -66,6 +79,66 @@ export async function savePacks(campaignId: string, change: { put: CodexPack[]; 
   for (const n of change.remove) await deleteDoc(doc(packsCol(campaignId), packId(n)));
 }
 
+const GIFT_ID = /^[a-z0-9]{4,40}$/;
+
+/** Checks a gift as the codex sent it; returns the cleaned-up gift or null. */
+export function cleanGift(raw: unknown): { id: string; to: string; items: Record<string, number>; cp: number } | null {
+  const g = raw as { id?: unknown; to?: unknown; items?: unknown; cp?: unknown } | null;
+  if (!g || typeof g.id !== 'string' || !GIFT_ID.test(g.id) || typeof g.to !== 'string' || !g.to) return null;
+  const items: Record<string, number> = {};
+  for (const [k, v] of Object.entries((g.items as Record<string, unknown>) ?? {})) {
+    const q = Math.floor(Number(v));
+    if (q > 0 && q <= 9999 && /^[a-z0-9-]{1,80}$/.test(k)) items[k] = q;
+  }
+  const cp = Math.max(0, Math.floor(Number(g.cp) || 0));
+  if (!cp && !Object.keys(items).length) return null;
+  return { id: g.id, to: g.to, items, cp };
+}
+
+/** Checks a DM hand-out/take-back as the codex sent it (quantities and coin may be negative). */
+export function cleanBankMove(raw: unknown): { id: string; uid: string; items: Record<string, number>; cp: number } | null {
+  const m = raw as { id?: unknown; uid?: unknown; items?: unknown; cp?: unknown } | null;
+  if (!m || typeof m.id !== 'string' || !GIFT_ID.test(m.id) || typeof m.uid !== 'string' || !m.uid) return null;
+  const items: Record<string, number> = {};
+  for (const [k, v] of Object.entries((m.items as Record<string, unknown>) ?? {})) {
+    const q = Math.trunc(Number(v));
+    if (q && Math.abs(q) <= 9999 && /^[a-z0-9-]{1,80}$/.test(k)) items[k] = q;
+  }
+  const cp = Math.trunc(Number(m.cp) || 0);
+  if (!cp && !Object.keys(items).length) return null;
+  return { id: m.id, uid: m.uid, items, cp };
+}
+
+export async function sendGift(campaignId: string, from: { uid: string; name: string }, gift: { id: string; to: string; items: Record<string, number>; cp: number }) {
+  await setDoc(doc(inboxCol(campaignId, gift.to), gift.id), {
+    from: from.uid,
+    fromName: from.name,
+    items: gift.items,
+    cp: gift.cp,
+    at: serverTimestamp(),
+  } satisfies Gift);
+}
+
+/**
+ * Takes a gift out of my inbox and puts it in my satchel, once (a transaction, so two open tabs
+ * can't both take it). Returns the gift, or null if another tab already took it.
+ */
+export async function receiveGift(campaignId: string, uid: string, giftId: string): Promise<Gift | null> {
+  const giftRef = doc(inboxCol(campaignId, uid), giftId);
+  return runTransaction(db, async (tx) => {
+    const snap = await tx.get(giftRef);
+    if (!snap.exists()) return null;
+    const g = snap.data() as Gift;
+    const items: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(g.items ?? {})) if (Number(v) > 0) items[k] = increment(Math.floor(Number(v)));
+    const add: Record<string, unknown> = { items, updatedAt: serverTimestamp() };
+    if (Number(g.cp) > 0) add.cp = increment(Math.floor(Number(g.cp)));
+    tx.set(satchelRef(campaignId, uid), add, { merge: true });
+    tx.delete(giftRef);
+    return g;
+  });
+}
+
 /** A revealed entry also becomes known in the party's codex journal. */
 export async function unlockInCodex(campaignId: string, keys: string[]) {
   if (!keys.length) return;
@@ -76,8 +149,12 @@ export async function unlockInCodex(campaignId: string, keys: string[]) {
 }
 
 /** Everything the codex stored for a campaign (used when the campaign is deleted). */
-export async function deleteCodexData(campaignId: string) {
+export async function deleteCodexData(campaignId: string, memberIds: string[] = []) {
   const [satchels, packs] = await Promise.all([getDocs(collection(db, 'codex', campaignId, 'satchels')), getDocs(packsCol(campaignId))]);
+  // Gifts nobody collected (also for players who never opened the codex, so have no satchel yet).
+  const uids = new Set([...memberIds, ...satchels.docs.map((d) => d.id)]);
+  const inboxes = await Promise.all([...uids].map((u) => getDocs(inboxCol(campaignId, u)).catch(() => null)));
+  await Promise.all(inboxes.flatMap((q) => q?.docs ?? []).map((d) => deleteDoc(d.ref)));
   await Promise.all([...satchels.docs, ...packs.docs].map((d) => deleteDoc(d.ref)));
   if ((await getDoc(partyRef(campaignId))).exists()) await deleteDoc(partyRef(campaignId));
 }

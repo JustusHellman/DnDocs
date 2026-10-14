@@ -97,7 +97,7 @@ export async function deleteCampaignCompletely(campaign: Campaign, onProgress?: 
 
   // The Scavenger's Codex: the party, every player's satchel and the campaign's homebrew.
   try {
-    await deleteCodexData(campaign.id);
+    await deleteCodexData(campaign.id, [campaign.dmId, ...(campaign.coDms ?? []), ...(campaign.players ?? [])]);
   } catch {
     /* none, or older rules: harmless */
   }

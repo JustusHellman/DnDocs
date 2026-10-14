@@ -4,6 +4,7 @@ import { History, Menu, Plus, Search, Swords, X } from 'lucide-react';
 import { GiBookmarklet, GiOpenBook, GiTreasureMap } from 'react-icons/gi';
 import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
+import CodexInbox from '../codex/CodexInbox';
 import { useCampaignData } from '../../contexts/CampaignDataContext';
 import { usePeek } from '../../contexts/PeekContext';
 import { useToast } from '../../contexts/ToastContext';
@@ -303,6 +304,7 @@ export default function AppShell() {
       {!isDesktop && <Drawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />}
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <PushListener />
+      <CodexInbox />
     </div>
     </DragProvider>
     </JukeboxProvider>

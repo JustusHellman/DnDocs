@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   codexKeys,
+  fmtCoins,
   KEY_HOMEBREW,
   KEY_PARTY,
+  KEY_PURSE,
   KEY_SATCHEL,
   logKey,
   packChanges,
@@ -92,6 +94,7 @@ describe('codex party ↔ Firestore', () => {
       beds: [{ uid: 'g', site: 'plot', p: { id: 'moss' } }],
       spoil: true,
       packs: ['core-cookbook'],
+      cp: 1250,
     });
     const doc = apply({ items: {}, clock: 8 }, partyOps(null, full, { isDM: true, now: 1 }));
     expect(toCodexParty(doc as PartyDoc)).toEqual(full);
@@ -110,6 +113,12 @@ describe('a player’s satchel and settings', () => {
     expect(satchelOps('scavengers-codex.dmUnlocked', null, 'x')).toEqual([]);
     expect(satchelOps(KEY_PARTY, null, {})).toEqual([]);
   });
+  it('keeps coin as a count of copper, changed by increments', () => {
+    expect(satchelOps(KEY_PURSE, 500, 350)).toEqual([{ path: ['cp'], inc: -150 }]);
+    expect(satchelOps(KEY_PURSE, null, 20)).toEqual([{ path: ['cp'], inc: 20 }]);
+    expect(partyOps(party({ cp: 100 }), party({ cp: 1100 }), { isDM: false })).toEqual([{ path: ['cp'], inc: 1000 }]);
+    expect(toCodexParty({ cp: -30 }).cp).toBe(0);
+  });
 });
 
 describe('what the codex is given', () => {
@@ -117,10 +126,20 @@ describe('what the codex is given', () => {
     const keys = codexKeys({ items: { bone: 2 }, clock: 10 }, { items: { moss: 1 }, prefs: { 'scavengers-codex.theme': '"dark"' } }, [{ name: 'swamp', data: '{"homebrew":{"name":"swamp"}}' }]);
     expect((keys[KEY_PARTY] as CodexParty).items).toEqual({ bone: 2 });
     expect(keys[KEY_SATCHEL]).toEqual({ moss: 1 });
+    expect(keys[KEY_PURSE]).toBe(0);
     expect(keys['scavengers-codex.theme']).toBe('dark');
     expect(keys[KEY_HOMEBREW]).toEqual([{ name: 'swamp', addedAt: undefined, data: { homebrew: { name: 'swamp' } } }]);
   });
   it('notices homebrew added and removed', () => {
     expect(packChanges([{ name: 'a', data: {} }], [{ name: 'b', data: {} }])).toEqual({ put: [{ name: 'b', data: {} }], remove: ['a'] });
+  });
+});
+
+describe('coin', () => {
+  it('shows copper as gp, sp and cp', () => {
+    expect(fmtCoins(0)).toBe('0 gp');
+    expect(fmtCoins(1250)).toBe('12 gp 5 sp');
+    expect(fmtCoins(123456)).toBe('1,234 gp 5 sp 6 cp');
+    expect(fmtCoins(7)).toBe('7 cp');
   });
 });

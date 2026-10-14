@@ -123,6 +123,14 @@ Icons: [game-icons.net](https://game-icons.net) by Lorc, Delapouite and contribu
     DnDocs entry, and *Harvest the fallen* sends the defeated to the Codex's after-the-fight panel.
   - In the Codex, *Record in DnDocs* (DM) turns a crafted item into a secret item entry on the
     character who has it.
+  - Coin lives in the Codex too: each player's purse and the party purse. Players can **give** items
+    or coin to each other (*Give…* in the Codex satchel); a gift waits in the receiver's inbox and is
+    put in their satchel as soon as they have DnDocs open.
+  - The DM is the bank: in the Codex's DM tools (*Hand out*, and the trader) the DM gives and takes
+    items and coin for the party or any player, and sees what every player carries.
+  - A player character's page shows what that player carries in the Codex (satchel and purse) under
+    *Carried*, with *Open my satchel*. Only the player and the DM see it. Item entries the DM placed
+    on the character are listed there too.
   - The Codex runs in a sandboxed frame, so it can't read your DnDocs sign-in.
 - **Images** are stored as WebP (JPEG on browsers without WebP) at up to 1280 px, with a tiny preview
   on each entry so lists show pictures without loading the full images.
@@ -184,7 +192,9 @@ deployed that move is refused and everything keeps working the old way).
 
 The Scavenger's Codex adds `codex/{campaignId}` (the party: everyone in the campaign reads and
 writes it; only DMs change which homebrew is in play), `codex/{campaignId}/satchels/{uid}` (a
-player's own satchel: theirs and the DM's) and `codex/{campaignId}/packs/{name}` (the DM's homebrew).
+player's own satchel and purse: theirs and the DM's), `codex/{campaignId}/satchels/{uid}/inbox/{id}`
+(gifts: anyone in the campaign can leave one, signed with their own uid; only the receiver and the
+DM can read or take them) and `codex/{campaignId}/packs/{name}` (the DM's homebrew).
 Deploy the rules with the app, or the Codex can't save.
 
 User profiles can no longer be given a `role` by their owner (an `admin` role used to be

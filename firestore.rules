@@ -461,10 +461,17 @@ service cloud.firestore {
     // codex/{campaignId}: the party's shared bag, clock, workbench, garden and journal. Everyone in
     // the campaign reads and changes it (several at once: quantities use increments). Which
     // homebrew is in play is the DM's call.
+    // Is this user (not necessarily the one signed in) in the campaign?
+    function isMemberUid(campaignId, uid) {
+      let c = get(/databases/$(database)/documents/campaigns/$(campaignId)).data;
+      return c.dmId == uid || ('coDms' in c && c.coDms is list && uid in c.coDms) || ('players' in c && c.players is list && uid in c.players);
+    }
+
     function isValidCodexParty() {
       let d = request.resource.data;
-      return d.keys().hasOnly(['items', 'clock', 'learned', 'known', 'research', 'stamps', 'projects', 'beds', 'log', 'session', 'spoil', 'packs', 'updatedAt']) &&
+      return d.keys().hasOnly(['items', 'clock', 'learned', 'known', 'research', 'stamps', 'projects', 'beds', 'log', 'session', 'spoil', 'packs', 'cp', 'updatedAt']) &&
              (!('items' in d) || d.items is map) &&
+             (!('cp' in d) || d.cp is int) &&
              (!('clock' in d) || d.clock is number) &&
              (!('known' in d) || d.known is map) &&
              (!('log' in d) || d.log is map) &&
@@ -484,10 +491,23 @@ service cloud.firestore {
         allow read: if isAuthenticated() && (isAdmin() || (isCampaignMember(campaignId) && (request.auth.uid == uid || isCampaignDM(campaignId))));
         allow create, update: if isAuthenticated() && (isAdmin() || (
           isCampaignMember(campaignId) && (request.auth.uid == uid || isCampaignDM(campaignId)) &&
-          request.resource.data.keys().hasOnly(['items', 'prefs', 'updatedAt']) &&
+          request.resource.data.keys().hasOnly(['items', 'prefs', 'cp', 'updatedAt']) &&
           (!('items' in request.resource.data) || request.resource.data.items is map) &&
-          (!('prefs' in request.resource.data) || request.resource.data.prefs is map)));
+          (!('prefs' in request.resource.data) || request.resource.data.prefs is map) &&
+          (!('cp' in request.resource.data) || request.resource.data.cp is int)));
         allow delete: if isAuthenticated() && (isAdmin() || isCampaignDM(campaignId));
+
+        // Gifts from other players, waiting to be put in this satchel. Anyone in the campaign can
+        // leave one (signed with their own uid); only the owner (or the DM) can see or take them.
+        match /inbox/{giftId} {
+          allow read, delete: if isAuthenticated() && (isAdmin() || (isCampaignMember(campaignId) && (request.auth.uid == uid || isCampaignDM(campaignId))));
+          allow create: if isAuthenticated() && isCampaignMember(campaignId) && isMemberUid(campaignId, uid) &&
+            request.resource.data.keys().hasOnly(['from', 'fromName', 'items', 'cp', 'at']) &&
+            request.resource.data.from == request.auth.uid &&
+            request.resource.data.fromName is string && request.resource.data.fromName.size() <= 200 &&
+            request.resource.data.items is map && request.resource.data.items.size() <= 50 &&
+            request.resource.data.cp is int && request.resource.data.cp >= 0;
+        }
       }
 
       // Homebrew packs the DM added in the codex, loaded by every player.

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   BookOpen,
@@ -40,6 +40,7 @@ import { ImageThumb, Lightbox } from './Images';
 import { StatBlock } from './StatBlock';
 import { HitPoints } from './HitPoints';
 import { LocationTree, useVisibleChildren } from './LocationTree';
+import CarriedCodex from '../codex/CarriedCodex';
 import { RelationshipsSection } from './Relationships';
 import QuickCreateModal from './QuickCreateModal';
 import { useImageSrc } from '../../hooks/useImageSrc';
@@ -170,13 +171,93 @@ function useVisibleAttributes(entity: Entity) {
   }, [entity, canViewField]);
 }
 
-function Banner({ imageRef }: { imageRef: string }) {
-  const { src } = useImageSrc(imageRef);
-  if (!src) return <div className="h-24" />;
+/** Width ÷ height of pictures already seen, so the layout doesn't jump the second time. */
+const ratios = new Map<string, number>();
+
+function useImageRatio(src: string | null) {
+  const [ratio, setRatio] = useState<number | null>(() => (src ? ratios.get(src) ?? null : null));
+  useEffect(() => {
+    if (!src) return setRatio(null);
+    const known = ratios.get(src);
+    if (known) return setRatio(known);
+    setRatio(null);
+    let live = true;
+    const img = new Image();
+    img.referrerPolicy = 'no-referrer';
+    img.onload = () => {
+      const r = img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight : 1;
+      ratios.set(src, r);
+      if (live) setRatio(r);
+    };
+    img.onerror = () => live && setRatio(1);
+    img.src = src;
+    return () => {
+      live = false;
+    };
+  }, [src]);
+  return ratio;
+}
+
+/** Wide pictures (maps, scenery) span the top of the page; anything else is shown whole. */
+const WIDE = 1.35;
+
+/**
+ * The entry's header with its first picture. Most pictures are portraits of characters, creatures
+ * and items, so they stand beside the name, uncropped; wide ones become a banner. In the quick-view
+ * panel the picture sits on top, whole, over a blurred copy of itself.
+ */
+function CoverHeader({ imageRef, panel, name, onOpen, children }: { imageRef?: string; panel: boolean; name: string; onOpen: () => void; children: ReactNode }) {
+  const { src, loading, failed } = useImageSrc(imageRef);
+  const ratio = useImageRatio(failed ? null : src);
+  const pad = panel ? 'px-4 pt-3 pb-4' : 'p-4 sm:p-6';
+  if (!imageRef || failed || (!loading && !src)) return <div className={clsx('relative', pad)}>{children}</div>;
+  const ready = !!src && ratio !== null;
+
+  if (panel) {
+    return (
+      <>
+        <button type="button" onClick={onOpen} aria-label={`View the picture of ${name}`} className="relative block h-56 w-full overflow-hidden bg-stone-950">
+          {ready ? (
+            <>
+              <img src={src} alt="" referrerPolicy="no-referrer" className="absolute inset-0 size-full scale-110 object-cover opacity-40 blur-xl" />
+              <img src={src} alt="" referrerPolicy="no-referrer" className="relative mx-auto block h-full w-auto max-w-full object-contain" />
+            </>
+          ) : (
+            <div className="size-full animate-pulse bg-stone-800/60" />
+          )}
+        </button>
+        <div className={clsx('relative', pad)}>{children}</div>
+      </>
+    );
+  }
+
+  if (ready && ratio >= WIDE) {
+    return (
+      <>
+        <button type="button" onClick={onOpen} aria-label={`View the picture of ${name}`} className="relative block h-40 w-full overflow-hidden @xl:h-60">
+          <img src={src} alt="" referrerPolicy="no-referrer" className="absolute inset-0 size-full object-cover" />
+          <div className="absolute inset-0 bg-gradient-to-t from-stone-900 via-stone-900/40 to-transparent" />
+        </button>
+        <div className={clsx('relative -mt-12', pad)}>{children}</div>
+      </>
+    );
+  }
+
   return (
-    <div className="relative h-36 overflow-hidden @xl:h-52">
-      <img src={src} alt="" referrerPolicy="no-referrer" className="absolute inset-0 size-full object-cover" />
-      <div className="absolute inset-0 bg-gradient-to-t from-stone-900 via-stone-900/40 to-transparent" />
+    <div className={clsx('flex flex-col gap-4 @lg:flex-row @lg:gap-6', pad)}>
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={`View the picture of ${name}`}
+        className="w-40 shrink-0 self-center overflow-hidden rounded-xl bg-stone-950 shadow-lg ring-1 ring-stone-700/70 @lg:self-start @2xl:w-52"
+      >
+        {ready ? (
+          <img src={src} alt="" referrerPolicy="no-referrer" className="block max-h-80 w-full object-cover object-top" />
+        ) : (
+          <div className="aspect-[3/4] w-full animate-pulse bg-stone-800/60" />
+        )}
+      </button>
+      <div className="relative min-w-0 flex-1 @lg:pt-1">{children}</div>
     </div>
   );
 }
@@ -193,7 +274,7 @@ function MentionChip({ entity }: { entity: Entity }) {
 }
 
 export default function EntityView({ entityId, variant = 'page' }: { entityId: string; variant?: 'page' | 'panel' }) {
-  const { user, isDM } = useAuth();
+  const { user, isDM, currentCampaign } = useAuth();
   const data = useCampaignData();
   const { entityMap, loading, canView, canViewField, canEdit, canDelete, childrenOf, entities, memberName, players, mentionedIn } = data;
   const { peek, remove: removePeek, close, activeId: peekActive } = usePeek();
@@ -342,14 +423,17 @@ export default function EntityView({ entityId, variant = 'page' }: { entityId: s
     </div>
   );
 
+  // A player's character carries their Scavenger's Codex satchel (only they and the DM can see it).
+  const satchelOwner = isCharacter && entity.playerId && currentCampaign && (isDM || entity.playerId === user?.uid) ? entity.playerId : null;
+  const placeTitle = isCharacter ? 'Carried' : 'Located here';
+
   const withKnowledge = players.filter((p) => entity.playerKnowledge?.[p.uid]?.trim());
 
   return (
     <div className="@container">
       {/* Header */}
       <div className={clsx('overflow-hidden', !panel && 'card mb-4')}>
-        {images[0] && !panel && <Banner imageRef={images[0]} />}
-        <div className={clsx('relative', panel ? 'px-4 pt-3 pb-4' : 'p-4 sm:p-6', images[0] && !panel && '-mt-12')}>
+        <CoverHeader imageRef={images[0]} panel={panel} name={entity.name} onOpen={() => setLightbox(0)}>
           {ancestors.length > 0 && canViewField(entity, 'locationId') && (
             <nav aria-label="Location" className="mb-2 flex flex-wrap items-center gap-1 text-xs text-stone-400">
               {ancestors.map((a, i) => (
@@ -450,7 +534,7 @@ export default function EntityView({ entityId, variant = 'page' }: { entityId: s
               )}
             </div>
           )}
-        </div>
+        </CoverHeader>
       </div>
 
       {/* Body */}
@@ -593,9 +677,9 @@ export default function EntityView({ entityId, variant = 'page' }: { entityId: s
             </Section>
           )}
 
-          {(children.length > 0 || (isDM && !panel)) && entity.type !== 'note' && (
+          {(children.length > 0 || (isDM && !panel) || satchelOwner) && entity.type !== 'note' && (
             <Section
-              title={`Located here${children.length ? ` (${children.length})` : ''}`}
+              title={`${placeTitle}${children.length && !satchelOwner ? ` (${children.length})` : ''}`}
               action={
                 <div className="flex items-center gap-1">
                   {children.some((c) => (childrenOf.get(c.id)?.length ?? 0) > 0) && (
@@ -611,10 +695,16 @@ export default function EntityView({ entityId, variant = 'page' }: { entityId: s
                 </div>
               }
             >
+              {satchelOwner && currentCampaign && (
+                <CarriedCodex campaignId={currentCampaign.id} playerId={satchelOwner} mine={satchelOwner === user?.uid} onLeave={() => panel && closePeek()} />
+              )}
               {children.length > 0 ? (
-                <LocationTree parentId={entity.id} expandAll={expandAll} />
+                <div className={clsx(satchelOwner && 'mt-4 border-t border-stone-800 pt-3')}>
+                  {satchelOwner && <p className="mb-2 text-xs font-semibold tracking-wide text-stone-500 uppercase">Also with {entity.name}</p>}
+                  <LocationTree parentId={entity.id} expandAll={expandAll} />
+                </div>
               ) : (
-                <p className="text-sm text-stone-500">Nothing is located here yet.</p>
+                !satchelOwner && <p className="text-sm text-stone-500">{isCharacter ? 'Nothing carried yet.' : 'Nothing is located here yet.'}</p>
               )}
             </Section>
           )}

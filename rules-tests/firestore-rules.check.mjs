@@ -368,6 +368,24 @@ describe("Scavenger's Codex", () => {
     await assertFails(getDoc(mine('p2', 'p1')));
     await assertFails(updateDoc(mine('p2', 'p1'), { 'items.healers-moss': 0 }));
   });
+  it('purses are whole copper pieces', async () => {
+    await assertSucceeds(setDoc(party('p1'), { items: {}, clock: 8, cp: 1250 }));
+    await assertFails(updateDoc(party('p1'), { cp: 'lots' }));
+    await assertSucceeds(setDoc(doc(as('p1'), 'codex/c1/satchels/p1'), { items: {}, prefs: {}, cp: 300 }));
+    await assertSucceeds(updateDoc(doc(as('p1'), 'codex/c1/satchels/p1'), { cp: increment(-100) }));
+  });
+  it('gifts: anyone in the campaign can leave one, only the receiver takes it', async () => {
+    const gift = (uid, to, id = 'g1', over = {}) => [doc(as(uid), `codex/c1/satchels/${to}/inbox/${id}`), { from: uid, fromName: uid, items: { 'healers-moss': 2 }, cp: 0, at: serverTimestamp(), ...over }];
+    await assertSucceeds(setDoc(...gift('p1', 'p2')));
+    await assertFails(setDoc(...gift('p1', 'p2', 'g2', { from: 'p2' }))); // signed as someone else
+    await assertFails(setDoc(...gift('p1', 'x', 'g3'))); // not in the campaign
+    await assertFails(setDoc(...gift('x', 'p2', 'g4'))); // sender not in the campaign
+    await assertFails(setDoc(...gift('p1', 'p2', 'g5', { cp: -5 })));
+    await assertFails(getDoc(doc(as('p1'), 'codex/c1/satchels/p2/inbox/g1'))); // can't peek after giving
+    await assertSucceeds(getDocs(collection(as('p2'), 'codex/c1/satchels/p2/inbox')));
+    await assertFails(updateDoc(doc(as('p2'), 'codex/c1/satchels/p2/inbox/g1'), { cp: 100 }));
+    await assertSucceeds(deleteDoc(doc(as('p2'), 'codex/c1/satchels/p2/inbox/g1')));
+  });
   it('homebrew packs: the DM adds them, everyone loads them', async () => {
     await assertSucceeds(setDoc(doc(as('dm'), 'codex/c1/packs/swamp'), { name: 'swamp', addedAt: now, data: '{}' }));
     await assertSucceeds(getDocs(collection(as('p1'), 'codex/c1/packs')));

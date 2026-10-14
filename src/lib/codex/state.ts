@@ -17,6 +17,8 @@ export const KEY_PARTY = `scavengers-codex.party.v1.data.${PARTY_CODE}`;
 export const KEY_PARTY_CODE = 'scavengers-codex.party.v1.code';
 export const KEY_SATCHEL = 'scavengers-codex.satchel.v1';
 export const KEY_HOMEBREW = 'scavengers-codex.homebrew';
+/** A player's coin purse, in copper pieces. */
+export const KEY_PURSE = 'scavengers-codex.purse.v1';
 /** Keys that are about this device only, never saved to the campaign. */
 const DEVICE_KEYS = new Set(['scavengers-codex.dmUnlocked', 'scavengers-codex.localPin', 'scavengers-codex.siteUrl', KEY_PARTY_CODE]);
 
@@ -34,6 +36,8 @@ export interface CodexParty {
   beds?: { uid: string; [k: string]: unknown }[];
   spoil?: boolean | null;
   packs?: string[] | null;
+  /** The party purse, in copper pieces. */
+  cp?: number;
 }
 
 /**
@@ -53,6 +57,7 @@ export interface PartyDoc {
   session?: string | null;
   spoil?: boolean | null;
   packs?: string[] | null;
+  cp?: number;
   updatedAt?: unknown;
 }
 
@@ -60,6 +65,8 @@ export interface SatchelDoc {
   items?: Record<string, number>;
   /** Codex settings (theme, roll bonuses, goals …), each as JSON text. */
   prefs?: Record<string, string>;
+  /** The player's purse, in copper pieces. */
+  cp?: number;
 }
 
 export interface PackDoc {
@@ -95,6 +102,8 @@ const ordered = (m?: Record<string, { o: number; j: string }>) =>
     .map(([, v]) => parse(v?.j))
     .filter((x): x is { uid: string } => !!x && typeof x === 'object');
 
+const coins = (v: unknown) => Math.max(0, Math.floor(Number(v) || 0));
+
 /** A log line's id: when it happened plus a short hash of what it says. */
 export function logKey(e: { at: number; text: string }) {
   let h = 0;
@@ -120,6 +129,7 @@ export function toCodexParty(d: PartyDoc | null | undefined): CodexParty {
     beds: ordered(doc.beds),
     spoil: doc.spoil ?? null,
     packs: Array.isArray(doc.packs) ? doc.packs : null,
+    cp: coins(doc.cp),
   };
 }
 
@@ -179,6 +189,8 @@ export function partyOps(prev: CodexParty | null, next: CodexParty | null, opts:
   ];
   const clock = (Number(b.clock) || 0) - (Number(a.clock) || 0);
   if (clock) ops.push({ path: ['clock'], inc: clock });
+  const cp = coins(b.cp) - coins(a.cp);
+  if (cp) ops.push({ path: ['cp'], inc: cp });
   // Log: only new lines are added; the codex trims old ones itself (see pruneLogOps).
   const had = new Set((a.log ?? []).map(logKey));
   for (const e of b.log ?? []) if (e && typeof e.text === 'string' && !had.has(logKey(e))) ops.push({ path: ['log', logKey(e)], set: { at: e.at, clock: e.clock ?? null, text: e.text.slice(0, 200) } });
@@ -203,12 +215,16 @@ export function pruneZeroOps(field: string, m?: Record<string, number>): FieldOp
 }
 
 export function isPrefKey(key: string) {
-  return key.startsWith('scavengers-codex.') && !DEVICE_KEYS.has(key) && key !== KEY_PARTY && key !== KEY_SATCHEL && key !== KEY_HOMEBREW && !key.startsWith('scavengers-codex.party.v1.');
+  return key.startsWith('scavengers-codex.') && !DEVICE_KEYS.has(key) && key !== KEY_PARTY && key !== KEY_SATCHEL && key !== KEY_HOMEBREW && key !== KEY_PURSE && !key.startsWith('scavengers-codex.party.v1.');
 }
 
 /** What to write to a player's satchel document. */
 export function satchelOps(key: string, prev: unknown, next: unknown): FieldOp[] {
   if (key === KEY_SATCHEL) return countOps('items', positive(prev as Record<string, number>), positive(next as Record<string, number>));
+  if (key === KEY_PURSE) {
+    const d = coins(next) - coins(prev);
+    return d ? [{ path: ['cp'], inc: d }] : [];
+  }
   if (isPrefKey(key)) return [next == null ? { path: ['prefs', key], del: true } : { path: ['prefs', key], set: JSON.stringify(next) }];
   return [];
 }
@@ -236,6 +252,7 @@ export function codexKeys(party: PartyDoc | null, satchel: SatchelDoc | null, pa
     [KEY_PARTY_CODE]: PARTY_CODE,
     [KEY_PARTY]: toCodexParty(party),
     [KEY_SATCHEL]: positive(satchel?.items),
+    [KEY_PURSE]: coins(satchel?.cp),
     [KEY_HOMEBREW]: packs
       .map((p) => ({ name: p.name, addedAt: p.addedAt, data: parse(p.data) }))
       .filter((p) => p.data && typeof p.data === 'object'),
@@ -247,4 +264,12 @@ export function codexKeys(party: PartyDoc | null, satchel: SatchelDoc | null, pa
 /** Codex journal keys for a revealed DnDocs entry linked to the codex. */
 export function unlockKeys(kind: 'monster' | 'thing', id: string): string[] {
   return kind === 'monster' ? [`m:${id}`] : [`t:${id}`];
+}
+
+/** Copper pieces as the codex shows them: "12 gp 5 sp". */
+export function fmtCoins(cp: number | null | undefined) {
+  const c = Math.max(0, Math.round(Number(cp) || 0));
+  if (!c) return '0 gp';
+  const gp = Math.floor(c / 100), sp = Math.floor((c % 100) / 10), cc = c % 10;
+  return [gp && `${gp.toLocaleString('en-US')} gp`, sp && `${sp} sp`, cc && `${cc} cp`].filter(Boolean).join(' ');
 }

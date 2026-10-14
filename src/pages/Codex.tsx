@@ -4,13 +4,18 @@
  * party shares one satchel, clock, workbench and garden, and every player has their own satchel.
  *
  *   Codex  → DnDocs  { type: 'codex:ready' }                     loaded, waiting for hello
- *   DnDocs → Codex   { type: 'dndocs:hello', role, name, campaign, keys, open? }
+ *   DnDocs → Codex   { type: 'dndocs:hello', role, name, campaign, keys, open?, members }
+ *   DnDocs → Codex   { type: 'dndocs:members', members: [{ uid, name, role, items?, cp? }] }   (the DM also gets each satchel)
  *   DnDocs → Codex   { type: 'dndocs:state', keys }               someone else changed something
  *   Codex  → DnDocs  { type: 'codex:save', changes: [{ key, prev, next }] }
  *   DnDocs → Codex   { type: 'dndocs:saved', ok, error? }         only when saving failed
  *   DnDocs → Codex   { type: 'dndocs:open', open: { hash } | { fight: [{ id, n }] } }
  *   Codex  → DnDocs  { type: 'codex:entry', action: 'record', thing }   DM: make a DnDocs item
  *   Codex  → DnDocs  { type: 'codex:error', stage: 'load' }      its data didn't load
+ *   Codex  → DnDocs  { type: 'codex:give', gift: { id, to, items, cp } }   left in their inbox
+ *   DnDocs → Codex   { type: 'dndocs:give', id, ok, error? }     (the codex gives it back if not ok)
+ *   Codex  → DnDocs  { type: 'codex:bank', move: { id, uid, items, cp } }   DM: give to / take from a player
+ *   DnDocs → Codex   { type: 'dndocs:bank', id, ok, error? }
  *
  * The frame is sandboxed without allow-same-origin, so the codex can't read DnDocs' sign-in even
  * though both live on justushellman.github.io. Messages are only accepted from that frame.
@@ -18,7 +23,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ExternalLink, Loader2 } from 'lucide-react';
-import { onSnapshot } from 'firebase/firestore';
+import { collection, onSnapshot } from 'firebase/firestore';
+import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useCampaignData } from '../contexts/CampaignDataContext';
 import { useToast } from '../contexts/ToastContext';
@@ -29,7 +35,10 @@ import { CODEX_URL, codexFrameUrl } from '../lib/codex/catalog';
 import {
   applyPartyOps,
   applySatchelOps,
+  cleanGift,
+  cleanBankMove,
   packsCol,
+  sendGift,
   partyRef,
   satchelRef,
   savePacks,
@@ -49,6 +58,8 @@ import {
   type SatchelDoc,
 } from '../lib/codex/state';
 import type { Entity } from '../types';
+
+const positiveItems = (m?: Record<string, number>) => Object.fromEntries(Object.entries(m ?? {}).filter(([, v]) => Number(v) > 0));
 
 const CODEX_ORIGIN = new URL(CODEX_URL, location.href).origin;
 const SANDBOX = 'allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals';
@@ -72,6 +83,8 @@ interface RecordThing {
 export default function CodexPage() {
   const { user, isDM, currentCampaign } = useAuth();
   const toast = useToast();
+  const [satchels, setSatchels] = useState<Record<string, SatchelDoc>>({});
+  const { members: campaignMembers, entities, canView } = useCampaignData();
   const location = useLocation();
   const frame = useRef<HTMLIFrameElement>(null);
   const [sandboxed, setSandboxed] = useState(true);
@@ -88,6 +101,37 @@ export default function CodexPage() {
 
   const campaignId = currentCampaign?.id;
   const uid = user?.uid;
+
+  // DM: every player's satchel and purse, so the codex can hand things out and take them back.
+  useEffect(() => {
+    if (!campaignId || !isDM) return setSatchels({});
+    return onSnapshot(
+      collection(db, 'codex', campaignId, 'satchels'),
+      (snap) => setSatchels(Object.fromEntries(snap.docs.map((d) => [d.id, d.data() as SatchelDoc]))),
+      () => undefined,
+    );
+  }, [campaignId, isDM]);
+
+  // Everyone else in the campaign, named by their characters (to give things to).
+  const members = useMemo(() => {
+    if (!uid || !currentCampaign) return [];
+    const dms = new Set([currentCampaign.dmId, ...(currentCampaign.coDms ?? [])]);
+    return campaignMembers
+      .filter((m) => m.uid !== uid)
+      .map((m) => {
+        const chars = entities.filter((e) => e.type === 'character' && e.playerId === m.uid && canView(e)).map((e) => e.name);
+        const sat = isDM ? satchels[m.uid] : undefined;
+        return {
+          uid: m.uid,
+          name: chars.length ? `${chars.join(', ')} (${m.displayName})` : m.displayName,
+          role: dms.has(m.uid) ? 'dm' : 'player',
+          ...(isDM ? { items: positiveItems(sat?.items), cp: Math.max(0, Math.floor(Number(sat?.cp) || 0)) } : {}),
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [campaignMembers, entities, canView, uid, isDM, satchels, currentCampaign]);
+  const membersRef = useRef(members);
+  membersRef.current = members;
 
   // Live state and what the codex has been told, kept in refs (the message handler outlives renders).
   const s = useRef({
@@ -112,7 +156,7 @@ export default function CodexPage() {
     if (!allLoaded() || !currentCampaign || !user) return;
     const keys = keysNow();
     s.current.sent = Object.fromEntries(Object.entries(keys).map(([k, v]) => [k, JSON.stringify(v)]));
-    post({ type: 'dndocs:hello', role: isDM ? 'dm' : 'player', name: user.displayName, campaign: { id: currentCampaign.id, name: currentCampaign.name }, keys, open: s.current.open });
+    post({ type: 'dndocs:hello', role: isDM ? 'dm' : 'player', name: user.displayName, campaign: { id: currentCampaign.id, name: currentCampaign.name }, keys, open: s.current.open, members: membersRef.current });
     s.current.helloSent = true;
     s.current.wantsHello = false;
     setStatus('ready');
@@ -198,7 +242,7 @@ export default function CodexPage() {
     const onMessage = async (e: MessageEvent) => {
       if (e.source !== frame.current?.contentWindow) return;
       if (sandboxed ? e.origin !== 'null' : e.origin !== CODEX_ORIGIN) return;
-      const d = (e.data ?? {}) as { type?: string; changes?: { key: string; prev: unknown; next: unknown }[]; thing?: RecordThing; stage?: string };
+      const d = (e.data ?? {}) as { type?: string; changes?: { key: string; prev: unknown; next: unknown }[]; thing?: RecordThing; stage?: string; gift?: unknown };
       if (d.type === 'codex:ready') {
         // (Again after the codex reloads itself.)
         s.current.helloSent = false;
@@ -223,6 +267,34 @@ export default function CodexPage() {
           post({ type: 'dndocs:saved', ok: false, error: err instanceof Error ? err.message : String(err) });
           toast.error(err, 'Save the codex');
         }
+      } else if (d.type === 'codex:give') {
+        const raw = d.gift as { id?: unknown } | null;
+        const gift = cleanGift(d.gift);
+        const to = gift && membersRef.current.find((m) => m.uid === gift.to);
+        try {
+          if (!gift || !to) throw new Error('That player isn’t in this campaign');
+          await sendGift(campaignId, { uid, name: user?.displayName || 'Someone' }, gift);
+          post({ type: 'dndocs:give', id: gift.id, ok: true });
+        } catch (err) {
+          post({ type: 'dndocs:give', id: typeof raw?.id === 'string' ? raw.id : '', ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
+      } else if (d.type === 'codex:bank' && isDM) {
+        const raw = (d as { move?: { id?: unknown } }).move;
+        const move = cleanBankMove(raw);
+        const who = move && membersRef.current.find((m) => m.uid === move.uid && m.role !== 'dm');
+        try {
+          if (!move || !who) throw new Error('That player isn’t in this campaign');
+          // Never take more than they have (the codex checks too, but two DMs could act at once).
+          const have = who.items ?? {};
+          const ops = [
+            ...Object.entries(move.items).map(([id, q]) => ({ path: ['items', id], inc: q < 0 ? -Math.min(-q, have[id] ?? 0) : q })),
+            ...(move.cp ? [{ path: ['cp'], inc: move.cp < 0 ? -Math.min(-move.cp, who.cp ?? 0) : move.cp }] : []),
+          ].filter((o) => o.inc);
+          if (ops.length) await applySatchelOps(campaignId, move.uid, ops);
+          post({ type: 'dndocs:bank', id: move.id, ok: true });
+        } catch (err) {
+          post({ type: 'dndocs:bank', id: typeof raw?.id === 'string' ? raw.id : '', ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
       } else if (d.type === 'codex:entry' && d.thing && isDM) {
         setRecord(d.thing);
       } else if (d.type === 'codex:error' && d.stage === 'load' && sandboxed) {
@@ -237,6 +309,12 @@ export default function CodexPage() {
       clearTimeout(t);
     };
   }, [campaignId, uid, isDM, sandboxed]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Someone joined (or a character got its player): the codex's list of people to give to.
+  const membersKey = JSON.stringify(members);
+  useEffect(() => {
+    if (s.current.helloSent) post({ type: 'dndocs:members', members });
+  }, [membersKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // A new "open" (e.g. Harvest from a battle) while the codex is already showing.
   const lastOpen = useRef<CodexOpen | null>(open);
