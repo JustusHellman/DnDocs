@@ -289,6 +289,8 @@ export interface Token {
   color: string;
   /** Linked entry (character, NPC, monster): picture, HP and stats come from it. */
   entityId: string | null;
+  /** Scavenger's Codex creature it stands for (e.g. "dire-wolf"), for harvesting after the fight. */
+  codexRef?: string | null;
   /** Who may move it (players). The DM can move everything. */
   controlledBy: string[];
   /** Hidden from players (enforced by the security rules). */

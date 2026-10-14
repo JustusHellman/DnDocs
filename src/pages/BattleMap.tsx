@@ -61,6 +61,8 @@ import {
 } from '../lib/battle/geometry';
 import { applyMapToBattle, loadForgeMap } from '../lib/battle/forge';
 import ForgeModal from '../components/battle/ForgeModal';
+import HarvestModal from '../components/battle/HarvestModal';
+import { GiKnapsack } from 'react-icons/gi';
 import {
   addDrawing,
   addTokens,
@@ -308,6 +310,7 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
   const [drawShared, setDrawShared] = useState(false);
   const [armed, setArmed] = useState<TokenSpec | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [harvestOpen, setHarvestOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(isDraft);
   const [panelTab, setPanelTab] = useState<PanelTab>('grid');
   const [gridDraft, setGridDraft] = useState<SceneGrid | null>(null);
@@ -667,6 +670,7 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
         size: spec.size,
         color: spec.color,
         entityId: spec.entityId,
+        codexRef: spec.codexRef ?? null,
         controlledBy: spec.controlledBy,
         hidden: spec.hidden,
         conditions: [],
@@ -859,9 +863,14 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
         </ToolButton>
         {(asDM || myCharacter) && <span className="mx-0.5 h-6 w-px bg-stone-700" />}
         {asDM ? (
-          <ToolButton label="Add tokens" onClick={() => setAddOpen(true)}>
-            <UserPlus size={17} />
-          </ToolButton>
+          <>
+            <ToolButton label="Add tokens" onClick={() => setAddOpen(true)}>
+              <UserPlus size={17} />
+            </ToolButton>
+            <ToolButton label="Harvest the fallen (Scavenger's Codex)" onClick={() => setHarvestOpen(true)}>
+              <GiKnapsack size={17} />
+            </ToolButton>
+          </>
         ) : (
           myCharacter && (
             <ToolButton label={`Place ${myCharacter.name}`} onClick={() => (setArmed(specForEntity(myCharacter)), setTool('select'))}>
@@ -1146,6 +1155,7 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
           </div>
         )}
       </Modal>
+      {asDM && harvestOpen && <HarvestModal open onClose={() => setHarvestOpen(false)} tokens={allTokens} entityMap={entityMap} />}
       {asDM && <AddTokens open={addOpen} onClose={() => setAddOpen(false)} onArm={(s) => (setArmed(s), setTool('select'))} onMap={onMap} tokens={allTokens} />}
       {forge && <ForgeModal name={entity.name} map={forge.map} onSend={fromForge} onClose={() => setForge(null)} />}
     </div>

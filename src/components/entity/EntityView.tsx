@@ -44,6 +44,8 @@ import { RelationshipsSection } from './Relationships';
 import QuickCreateModal from './QuickCreateModal';
 import { useImageSrc } from '../../hooks/useImageSrc';
 import { useActiveBattles } from '../../contexts/ActiveScenesContext';
+import { GiKnapsack } from 'react-icons/gi';
+import { codexKindFor } from '../../lib/codex/catalog';
 
 function Section({ title, children, action, className, eye }: { title: string; children: ReactNode; action?: ReactNode; className?: string; eye?: ReactNode }) {
   return (
@@ -147,7 +149,8 @@ function useVisibleAttributes(entity: Entity) {
   return useMemo(() => {
     const schema = fieldsFor(entity.type);
     // A character's HP has its own tracker.
-    const skip: readonly string[] = entity.type === 'character' ? HP_KEYS : [];
+    // A character's HP has its own tracker; the Codex link has its own button.
+    const skip: readonly string[] = [...(entity.type === 'character' ? HP_KEYS : []), 'codexRef'];
     const entries = Object.entries(entity.attributes ?? {}).filter(
       ([key, v]) => v !== undefined && v !== null && v !== '' && !skip.includes(key) && canViewField(entity, key),
     );
@@ -319,6 +322,26 @@ export default function EntityView({ entityId, variant = 'page' }: { entityId: s
           
     );
 
+  // Linked to the Scavenger's Codex: open it there (the Codex shows players only what the party knows).
+  const codexRef = typeof entity.attributes?.codexRef === 'string' ? entity.attributes.codexRef : '';
+  const codexKind = codexKindFor(kind);
+  const codexLink = codexRef && codexKind && (isDM || canViewField(entity, 'content')) && (
+    <div className="flex flex-wrap gap-2">
+      <Link
+        className="btn btn-secondary btn-sm"
+        to={`/codex?open=${encodeURIComponent(codexKind === 'monster' ? `#/monster/${codexRef}` : `#/item/${codexRef}`)}`}
+        onClick={() => panel && closePeek()}
+      >
+        <GiKnapsack size={15} /> Open in the Scavenger’s Codex
+      </Link>
+      {isDM && codexKind === 'monster' && (
+        <Link className="btn btn-ghost btn-sm" to="/codex" state={{ codexOpen: { fight: [{ id: codexRef, n: 1 }] } }} onClick={() => panel && closePeek()}>
+          Harvest one
+        </Link>
+      )}
+    </div>
+  );
+
   const withKnowledge = players.filter((p) => entity.playerKnowledge?.[p.uid]?.trim());
 
   return (
@@ -473,6 +496,8 @@ export default function EntityView({ entityId, variant = 'page' }: { entityId: s
               ))}
             </div>
           )}
+
+          {codexLink}
 
           {hasStatBlock && (
             <Section title="Stat block" eye={<FieldEye entity={entity} field="statBlock" />}>

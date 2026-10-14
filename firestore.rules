@@ -210,7 +210,11 @@ service cloud.firestore {
       // but nobody can list every user and harvest emails.
       allow get: if isAuthenticated();
       allow list: if isAdmin();
-      allow create, update: if isAuthenticated() && isValidUser() && request.resource.data.uid == userId && isOwner(userId);
+      // Nobody gives themselves a role: `role` (e.g. admin) is only ever set in the Firebase console.
+      allow create: if isAuthenticated() && isValidUser() && request.resource.data.uid == userId && isOwner(userId) &&
+        !('role' in request.resource.data);
+      allow update: if isAuthenticated() && isValidUser() && request.resource.data.uid == userId && isOwner(userId) &&
+        request.resource.data.get('role', null) == resource.data.get('role', null);
       allow delete: if false;
     }
 
@@ -449,6 +453,51 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (isAdmin() || isCampaignMember(campaignId));
       allow create, update: if isAuthenticated() && (isAdmin() || isCampaignDM(campaignId)) && isValidJukebox(campaignId);
       allow delete: if isAuthenticated() && (isAdmin() || isCampaignDM(campaignId));
+    }
+
+    // ===============================================================
+    // Scavenger's Codex (pages/Codex.tsx, lib/codex/*)
+    // ===============================================================
+    // codex/{campaignId}: the party's shared bag, clock, workbench, garden and journal. Everyone in
+    // the campaign reads and changes it (several at once: quantities use increments). Which
+    // homebrew is in play is the DM's call.
+    function isValidCodexParty() {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['items', 'clock', 'learned', 'known', 'research', 'stamps', 'projects', 'beds', 'log', 'session', 'spoil', 'packs', 'updatedAt']) &&
+             (!('items' in d) || d.items is map) &&
+             (!('clock' in d) || d.clock is number) &&
+             (!('known' in d) || d.known is map) &&
+             (!('log' in d) || d.log is map) &&
+             (!('packs' in d) || d.packs == null || d.packs is list);
+    }
+
+    match /codex/{campaignId} {
+      allow read: if isAuthenticated() && (isAdmin() || isCampaignMember(campaignId));
+      allow create: if isAuthenticated() && (isAdmin() || (isCampaignMember(campaignId) && isValidCodexParty() &&
+        (isCampaignDM(campaignId) || !('packs' in request.resource.data) || request.resource.data.packs == null)));
+      allow update: if isAuthenticated() && (isAdmin() || (isCampaignMember(campaignId) && isValidCodexParty() &&
+        (isCampaignDM(campaignId) || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['packs']))));
+      allow delete: if isAuthenticated() && (isAdmin() || isCampaignDM(campaignId));
+
+      // Each player's own satchel and codex settings: theirs and the DM's, nobody else's.
+      match /satchels/{uid} {
+        allow read: if isAuthenticated() && (isAdmin() || (isCampaignMember(campaignId) && (request.auth.uid == uid || isCampaignDM(campaignId))));
+        allow create, update: if isAuthenticated() && (isAdmin() || (
+          isCampaignMember(campaignId) && (request.auth.uid == uid || isCampaignDM(campaignId)) &&
+          request.resource.data.keys().hasOnly(['items', 'prefs', 'updatedAt']) &&
+          (!('items' in request.resource.data) || request.resource.data.items is map) &&
+          (!('prefs' in request.resource.data) || request.resource.data.prefs is map)));
+        allow delete: if isAuthenticated() && (isAdmin() || isCampaignDM(campaignId));
+      }
+
+      // Homebrew packs the DM added in the codex, loaded by every player.
+      match /packs/{packId} {
+        allow read: if isAuthenticated() && (isAdmin() || isCampaignMember(campaignId));
+        allow create, update: if isAuthenticated() && (isAdmin() || (isCampaignDM(campaignId) &&
+          request.resource.data.keys().hasOnly(['name', 'addedAt', 'data']) &&
+          request.resource.data.name is string && request.resource.data.data is string));
+        allow delete: if isAuthenticated() && (isAdmin() || isCampaignDM(campaignId));
+      }
     }
 
     match /media/{mediaId} {

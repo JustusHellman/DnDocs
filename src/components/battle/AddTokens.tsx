@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ImagePlus, MapPin, Search, X } from 'lucide-react';
 import clsx from 'clsx';
 import { Modal } from '../ui/Modal';
@@ -12,6 +12,7 @@ import { TOKEN_COLORS, TOKEN_SIZES } from '../../lib/battle/table';
 import type { Entity, Token } from '../../types';
 import EncounterMeter from './EncounterMeter';
 import { useCampaignData } from '../../contexts/CampaignDataContext';
+import { type CatalogMonster, loadCatalog, searchCatalog, sizeSquares, type Catalog } from '../../lib/codex/catalog';
 
 /** What to place, armed until the DM taps the map. */
 export interface TokenSpec {
@@ -26,6 +27,8 @@ export interface TokenSpec {
   hpMax: number | null;
   /** Round picture for the token (the entry's picture, or an uploaded one). */
   img?: string | null;
+  /** Scavenger's Codex creature (for harvesting after the fight). */
+  codexRef?: string | null;
 }
 
 const TOKEN_TYPES = ['character', 'npc', 'monster'];
@@ -44,6 +47,7 @@ export function specForEntity(e: Entity, opts: { count?: number; hidden?: boolea
     // Characters use their own HP; others start at the stat block's hit points.
     hpMax: isCharacter ? null : parseHp(e.dndStats?.hitPoints),
     img: e.coverThumb ?? null,
+    codexRef: kind === 'monster' && typeof e.attributes?.codexRef === 'string' ? e.attributes.codexRef : null,
   };
 }
 
@@ -60,8 +64,17 @@ interface Props {
 export default function AddTokens({ open, onClose, onArm, onMap, tokens }: Props) {
   const { entityMap } = useCampaignData();
   const visible = useVisibleEntities();
-  const [mode, setMode] = useState<'entry' | 'custom'>('entry');
+  const [mode, setMode] = useState<'entry' | 'codex' | 'custom'>('entry');
+  // Scavenger's Codex creatures: a dire wolf doesn't need a DnDocs entry to join a fight.
+  const [catalog, setCatalog] = useState<Catalog | null>(null);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [beast, setBeast] = useState<CatalogMonster | null>(null);
+  useEffect(() => {
+    if (mode !== 'codex' || catalog) return;
+    loadCatalog().then(setCatalog, (err) => setCatalogError(err instanceof Error ? err.message : String(err)));
+  }, [mode, catalog]);
   const [term, setTerm] = useState('');
+  const beasts = useMemo(() => (catalog ? (searchCatalog(catalog, 'monster', term, 60) as CatalogMonster[]) : []), [catalog, term]);
   const [picked, setPicked] = useState<Entity | null>(null);
   const [count, setCount] = useState(1);
   const [size, setSize] = useState(1);
@@ -88,10 +101,12 @@ export default function AddTokens({ open, onClose, onArm, onMap, tokens }: Props
     setHidden(false);
     setName('');
     setImg(null);
+    setBeast(null);
   };
 
   const arm = () => {
     if (mode === 'entry' && picked) onArm(specForEntity(picked, { count, hidden, size }));
+    else if (mode === 'codex' && beast) onArm({ name: beast.name, entityId: null, color: '#8e2020', size, count, hidden, controlledBy: [], hpMax: null, img: null, codexRef: beast.id });
     else if (mode === 'custom' && name.trim()) onArm({ name: name.trim(), entityId: null, color, size, count, hidden, controlledBy: [], hpMax: null, img });
     else return;
     reset();
@@ -110,7 +125,7 @@ export default function AddTokens({ open, onClose, onArm, onMap, tokens }: Props
           <button type="button" className="btn btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          <button type="button" className="btn btn-primary" onClick={arm} disabled={mode === 'entry' ? !picked : !name.trim()}>
+          <button type="button" className="btn btn-primary" onClick={arm} disabled={mode === 'entry' ? !picked : mode === 'codex' ? !beast : !name.trim()}>
             <MapPin size={15} /> Place on the map
           </button>
         </>
@@ -122,6 +137,7 @@ export default function AddTokens({ open, onClose, onArm, onMap, tokens }: Props
         onChange={(v) => setMode(v)}
         options={[
           { value: 'entry', label: 'From entries' },
+          { value: 'codex', label: 'From the Codex' },
           { value: 'custom', label: 'Custom' },
         ]}
       />
@@ -152,6 +168,38 @@ export default function AddTokens({ open, onClose, onArm, onMap, tokens }: Props
               </button>
             ))}
           </div>
+        </>
+      ) : mode === 'codex' ? (
+        <>
+          <div className="relative mb-2">
+            <Search size={15} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-stone-500" />
+            <input className="input pl-9" placeholder="Dire wolf, owlbear, goblin…" value={term} onChange={(e) => setTerm(e.target.value)} aria-label="Search the Scavenger's Codex" />
+          </div>
+          <div className="scrollbar-thin max-h-56 space-y-0.5 overflow-y-auto">
+            {catalogError && <p className="py-6 text-center text-sm text-rose-300">{catalogError}</p>}
+            {!catalog && !catalogError && <p className="py-6 text-center text-sm text-stone-500">Loading the Codex…</p>}
+            {catalog && beasts.length === 0 && <p className="py-6 text-center text-sm text-stone-500">No creature by that name in the Codex.</p>}
+            {beasts.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => {
+                  setBeast(m);
+                  setSize(sizeSquares(m.size));
+                  setCount(1);
+                }}
+                className={clsx(
+                  'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm',
+                  beast?.id === m.id ? 'bg-amber-500/15 text-amber-200 ring-1 ring-amber-500/40' : 'text-stone-300 hover:bg-stone-800',
+                )}
+              >
+                <TypeIcon type="monster" className="shrink-0 text-stone-500" />
+                <span className="min-w-0 flex-1 truncate">{m.name}</span>
+                <span className="text-[10px] text-stone-500">{[m.size, m.type, m.cr != null ? `CR ${m.cr}` : ''].filter(Boolean).join(' · ')}</span>
+              </button>
+            ))}
+          </div>
+          <p className="hint">No DnDocs entry needed. After the fight, “Harvest the fallen” sends them to the Codex.</p>
         </>
       ) : (
         <div className="space-y-3">

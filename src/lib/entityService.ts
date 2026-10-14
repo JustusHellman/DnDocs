@@ -20,6 +20,9 @@ import { baseType, fieldsFor, isEntityType, normalizeEntity, permissionKeys, pla
 import { deleteScene } from './battle/sceneService';
 import { addLinkWritesToBatch, fetchLinks, newLinkId, usesBundles, writeLinks } from './links';
 import { addHint, lostAccess, syncStamp } from './sync';
+import { codexKindFor } from './codex/catalog';
+import { unlockInCodex } from './codex/service';
+import { unlockKeys } from './codex/state';
 import { isMediaRef, MEDIA_PREFIX, mediaIdOf, primeMediaCache, forgetMedia, makeThumbnail, resolveImageSrc } from './media';
 
 const nowIso = () => new Date().toISOString();
@@ -464,6 +467,10 @@ export async function revealEntity(entity: Entity, opts: RevealAudience & { fiel
     update.lastPushedTo = opts.everyone ? [] : opts.players;
   }
   await updateDoc(doc(db, 'entities', entity.id), { ...clean(update), ...syncStamp() });
+  // Linked to the Scavenger's Codex: the party now knows it there too.
+  const codexRef = entity.attributes?.codexRef;
+  const codexKind = codexKindFor(baseType(entity.type));
+  if (typeof codexRef === 'string' && codexRef && codexKind) await unlockInCodex(entity.campaignId, unlockKeys(codexKind, codexRef)).catch(() => undefined);
   return plan;
 }
 

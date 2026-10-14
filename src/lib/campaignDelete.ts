@@ -10,6 +10,7 @@ import { collection, deleteDoc, doc, getDocs, query, where } from 'firebase/fire
 import { db } from '../firebase';
 import type { Campaign } from '../types';
 import { deleteCampaignScenes } from './battle/sceneService';
+import { deleteCodexData } from './codex/service';
 
 export interface DeleteSummary {
   entities: number;
@@ -90,6 +91,13 @@ export async function deleteCampaignCompletely(campaign: Campaign, onProgress?: 
   // The jukebox (what music plays and the DM's own environments).
   try {
     await deleteDoc(doc(db, 'jukebox', campaign.id));
+  } catch {
+    /* none, or older rules: harmless */
+  }
+
+  // The Scavenger's Codex: the party, every player's satchel and the campaign's homebrew.
+  try {
+    await deleteCodexData(campaign.id);
   } catch {
     /* none, or older rules: harmless */
   }

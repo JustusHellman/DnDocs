@@ -17,6 +17,8 @@ import TagInput from '../components/editor/TagInput';
 import MarkdownField from '../components/editor/MarkdownField';
 import ImageManager from '../components/editor/ImageManager';
 import StatBlockEditor from '../components/editor/StatBlockEditor';
+import CodexLinkField from '../components/editor/CodexLinkField';
+import { codexKindFor } from '../lib/codex/catalog';
 import { RelationshipList, RelationshipModal } from '../components/entity/Relationships';
 import QuickCreateModal from '../components/entity/QuickCreateModal';
 import { Popover } from '../components/ui/Popover';
@@ -573,6 +575,17 @@ export default function EntityEdit() {
                 </div>
               )}
               <StatBlockEditor stats={draft.dndStats} text={draft.statBlock ?? ''} onStats={(s) => set('dndStats', s)} onText={(t) => set('statBlock', t)} />
+            </Card>
+          )}
+
+          {isDM && codexKindFor(baseType(draft.type)) && (
+            <Card title="Scavenger’s Codex" description={baseType(draft.type) === 'monster' ? 'The Codex creature this is, for harvesting and the party’s journal.' : 'The Codex item or material this is.'}>
+              <CodexLinkField
+                kind={codexKindFor(baseType(draft.type))!}
+                name={draft.name}
+                value={typeof draft.attributes?.codexRef === 'string' && draft.attributes.codexRef ? draft.attributes.codexRef : null}
+                onChange={(id) => setAttr('codexRef', id)}
+              />
             </Card>
           )}
 

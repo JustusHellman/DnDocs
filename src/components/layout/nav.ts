@@ -1,4 +1,4 @@
-import { GiDiceTwentyFacesTwenty, GiMeepleGroup, GiMusicalNotes, GiOpenBook, GiScrollUnfurled, GiStack, GiTreasureMap } from 'react-icons/gi';
+import { GiDiceTwentyFacesTwenty, GiKnapsack, GiMeepleGroup, GiMusicalNotes, GiOpenBook, GiScrollUnfurled, GiStack, GiTreasureMap } from 'react-icons/gi';
 import type { EntityIcon } from '../../lib/entityTypes';
 import { menuTypes, TYPE_META } from '../../lib/entityTypes';
 import type { EntityType } from '../../types';
@@ -33,6 +33,7 @@ export function navGroups(): NavGroup[] {
         { to: '/search', label: 'Home', icon: GiOpenBook },
         { to: '/map', label: 'World map', icon: GiTreasureMap },
         { to: '/chronicle', label: 'Chronicle', icon: GiScrollUnfurled },
+        { to: '/codex', label: "Scavenger's Codex", icon: GiKnapsack },
       ],
     },
     ...GROUPS.map((label) => {

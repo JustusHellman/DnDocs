@@ -2,7 +2,7 @@
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { assertFails, assertSucceeds, initializeTestEnvironment } from '@firebase/rules-unit-testing';
-import { collection, deleteDoc, doc, getDoc, getDocs, query, serverTimestamp, setDoc, Timestamp, updateDoc, where, writeBatch } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, getDocs, increment, query, serverTimestamp, setDoc, Timestamp, updateDoc, where, writeBatch } from 'firebase/firestore';
 
 let env;
 const now = '2026-10-09T10:00:00.000Z';
@@ -328,5 +328,49 @@ describe('links after the move to bundles', () => {
     await env.withSecurityRulesDisabled((ctx) => updateDoc(doc(ctx.firestore(), 'campaigns/c1'), { linksV2: true }));
     await assertFails(setDoc(doc(as('dm'), 'relationships/r2'), { ...rel, id: 'r2' }));
     await assertSucceeds(deleteDoc(doc(as('dm'), 'relationships/r1'))); // tidying up stays possible
+  });
+});
+
+describe('user profiles', () => {
+  const profile = (uid, over = {}) => ({ uid, displayName: uid, email: `${uid}@example.com`, createdAt: now, ...over });
+  it('people edit their own profile', async () => {
+    await assertSucceeds(setDoc(doc(as('p1'), 'users/p1'), profile('p1')));
+    await assertSucceeds(updateDoc(doc(as('p1'), 'users/p1'), { displayName: 'Pip' }));
+  });
+  it('nobody gives themselves a role', async () => {
+    await assertFails(setDoc(doc(as('p1'), 'users/p1'), profile('p1', { role: 'admin' })));
+    await assertSucceeds(setDoc(doc(as('p1'), 'users/p1'), profile('p1')));
+    await assertFails(updateDoc(doc(as('p1'), 'users/p1'), { role: 'admin' }));
+  });
+});
+
+describe("Scavenger's Codex", () => {
+  const party = (uid, id = 'c1') => doc(as(uid), `codex/${id}`);
+  it('everyone in the campaign shares the party bag; outsiders cannot', async () => {
+    await assertSucceeds(setDoc(party('p1'), { items: { 'dire-wolf-pelt': 2 }, clock: 8, known: {}, log: {}, updatedAt: serverTimestamp() }));
+    await assertSucceeds(updateDoc(party('p2'), { 'items.dire-wolf-pelt': increment(1), updatedAt: serverTimestamp() }));
+    await assertSucceeds(getDoc(party('dm')));
+    await assertFails(getDoc(party('x')));
+    await assertFails(updateDoc(party('x'), { clock: 9 }));
+  });
+  it('only the DM picks the homebrew', async () => {
+    await assertSucceeds(setDoc(party('dm'), { items: {}, clock: 8, packs: ['rooted-city'] }));
+    await assertFails(updateDoc(party('p1'), { packs: [] }));
+    await assertSucceeds(updateDoc(party('dm'), { packs: [] }));
+  });
+  it('the party document only holds codex fields', async () => {
+    await assertFails(setDoc(party('p1'), { items: {}, secret: 'x' }));
+  });
+  it('a satchel is its player’s and the DM’s, nobody else’s', async () => {
+    const mine = (uid, who) => doc(as(uid), `codex/c1/satchels/${who}`);
+    await assertSucceeds(setDoc(mine('p1', 'p1'), { items: { 'healers-moss': 3 }, prefs: {} }));
+    await assertSucceeds(getDoc(mine('dm', 'p1')));
+    await assertFails(getDoc(mine('p2', 'p1')));
+    await assertFails(updateDoc(mine('p2', 'p1'), { 'items.healers-moss': 0 }));
+  });
+  it('homebrew packs: the DM adds them, everyone loads them', async () => {
+    await assertSucceeds(setDoc(doc(as('dm'), 'codex/c1/packs/swamp'), { name: 'swamp', addedAt: now, data: '{}' }));
+    await assertSucceeds(getDocs(collection(as('p1'), 'codex/c1/packs')));
+    await assertFails(setDoc(doc(as('p1'), 'codex/c1/packs/mine'), { name: 'mine', data: '{}' }));
   });
 });

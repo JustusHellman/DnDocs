@@ -110,6 +110,20 @@ Icons: [game-icons.net](https://game-icons.net) by Lorc, Delapouite and contribu
   pack and re-importing it is cheap. Choose "Update them to match the pack" to make the campaign follow
   the edited file (text, fields, location, links; optionally deleting entries the file dropped) while
   keeping reveals, images and your own links. That's far cheaper than removing and re-importing.
+- **Scavenger's Codex** (sidebar) – the [Scavenger's Codex](https://github.com/JustusHellman/ScavengersCodex)
+  runs inside DnDocs and saves to the campaign instead of the browser: one shared party satchel (with
+  its clock, workbench, garden and journal) that everyone sees change live, plus each player's own
+  satchel, private to them and the DM. Two players adding loot at once both count. DnDocs says who the
+  DM is, so the Codex needs no PIN. Homebrew the DM picks or adds in the Codex applies to the whole
+  campaign.
+  - Monster and item entries can link to their Codex creature or item (DnDocs suggests the one with
+    the same name). They then open in the Codex, and revealing the entry adds it to the party's
+    Codex journal.
+  - On a battle map, *Add tokens → From the Codex* puts any Codex creature on the map without a
+    DnDocs entry, and *Harvest the fallen* sends the defeated to the Codex's after-the-fight panel.
+  - In the Codex, *Record in DnDocs* (DM) turns a crafted item into a secret item entry on the
+    character who has it.
+  - The Codex runs in a sandboxed frame, so it can't read your DnDocs sign-in.
 - **Images** are stored as WebP (JPEG on browsers without WebP) at up to 1280 px, with a tiny preview
   on each entry so lists show pictures without loading the full images.
 
@@ -167,6 +181,14 @@ write it). Deploy the rules after the app, or players won't hear the music.
 Link bundles add `linkBundles/{campaignId}__{n}` documents. Deploy the app, then the rules; the next
 time the owner opens a campaign its links are moved into bundles automatically (until the rules are
 deployed that move is refused and everything keeps working the old way).
+
+The Scavenger's Codex adds `codex/{campaignId}` (the party: everyone in the campaign reads and
+writes it; only DMs change which homebrew is in play), `codex/{campaignId}/satchels/{uid}` (a
+player's own satchel: theirs and the DM's) and `codex/{campaignId}/packs/{name}` (the DM's homebrew).
+Deploy the rules with the app, or the Codex can't save.
+
+User profiles can no longer be given a `role` by their owner (an `admin` role used to be
+self-assignable). Set roles in the Firebase console.
 
 Note: field-level visibility is enforced in the UI; anyone who can read an entry's document could
 technically read all of its fields. Truly private DM data would need a separate DM-only collection.
