@@ -516,6 +516,8 @@ export async function createCampaign(name: string, user: User): Promise<Campaign
     players: [],
     joinCode: makeJoinCode(),
     createdAt: nowIso(),
+    // New campaigns keep their links in bundles from the start (nothing to move over later).
+    linksV2: true,
   };
   await setDoc(doc(db, 'campaigns', campaign.id), campaign);
   await registerJoinCode(campaign);
@@ -527,8 +529,20 @@ export async function createCampaign(name: string, user: User): Promise<Campaign
  * campaign. Works only once the suggested firestore.rules are deployed; failures are harmless.
  */
 export async function registerJoinCode(campaign: Campaign) {
+  // Once per code on this device (it used to be written again every time the campaign opened).
+  const key = `dndocs-joincode:${campaign.joinCode}`;
+  try {
+    if (localStorage.getItem(key) === campaign.id) return;
+  } catch {
+    /* private mode: just write it */
+  }
   try {
     await setDoc(doc(db, 'joinCodes', campaign.joinCode), { campaignId: campaign.id, dmId: campaign.dmId });
+    try {
+      localStorage.setItem(key, campaign.id);
+    } catch {
+      /* ignore */
+    }
   } catch {
     /* old rules – ignore */
   }

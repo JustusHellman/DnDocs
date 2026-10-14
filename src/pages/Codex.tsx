@@ -24,6 +24,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ExternalLink, Loader2 } from 'lucide-react';
 import { collection, onSnapshot } from 'firebase/firestore';
+import { logError } from '../lib/errors';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useCampaignData } from '../contexts/CampaignDataContext';
@@ -62,6 +63,9 @@ import type { Entity } from '../types';
 const positiveItems = (m?: Record<string, number>) => Object.fromEntries(Object.entries(m ?? {}).filter(([, v]) => Number(v) > 0));
 
 const CODEX_ORIGIN = new URL(CODEX_URL, location.href).origin;
+/** At most this many codex saves in SAVE_WINDOW_MS before DnDocs stops saving (see codex:save). */
+const MAX_SAVES_PER_WINDOW = 60;
+const SAVE_WINDOW_MS = 30_000;
 const SANDBOX = 'allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals';
 
 export interface CodexOpen {
@@ -144,6 +148,9 @@ export default function CodexPage() {
     wantsHello: false,
     sent: {} as Record<string, string>,
     open: null as CodexOpen | null,
+    /** When recent saves were written (a safety stop against save loops, see codex:save). */
+    saves: [] as number[],
+    halted: false,
   });
   s.current.open = open;
 
@@ -249,6 +256,20 @@ export default function CodexPage() {
         s.current.wantsHello = true;
         sendHello();
       } else if (d.type === 'codex:save' && Array.isArray(d.changes)) {
+        // Safety stop: people don't save dozens of times in a few seconds; a bug that makes two
+        // devices keep "correcting" each other does, and would use up the day's free writes.
+        const now = Date.now();
+        const st = s.current;
+        st.saves = [...st.saves.filter((t) => now - t < SAVE_WINDOW_MS), now];
+        if (st.halted || st.saves.length > MAX_SAVES_PER_WINDOW) {
+          if (!st.halted) {
+            st.halted = true;
+            logError('Codex', new Error(`Stopped saving: ${st.saves.length} saves in ${SAVE_WINDOW_MS / 1000}s`));
+            toast.error(new Error('The codex kept saving over and over, so DnDocs stopped saving it to protect the daily database limit. Reload the page to carry on.'), 'Codex');
+          }
+          post({ type: 'dndocs:saved', ok: false, error: 'Saving paused (too many saves at once). Reload the page.' });
+          return;
+        }
         try {
           for (const c of d.changes) {
             // The codex's view now includes its own change; don't send it back.
