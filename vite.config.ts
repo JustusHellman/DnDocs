@@ -16,7 +16,11 @@ export default defineConfig(({ mode }) => {
       'import.meta.env.VITE_GEMINI_API_KEY': JSON.stringify(devApiKey),
     },
     resolve: {
-      alias: { '@': path.resolve(__dirname, '.') },
+      alias: [
+        // Every Firestore call goes through the meter (DM tools → Database use).
+        { find: /^firebase\/firestore$/, replacement: path.resolve(__dirname, 'src/lib/firestoreMetered.ts') },
+        { find: '@', replacement: path.resolve(__dirname, '.') },
+      ],
     },
     server: {
       port: 3000,

@@ -9,6 +9,7 @@ import { quickCreateEntity } from '../lib/entityService';
 import type { EntityType } from '../types';
 import { EmptyState, Page, PageHeader } from '../components/ui/bits';
 import DMPackImport from '../components/DMPackImport';
+import DbUsageCard from '../components/DbUsageCard';
 import DMCampaignExport from '../components/DMCampaignExport';
 import BattleMapsCard from '../components/battle/BattleMapsCard';
 
@@ -258,6 +259,7 @@ export default function DMTools() {
         />
         <DMPackImport />
         <DMCampaignExport />
+        <DbUsageCard />
         {import.meta.env.DEV && <DevImageGenerator />}
       </div>
     </Page>

@@ -5,6 +5,7 @@ import { GiBookmarklet, GiOpenBook, GiTreasureMap } from 'react-icons/gi';
 import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
 import CodexInbox from '../codex/CodexInbox';
+import { RunawayWarning } from '../DbUsageCard';
 import { useCampaignData } from '../../contexts/CampaignDataContext';
 import { usePeek } from '../../contexts/PeekContext';
 import { useToast } from '../../contexts/ToastContext';
@@ -305,6 +306,7 @@ export default function AppShell() {
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <PushListener />
       <CodexInbox />
+      <RunawayWarning />
     </div>
     </DragProvider>
     </JukeboxProvider>

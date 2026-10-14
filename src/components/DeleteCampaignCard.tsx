@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { deleteCampaignCompletely } from '../lib/campaignDelete';
+import { bulk } from '../lib/dbMeter';
 
 /** Owner only: delete the campaign and everything in it. Asks for the campaign's name first. */
 export default function DeleteCampaignCard() {
@@ -24,7 +25,7 @@ export default function DeleteCampaignCard() {
     setBusy(true);
     setFailed(0);
     try {
-      const result = await deleteCampaignCompletely(currentCampaign, (d, t) => setProgress([d, t]));
+      const result = await bulk('deleting a campaign', () => deleteCampaignCompletely(currentCampaign, (d, t) => setProgress([d, t])));
       if (result.campaignDeleted) {
         toast.success(`"${currentCampaign.name}" was deleted`);
         setCurrentCampaign(null);

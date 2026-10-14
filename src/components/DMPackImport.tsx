@@ -8,6 +8,7 @@ import { useToast } from '../contexts/ToastContext';
 import { buildPlan, isPackEntityId, parsePackText, type ImportPlan } from '../lib/campaignImport';
 import { needsUpdate, removePack, runImport, type ImportMode, type ImportSummary } from '../lib/campaignImportWrite';
 import { typeMeta } from '../lib/entityTypes';
+import { bulk } from '../lib/dbMeter';
 
 /** DM tools card: preview and import a campaign pack file, or take an imported pack back out. */
 export default function DMPackImport() {
@@ -129,7 +130,7 @@ export default function DMPackImport() {
     setSummary(null);
     setProgress([0, plan.entities.length + plan.relationships.length + plan.maps.length]);
     try {
-      const s = await runImport(plan, { mode, campaignId: currentCampaign.id, removeMissing: refresh && removeMissing, onProgress: (d, t) => setProgress([d, t]) });
+      const s = await bulk('importing a pack', () => runImport(plan, { mode, campaignId: currentCampaign.id, removeMissing: refresh && removeMissing, onProgress: (d, t) => setProgress([d, t]) }));
       setSummary(s);
       if (s.failed.length) toast.error(new Error(`${s.failed.length} items didn't import. Run it again to retry just those.`), 'Import');
       else toast.success(`Imported ${s.created + s.updated} entries and ${s.relationshipsCreated} links.`);
@@ -155,7 +156,7 @@ export default function DMPackImport() {
     if (!ok) return;
     setBusy('remove');
     try {
-      const r = await removePack(plan.pack.id, currentCampaign.id, { entities });
+      const r = await bulk('removing a pack', () => removePack(plan.pack.id, currentCampaign.id, { entities }));
       if (r.failed) toast.error(new Error(`${r.failed} items couldn't be removed. Try again.`), 'Remove pack');
       else toast.success(`Removed ${r.entities} entries, ${r.relationships} links and ${r.maps} maps.`);
       setSummary(null);

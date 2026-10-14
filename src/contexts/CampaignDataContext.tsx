@@ -16,6 +16,7 @@ import {
 import { logError } from '../lib/errors';
 import { CollectionSync } from '../lib/syncEngine';
 import { pruneSyncHints } from '../lib/sync';
+import { bulk } from '../lib/dbMeter';
 
 interface CampaignData {
   entities: Entity[];
@@ -182,7 +183,7 @@ export function CampaignDataProvider({ children }: { children: ReactNode }) {
       } catch {
         /* ignore */
       }
-      migrateLinks(campaignId).catch((err) => logError('Moving links into bundles', err));
+      bulk('moving links into bundles', () => migrateLinks(campaignId)).catch((err) => logError('Moving links into bundles', err));
     }, 5000);
     return () => clearTimeout(t);
   }, [campaignId, isOwner, linksV2]);
