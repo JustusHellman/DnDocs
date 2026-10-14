@@ -127,7 +127,8 @@ Icons: [game-icons.net](https://game-icons.net) by Lorc, Delapouite and contribu
     or coin to each other (*Give…* in the Codex satchel); a gift waits in the receiver's inbox and is
     put in their satchel as soon as they have DnDocs open.
   - The DM is the bank: in the Codex's DM tools (*Hand out*, and the trader) the DM gives and takes
-    items and coin for the party or any player, and sees what every player carries.
+    items and coin for the party or any player, and sees what every player carries. Item entries linked to the
+    Codex also get *Give to…* (DM), which puts the item straight into a player's or the party's satchel.
   - A player character's page shows what that player carries in the Codex (satchel and purse) under
     *Carried*, with *Open my satchel*. Only the player and the DM see it. Item entries the DM placed
     on the character are listed there too.

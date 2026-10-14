@@ -14,7 +14,7 @@ import {
   updateDoc,
 } from 'firebase/firestore';
 import { db } from '../../firebase';
-import { type FieldOp, type CodexPack, NEW_PARTY, type PackDoc } from './state';
+import { type FieldOp, type CodexPack, logKey, NEW_PARTY, type PackDoc } from './state';
 
 export const partyRef = (campaignId: string) => doc(db, 'codex', campaignId);
 export const satchelRef = (campaignId: string, uid: string) => doc(db, 'codex', campaignId, 'satchels', uid);
@@ -157,4 +157,20 @@ export async function deleteCodexData(campaignId: string, memberIds: string[] = 
   await Promise.all(inboxes.flatMap((q) => q?.docs ?? []).map((d) => deleteDoc(d.ref)));
   await Promise.all([...satchels.docs, ...packs.docs].map((d) => deleteDoc(d.ref)));
   if ((await getDoc(partyRef(campaignId))).exists()) await deleteDoc(partyRef(campaignId));
+}
+
+/**
+ * DM: hand a codex thing (or coin) to a player's satchel or the party satchel, straight from DnDocs.
+ * Also writes a line in the party's codex journal.
+ */
+export async function dmGive(campaignId: string, to: { uid: string | null; name: string }, id: string, q: number, thingName: string) {
+  const at = Date.now();
+  const text = `The DM gave ${to.name} ${q}× ${thingName}`;
+  const line: FieldOp = { path: ['log', logKey({ at, text })], set: { at, clock: null, text } };
+  if (to.uid) {
+    await applySatchelOps(campaignId, to.uid, [{ path: ['items', id], inc: q }]);
+    await applyPartyOps(campaignId, [line]);
+  } else {
+    await applyPartyOps(campaignId, [{ path: ['items', id], inc: q }, { path: ['known', `t:${id}`], set: true }, line]);
+  }
 }

@@ -41,6 +41,7 @@ import { StatBlock } from './StatBlock';
 import { HitPoints } from './HitPoints';
 import { LocationTree, useVisibleChildren } from './LocationTree';
 import CarriedCodex from '../codex/CarriedCodex';
+import GiveCodexThing from '../codex/GiveCodexThing';
 import { RelationshipsSection } from './Relationships';
 import QuickCreateModal from './QuickCreateModal';
 import { useImageSrc } from '../../hooks/useImageSrc';
@@ -415,6 +416,7 @@ export default function EntityView({ entityId, variant = 'page' }: { entityId: s
       >
         <GiKnapsack size={15} /> Open in the Scavenger’s Codex
       </Link>
+      {isDM && codexKind === 'thing' && <GiveCodexThing codexRef={codexRef} fallbackName={entity.name} />}
       {isDM && codexKind === 'monster' && (
         <Link className="btn btn-ghost btn-sm" to="/codex" state={{ codexOpen: { fight: [{ id: codexRef, n: 1 }] } }} onClick={() => panel && closePeek()}>
           Harvest one
