@@ -1,0 +1,55 @@
+{
+  "rules": {
+    "rooms": {
+      "$cid": {
+        "owner": {
+          ".read": "auth != null",
+          ".write": "auth != null && !data.exists() && newData.val() === auth.uid"
+        },
+        "members": {
+          ".read": "auth != null && (root.child('rooms').child($cid).child('owner').val() === auth.uid || data.child(auth.uid).exists())",
+          ".write": "auth != null && root.child('rooms').child($cid).child('owner').val() === auth.uid",
+          "$uid": {
+            ".validate": "newData.val() === 'dm' || newData.val() === 'player'"
+          }
+        },
+        "messages": {
+          ".read": "auth != null && root.child('rooms').child($cid).child('members').child(auth.uid).exists()",
+          ".indexOn": ["at"],
+          "$mid": {
+            ".write": "auth != null && root.child('rooms').child($cid).child('members').child(auth.uid).exists() && ((!data.exists() && newData.child('uid').val() === auth.uid) || (!newData.exists() && (data.child('uid').val() === auth.uid || root.child('rooms').child($cid).child('members').child(auth.uid).val() === 'dm')))",
+            ".validate": "newData.hasChildren(['uid', 'name', 'at', 'kind']) && newData.child('at').isNumber() && newData.child('at').val() <= now && newData.child('name').isString() && newData.child('name').val().length <= 60 && (newData.child('kind').val() === 'text' || newData.child('kind').val() === 'roll' || newData.child('kind').val() === 'hidden')",
+            "text": { ".validate": "newData.isString() && newData.val().length <= 500" },
+            "r": { ".validate": "newData.isString() && newData.val().length <= 4000" },
+            "uid": { ".validate": "newData.isString()" },
+            "name": { ".validate": true },
+            "at": { ".validate": true },
+            "kind": { ".validate": true },
+            "$other": { ".validate": false }
+          }
+        },
+        "colors": {
+          ".read": "auth != null && root.child('rooms').child($cid).child('members').child(auth.uid).exists()",
+          "$uid": {
+            ".write": "auth != null && root.child('rooms').child($cid).child('members').child(auth.uid).exists() && (auth.uid === $uid || root.child('rooms').child($cid).child('members').child(auth.uid).val() === 'dm')",
+            ".validate": "newData.isString() && newData.val().matches(/^#[0-9a-f]{6}$/)"
+          }
+        },
+        "secret": {
+          ".read": "auth != null && root.child('rooms').child($cid).child('members').child(auth.uid).val() === 'dm'",
+          ".indexOn": ["at"],
+          "$mid": {
+            ".write": "auth != null && root.child('rooms').child($cid).child('members').child(auth.uid).val() === 'dm' && ((!data.exists() && newData.child('uid').val() === auth.uid) || !newData.exists())",
+            ".validate": "newData.hasChildren(['uid', 'name', 'at', 'kind', 'r']) && newData.child('at').isNumber() && newData.child('at').val() <= now && newData.child('kind').val() === 'roll' && newData.child('r').isString() && newData.child('r').val().length <= 4000",
+            "uid": { ".validate": "newData.isString()" },
+            "name": { ".validate": "newData.isString() && newData.val().length <= 60" },
+            "at": { ".validate": true },
+            "kind": { ".validate": true },
+            "r": { ".validate": true },
+            "$other": { ".validate": false }
+          }
+        }
+      }
+    }
+  }
+}

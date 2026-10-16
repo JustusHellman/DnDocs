@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Dices, Download, Image as ImageIcon, Package, RefreshCw, Save, Store, Trash2, UserRound, Wand2 } from 'lucide-react';
+import { Download, Image as ImageIcon, Package, RefreshCw, Save, Store, UserRound, Wand2 } from 'lucide-react';
 import clsx from 'clsx';
 import { GiCowled, GiDiceTwentyFacesTwenty, GiLockedChest, GiRollingDices, GiTavernSign } from 'react-icons/gi';
 import { useAuth } from '../contexts/AuthContext';
@@ -12,6 +12,7 @@ import DMPackImport from '../components/DMPackImport';
 import DbUsageCard from '../components/DbUsageCard';
 import DMCampaignExport from '../components/DMCampaignExport';
 import BattleMapsCard from '../components/battle/BattleMapsCard';
+import DiceTray from '../components/dice/DiceTray';
 
 const pick = <T,>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)];
 
@@ -25,77 +26,17 @@ const JOBS = ['Blacksmith', 'Innkeeper', 'Guard', 'Merchant', 'Priest', 'Farmer'
 const QUIRKS = ['Always speaks in a whisper', 'Constantly flipping a coin', 'Has a very loud, booming laugh', 'Suspicious of magic users', 'Collects strange bugs', 'Forgets names instantly', 'Smells faintly of sulfur', 'Missing an eye', 'Always hungry', 'Overly polite', 'Hums while thinking', 'Answers questions with questions'];
 const LOOT = ['A glowing blue potion', 'A silver dagger with a ruby in the hilt', 'A leather pouch containing 50 gp', 'A map leading to a nearby cave', 'A ring that feels warm to the touch', 'A finely crafted elven bow', 'A spell scroll of Fireball', 'A set of loaded dice', 'A small wooden carving of a bear', 'A mysterious locked iron box', 'A cracked hourglass that runs backwards', 'A letter sealed with a noble crest'];
 
-const DICE = [4, 6, 8, 10, 12, 20, 100];
-
-interface Roll {
-  id: number;
-  label: string;
-  rolls: number[];
-  mod: number;
-  total: number;
-}
-
+/** The same dice tray as on the battle map (rolls stay on this device). */
 function DiceRoller() {
-  const [count, setCount] = useState(1);
-  const [mod, setMod] = useState(0);
-  const [history, setHistory] = useState<Roll[]>([]);
-
-  const roll = (sides: number) => {
-    const rolls = Array.from({ length: count }, () => 1 + Math.floor(Math.random() * sides));
-    const total = rolls.reduce((a, b) => a + b, 0) + mod;
-    setHistory((h) => [{ id: Date.now(), label: `${count}d${sides}${mod ? (mod > 0 ? `+${mod}` : mod) : ''}`, rolls, mod, total }, ...h].slice(0, 12));
-  };
-
-  const last = history[0];
+  const { user } = useAuth();
   return (
     <section className="card p-5 md:col-span-2">
       <h2 className="section-title mb-4 flex items-center gap-2">
         <GiRollingDices size={20} /> Dice
       </h2>
-      <div className="grid gap-4 md:grid-cols-[1fr_220px]">
-        <div>
-          <div className="grid grid-cols-4 gap-2 sm:grid-cols-7">
-            {DICE.map((d) => (
-              <button key={d} type="button" onClick={() => roll(d)} className="btn btn-secondary h-14 text-base font-semibold">
-                d{d}
-              </button>
-            ))}
-          </div>
-          <div className="mt-3 flex flex-wrap items-center gap-4 text-sm">
-            <label className="flex items-center gap-2 text-stone-400">
-              Dice
-              <input type="number" min={1} max={20} value={count} onChange={(e) => setCount(Math.max(1, Math.min(20, Number(e.target.value) || 1)))} className="input w-16 text-center" />
-            </label>
-            <label className="flex items-center gap-2 text-stone-400">
-              Modifier
-              <input type="number" min={-20} max={20} value={mod} onChange={(e) => setMod(Math.max(-20, Math.min(20, Number(e.target.value) || 0)))} className="input w-16 text-center" />
-            </label>
-          </div>
-        </div>
-        <div className="surface flex flex-col items-center justify-center p-4 text-center" aria-live="polite">
-          {last ? (
-            <>
-              <div className="text-xs text-stone-500">{last.label}</div>
-              <div key={last.id} className="animate-pop-in font-display text-5xl font-bold text-amber-300">{last.total}</div>
-              {last.rolls.length > 1 || last.mod ? <div className="mt-1 text-xs text-stone-500">[{last.rolls.join(', ')}]{last.mod ? ` ${last.mod > 0 ? '+' : ''}${last.mod}` : ''}</div> : null}
-            </>
-          ) : (
-            <div className="text-sm text-stone-500">Roll something!</div>
-          )}
-        </div>
+      <div className="max-w-md">
+        <DiceTray uid={user?.uid ?? 'anon'} variant="card" />
       </div>
-      {history.length > 1 && (
-        <div className="mt-4 flex flex-wrap items-center gap-1.5 text-xs text-stone-400">
-          {history.slice(1).map((r) => (
-            <span key={r.id} className="tag">
-              {r.label}: <strong className="text-stone-200">{r.total}</strong>
-            </span>
-          ))}
-          <button type="button" aria-label="Clear history" className="btn-icon-sm" onClick={() => setHistory([])}>
-            <Trash2 size={13} />
-          </button>
-        </div>
-      )}
     </section>
   );
 }

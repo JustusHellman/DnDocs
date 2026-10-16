@@ -329,6 +329,8 @@ export interface Drawing {
   kind: 'free' | 'line' | 'rect' | 'circle' | 'cone' | 'beam' | 'cube';
   /** Width of a line area (beam) in squares. */
   width?: number;
+  /** Pen thickness in squares (older drawings: the default). */
+  thick?: number;
   color: string;
   /** Points in squares, "x,y,x,y,…" (two points for line / rect / circle). */
   points: string;

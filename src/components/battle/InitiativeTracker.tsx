@@ -8,6 +8,9 @@ import { setCombat, setInitiativeOrder, setInitiatives, setTurn, updateScene, up
 import { rollD20 } from '../../lib/battle/table';
 import type { Entity, Scene, Token } from '../../types';
 import EncounterMeter from './EncounterMeter';
+import { colorOf, useTableColors } from '../../lib/chat/colorStore';
+import { setInitiativeContext, useSittingOut } from '../../lib/battle/initiativeStore';
+import { openTableChat } from '../chat/ChatDock';
 
 interface Props {
   scene: Scene;
@@ -18,13 +21,17 @@ interface Props {
   asDM: boolean;
   entityMap: Map<string, Entity>;
   onSelect: (id: string) => void;
+  /** Pointing at a row (spotlights the token on the map). */
+  onHover?: (id: string | null) => void;
+  /** The token pointed at on the map: its row lights up. */
+  highlightId?: string | null;
 }
 
 /** Phones: the tracker starts folded so it doesn't cover the map. */
 const narrow = () => typeof window !== 'undefined' && window.innerWidth < 640;
 
 /** Initiative order and turns. The DM runs it; players roll for and pass their own tokens' turns. */
-export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asDM, entityMap, onSelect }: Props) {
+export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asDM, entityMap, onSelect, onHover, highlightId }: Props) {
   const toast = useToast();
   const confirm = useConfirm();
   const currentRow = useRef<HTMLLIElement | null>(null);
@@ -37,6 +44,7 @@ export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asD
   // Players only see (and roll for) their own tokens among those still to roll.
   const unrolled = tokens.filter((t) => (t.initiative === null || t.initiative === undefined) && (asDM || t.controlledBy.includes(uid)));
   const mine = (t: Token) => t.controlledBy.includes(uid);
+  const tableColors = useTableColors();
   const mayRoll = (t: Token) => asDM || mine(t);
   const turnToken = tokens.find((t) => t.id === combat.turn);
   const myTurn = !!turnToken && mine(turnToken);
@@ -78,8 +86,22 @@ export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asD
     const e = t.entityId ? entityMap.get(t.entityId) : undefined;
     return e?.dndStats ? abilityMod(e.dndStats.dex) : 0;
   };
-  const roll = (list: Token[]) =>
-    run(() => setInitiatives(scene.id, Object.fromEntries(list.map((t) => [t.id, rollD20(modOf(t))]))), 'Roll initiative');
+  // Rolling happens in the table chat (one place to roll); this tells it who still has to.
+  const out = useSittingOut(scene.id);
+  const sitting = (t: Token) => asDM && t.controlledBy.length === 0 && out.includes(t.id);
+  const unrolledKey = unrolled.map((t) => `${t.id}:${t.name}:${modOf(t)}:${t.hidden ? 1 : 0}`).join('|');
+  useEffect(() => {
+    setInitiativeContext({
+      sceneId: scene.id,
+      sceneName: scene.name,
+      asDM,
+      combatActive: !!combat.active,
+      unrolled: unrolled.map((t) => ({ id: t.id, name: t.name, mod: modOf(t), player: t.controlledBy.length > 0, mine: mine(t), hidden: !!t.hidden })),
+    });
+  }, [scene.id, scene.name, asDM, combat.active, unrolledKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => setInitiativeContext(null), []);
+  const rollInChat = () => openTableChat({ initiative: true });
+  const canRollSome = unrolled.some((t) => mayRoll(t) && !sitting(t));
 
   const start = async () => {
     const waiting = tokens.filter((t) => t.controlledBy.length > 0 && (t.initiative === null || t.initiative === undefined));
@@ -96,8 +118,8 @@ export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asD
   };
   const begin = () =>
     run(async () => {
-      // Monsters the DM runs get rolled for automatically.
-      const npcs = unrolled.filter((t) => t.controlledBy.length === 0);
+      // Monsters the DM runs get rolled for automatically (not those sitting this fight out).
+      const npcs = unrolled.filter((t) => t.controlledBy.length === 0 && !sitting(t));
       let all = tokens;
       if (npcs.length) {
         const rolls = Object.fromEntries(npcs.map((t) => [t.id, rollD20(modOf(t))]));
@@ -176,12 +198,20 @@ export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asD
   if (!asDM && !combat.active && order.length === 0 && !unrolled.some(mine)) return null;
 
   return (
-    <div className="w-64 max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-xl border border-stone-700/80 bg-stone-950/92 text-sm shadow-xl backdrop-blur">
-      <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-        <Swords size={15} className={combat.active ? 'text-amber-400' : 'text-stone-500'} />
-        <span className={clsx('min-w-0 flex-1 truncate font-semibold', myTurn ? 'text-amber-300' : 'text-stone-100')}>{headline}</span>
-        {open ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
-      </button>
+    <div onMouseLeave={() => onHover?.(null)} className="w-72 max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-xl border border-stone-700/80 bg-stone-950/92 text-sm shadow-xl backdrop-blur">
+      <div className="flex items-center">
+        <button type="button" className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+          <Swords size={15} className={combat.active ? 'text-amber-400' : 'text-stone-500'} />
+          <span className={clsx('min-w-0 flex-1 truncate font-semibold', myTurn ? 'text-amber-300' : 'text-stone-100')}>{headline}</span>
+          {open ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+        </button>
+        {/* Folded, with someone of yours still to roll: the way to the roll stays one click away. */}
+        {!open && canRollSome && (
+          <button type="button" className="btn btn-primary btn-sm mr-1.5 px-2" onClick={rollInChat} title="Roll for initiative (in the table chat)">
+            <Dices size={13} /> Roll
+          </button>
+        )}
+      </div>
       {open && (
         <div className="border-t border-stone-800 px-2 pt-1.5 pb-2">
           {asDM && tokens.some((t) => t.controlledBy.length === 0) && <EncounterMeter tokens={tokens} entityMap={entityMap} compact />}
@@ -202,14 +232,23 @@ export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asD
                 <li
                   key={t.id}
                   ref={t.id === combat.turn ? currentRow : undefined}
-                  className={clsx('flex items-center gap-2 rounded-md px-1.5 py-1', t.id === combat.turn && 'bg-amber-500/15 ring-1 ring-amber-500/40')}
+                  onMouseEnter={() => onHover?.(t.id)}
+                  onMouseLeave={() => onHover?.(null)}
+                  // Players' rows carry a thin stripe of their colour.
+                  style={{ borderLeftColor: t.controlledBy.length ? colorOf(tableColors, t.controlledBy[0]) : 'transparent' }}
+                  className={clsx(
+                    'flex items-center gap-2 rounded-md border-l-[3px] px-1.5 py-1 transition-colors',
+                    t.id === combat.turn && 'bg-amber-500/15 ring-1 ring-amber-500/40',
+                    highlightId === t.id && 'bg-stone-700/60',
+                  )}
                 >
                   <input
                     aria-label={`Initiative for ${t.name}`}
                     className="w-9 rounded border border-stone-700 bg-stone-900 py-0.5 text-center text-xs tabular-nums text-stone-100 disabled:border-transparent disabled:bg-transparent"
                     defaultValue={t.initiative ?? ''}
                     key={`${t.id}-${t.initiative}`}
-                    disabled={!mayRoll(t)}
+                    // The order is the DM's to adjust; players roll in the chat.
+                    disabled={!asDM}
                     inputMode="numeric"
                     onBlur={(e) => setValue(t, e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
@@ -241,25 +280,16 @@ export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asD
               <ul className="space-y-0.5">
                 {unrolled.map((t) => (
                   <li key={t.id} className="flex items-center gap-2 px-1.5 py-0.5">
-                    <span className={clsx('min-w-0 flex-1 truncate', t.hidden ? 'text-stone-500 italic' : 'text-stone-300')}>{t.name}</span>
-                    {mayRoll(t) && (
-                      <>
-                        <input
-                          aria-label={`Initiative for ${t.name}`}
-                          placeholder="–"
-                          className="w-9 rounded border border-stone-700 bg-stone-900 py-0.5 text-center text-xs tabular-nums text-stone-100"
-                          inputMode="numeric"
-                          onBlur={(e) => e.target.value && setValue(t, e.target.value)}
-                          onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-                        />
-                        <button type="button" className="btn-icon-sm size-7" title={`Roll d20${modOf(t) ? ` ${modOf(t) > 0 ? '+' : ''}${modOf(t)}` : ''}`} aria-label={`Roll initiative for ${t.name}`} onClick={() => roll([t])} disabled={busy}>
-                          <Dices size={14} />
-                        </button>
-                      </>
-                    )}
+                    <span className={clsx('min-w-0 flex-1 truncate', t.hidden ? 'text-stone-500 italic' : 'text-stone-300', sitting(t) && 'line-through opacity-50')}>{t.name}</span>
+                    {sitting(t) && <span className="text-[10px] text-stone-500">sitting out</span>}
                   </li>
                 ))}
               </ul>
+              {canRollSome && (
+                <button type="button" className="btn btn-secondary btn-sm mt-1 w-full" onClick={rollInChat}>
+                  <Dices size={13} /> {asDM ? 'Roll initiative…' : 'Roll for initiative'}
+                </button>
+              )}
             </div>
           )}
           {tokens.length === 0 && <p className="px-1.5 py-2 text-xs text-stone-500">Add tokens to the map to track initiative.</p>}
@@ -285,11 +315,6 @@ export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asD
             {asDM && combat.active && (
               <button type="button" className="btn btn-ghost btn-sm" onClick={end} disabled={busy} aria-label="End combat" title="End combat">
                 <Square size={12} /> End
-              </button>
-            )}
-            {asDM && unrolled.some((t) => t.controlledBy.length === 0) && (
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => roll(unrolled.filter((t) => t.controlledBy.length === 0))} disabled={busy}>
-                <Dices size={13} /> Roll monsters
               </button>
             )}
           </div>

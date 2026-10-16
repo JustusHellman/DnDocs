@@ -212,6 +212,24 @@ player's own satchel and purse: theirs and the DM's), `codex/{campaignId}/satche
 DM can read or take them) and `codex/{campaignId}/packs/{name}` (the DM's homebrew).
 Deploy the rules with the app, or the Codex can't save.
 
+### Table chat and dice (Realtime Database)
+
+The chat and dice rolls use Firebase's **Realtime Database**, not Firestore, so they never count
+against the Firestore read/write limits (the free plan's Realtime Database is limited by data stored
+and downloaded instead, and a chat line is a few hundred bytes). One-time setup:
+
+1. Firebase console → Build → **Realtime Database** → Create database (any location; start in
+   **locked mode**).
+2. Copy its URL (e.g. `https://<project>-default-rtdb.europe-west1.firebasedatabase.app`) into
+   `firebase-applet-config.json` as `"databaseURL"`.
+3. Paste `database.rules.json` into the database's **Rules** tab and Publish (or
+   `firebase deploy --only database`).
+4. Deploy the app and open the campaign once as its owner: that registers the room and its member
+   list (new players are added the next time the owner's app is open).
+
+Without a `databaseURL` the chat still works as a local dice roller. DM rolls are hidden from the
+players by default (they see "rolls behind the screen"); the DM can switch that in the chat header.
+
 User profiles can no longer be given a `role` by their owner (an `admin` role used to be
 self-assignable). Set roles in the Firebase console.
 

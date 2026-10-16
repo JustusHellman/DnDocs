@@ -248,7 +248,7 @@ export async function runImport(
         if (!data) throw new Error('The entry for this map doesn\'t exist.');
         if (data.campaignId !== opts.campaignId) throw new Error('This entry belongs to another campaign.');
         const ownMap = data.mapConfig?.mediaId;
-        if (ownMap && !isPackMediaId(plan.pack!.id, ownMap)) {
+        if (ownMap && !isPackMediaId(plan.pack!.scope, ownMap)) {
           summary.mapsSkipped++; // the DM's own map
           return;
         }
@@ -286,7 +286,7 @@ export async function runImport(
 
   // Refresh: the pack is the source of truth for what came from it.
   if (opts.mode === 'update' && plan.pack) {
-    const packId = plan.pack.id;
+    const packId = plan.pack.scope;
     const inPack = new Set(plan.entities.map((e) => e.id));
     const gone = opts.removeMissing ? [...have.values()].filter((e) => isPackEntityId(packId, e.id) && !inPack.has(e.id)) : [];
     const goneIds = new Set(gone.map((e) => e.id));

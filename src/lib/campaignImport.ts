@@ -76,7 +76,8 @@ export interface Issue {
 
 export interface ImportPlan {
   ok: boolean;
-  pack: CampaignPack['pack'] | null;
+  /** `scope` is what the ids are made from (see packScope): the pack id, or the pack id plus a campaign tag. */
+  pack: (CampaignPack['pack'] & { scope: string }) | null;
   entities: Entity[];
   relationships: Relationship[];
   maps: PlannedMap[];
@@ -90,7 +91,23 @@ const LINK_RE = /\[\[([a-z0-9-]+)(?:\|([^\]]+))?\]\]/g;
 const STAT_NUMBERS = ['str', 'dex', 'con', 'int', 'wis', 'cha'] as const;
 const STAT_TEXT = ['armorClass', 'hitPoints', 'speed', 'skills', 'senses', 'languages', 'challenge', 'proficiencyBonus'] as const;
 
-/** Entries made from a pack always get ids like `seed-<pack>-<key>`. */
+/**
+ * Entries made from a pack get ids like `seed-<scope>-<key>`, where the scope is the pack id plus a
+ * short tag of the campaign (`seed-mypack.3f9c2a1b-tavern`): the same pack can then be imported into
+ * any number of campaigns. Campaigns that imported a pack before this keep plain `seed-<pack>-<key>`
+ * ids for it, so refreshing that import still finds its entries.
+ */
+export function packScope(packId: string, campaignId: string, existingIds: Iterable<string>): string {
+  const tag = campaignId.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8) || 'c';
+  const scoped = `${packId}.${tag}`;
+  let legacy = false;
+  for (const id of existingIds) {
+    if (id.startsWith(`seed-${scoped}-`)) return scoped;
+    if (id.startsWith(`seed-${packId}-`) && !id.startsWith(`seed-${packId}.`)) legacy = true;
+  }
+  return legacy ? packId : scoped;
+}
+
 export const entityIdFor = (packId: string, key: string) => `seed-${packId}-${key}`;
 export const mediaIdFor = (packId: string, key: string) => `seedmedia-${packId}-${key}`;
 export const isPackMediaId = (packId: string, id: string) => id.startsWith(`seedmedia-${packId}-`);
@@ -131,7 +148,7 @@ function emptyPlan(issues: Issue[]): ImportPlan {
 }
 
 /** Checks a pack and builds the documents it would create. Never throws. */
-export function buildPlan(raw: unknown, ctx: { campaignId: string; uid: string; now?: string }): ImportPlan {
+export function buildPlan(raw: unknown, ctx: { campaignId: string; uid: string; now?: string; /** see packScope (default: the pack id) */ idScope?: string }): ImportPlan {
   const issues: Issue[] = [];
   const err = (where: string, message: string) => issues.push({ level: 'error', where, message });
   const warn = (where: string, message: string) => issues.push({ level: 'warning', where, message });
@@ -146,7 +163,8 @@ export function buildPlan(raw: unknown, ctx: { campaignId: string; uid: string; 
   if (!Array.isArray(raw.entities) || raw.entities.length === 0) err('entities', 'The pack has no entries.');
   if (issues.some((i) => i.level === 'error')) return emptyPlan(issues);
 
-  const packMeta = { id: (meta as Record<string, string>).id, name: (meta as Record<string, string>).name, description: (meta as Record<string, string>).description };
+  const packId = (meta as Record<string, string>).id;
+  const packMeta = { id: packId, scope: ctx.idScope ?? packId, name: (meta as Record<string, string>).name, description: (meta as Record<string, string>).description };
   const entities = raw.entities as unknown[];
   const rels = Array.isArray(raw.relationships) ? (raw.relationships as unknown[]) : [];
   if (entities.length > MAX_ENTRIES) err('entities', `A pack can have at most ${MAX_ENTRIES} entries (this one has ${entities.length}).`);
@@ -179,7 +197,7 @@ export function buildPlan(raw: unknown, ctx: { campaignId: string; uid: string; 
     byKey.set(e.key, e as unknown as PackEntity);
   }
 
-  const idOf = (key: string) => entityIdFor(packMeta.id, key);
+  const idOf = (key: string) => entityIdFor(packMeta.scope, key);
 
   // ---- pass 2: parents, attributes, stat blocks ---------------------------------------
   const resolveText = (where: string, text: string): string =>
@@ -344,7 +362,7 @@ export function buildPlan(raw: unknown, ctx: { campaignId: string; uid: string; 
     seenRel.add(k);
     const label = r.label.trim();
     relDocs.push({
-      id: relationshipIdFor(packMeta.id, r.source, r.target),
+      id: relationshipIdFor(packMeta.scope, r.source, r.target),
       campaignId: ctx.campaignId,
       sourceId: idOf(r.source),
       targetId: idOf(r.target),
@@ -412,7 +430,7 @@ export function buildPlan(raw: unknown, ctx: { campaignId: string; uid: string; 
       maps.push({
         entityId: idOf(m.entity),
         entityName: owner.name,
-        media: { id: mediaIdFor(packMeta.id, m.entity), entityId: idOf(m.entity), campaignId: ctx.campaignId, data: m.image, mimeType: mime, ownerId: ctx.uid, createdAt: now },
+        media: { id: mediaIdFor(packMeta.scope, m.entity), entityId: idOf(m.entity), campaignId: ctx.campaignId, data: m.image, mimeType: mime, ownerId: ctx.uid, createdAt: now },
         pins,
       });
     }

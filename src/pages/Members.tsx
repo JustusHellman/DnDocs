@@ -13,6 +13,7 @@ import { Modal } from '../components/ui/Modal';
 import { MenuItem, Popover } from '../components/ui/Popover';
 import InviteModal from '../components/InviteModal';
 import DeleteCampaignCard from '../components/DeleteCampaignCard';
+import ColorPicker from '../components/chat/ColorPicker';
 
 function MemberMenu({ member }: { member: User }) {
   const { currentCampaign } = useAuth();
@@ -71,6 +72,7 @@ function MemberMenu({ member }: { member: User }) {
 export default function Members() {
   const { currentCampaign, user, isOwner, isDM } = useAuth();
   const { members, refreshMembers, reloadFromServer } = useCampaignData();
+  const names = Object.fromEntries(members.map((m) => [m.uid, m.displayName]));
   // Names and pictures are cached for a day elsewhere; this page shows them fresh.
   useEffect(() => {
     refreshMembers();
@@ -152,7 +154,15 @@ export default function Members() {
           const me = m.uid === user?.uid;
           return (
             <div key={m.uid} className="flex items-center gap-3 p-4">
-              <Avatar user={m} size={44} />
+              <div className="relative">
+                <Avatar user={m} size={44} />
+                {/* Their colour at the table (dice, pings, chat): yours to change, or anyone's for a DM. */}
+                {currentCampaign && (
+                  <span className="absolute -right-0.5 -bottom-0.5">
+                    <ColorPicker campaignId={currentCampaign.id} uid={m.uid} canEdit={me || isDM} names={names} size={16} />
+                  </span>
+                )}
+              </div>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="truncate font-medium text-stone-100">{m.displayName}</span>

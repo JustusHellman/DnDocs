@@ -41,6 +41,8 @@ interface Props {
    * (pan with two fingers, or the right / middle mouse button).
    */
   onTool?: ((phase: ToolPhase, clientX: number, clientY: number, pointerType: string) => void) | null;
+  /** The mouse moved over the map with no button pressed (e.g. a click-to-click ruler following it). */
+  onHover?: ((clientX: number, clientY: number) => void) | null;
   /** Fill the parent's height instead of a fixed share of the window. */
   fill?: boolean;
   /** Full screen inside the page (keeps dialogs visible) instead of the browser's full screen. */
@@ -56,7 +58,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v
  * Pan / zoom map with percent-positioned pins. Works with mouse (drag, wheel),
  * touch (drag, pinch, double tap) and keyboard (+/-/0).
  */
-export default function MapViewer({ src, alt, pins, onMapClick, onPinDrop, onPinClick, onPinDoubleClick, crosshair, overlay, toolbar, layers, onTool, fill, pageFullscreen, onFullscreenChange }: Props) {
+export default function MapViewer({ src, alt, pins, onMapClick, onPinDrop, onPinClick, onPinDoubleClick, crosshair, overlay, toolbar, layers, onTool, onHover, fill, pageFullscreen, onFullscreenChange }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -86,6 +88,8 @@ export default function MapViewer({ src, alt, pins, onMapClick, onPinDrop, onPin
   const lastPinTap = useRef<{ key: string; at: number } | null>(null);
   const toolRef = useRef(onTool);
   toolRef.current = onTool;
+  const hoverRef = useRef(onHover);
+  hoverRef.current = onHover;
 
   // Fit the image into the available space.
   // Widths seen by the last two measurements (see `measure`).
@@ -228,7 +232,10 @@ export default function MapViewer({ src, alt, pins, onMapClick, onPinDrop, onPin
 
   const onPointerMove = (e: React.PointerEvent) => {
     const prev = pointers.current.get(e.pointerId);
-    if (!prev) return;
+    if (!prev) {
+      if (e.pointerType === 'mouse') hoverRef.current?.(e.clientX, e.clientY);
+      return;
+    }
     const cur = { x: e.clientX, y: e.clientY };
     pointers.current.set(e.pointerId, cur);
     const r = viewRef.current!.getBoundingClientRect();

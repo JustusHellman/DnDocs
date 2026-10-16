@@ -5,6 +5,7 @@ import { GiBookmarklet, GiOpenBook, GiTreasureMap } from 'react-icons/gi';
 import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
 import CodexInbox from '../codex/CodexInbox';
+import { ChatButton } from '../chat/ChatDock';
 import { RunawayWarning } from '../DbUsageCard';
 import { useCampaignData } from '../../contexts/CampaignDataContext';
 import { usePeek } from '../../contexts/PeekContext';
@@ -284,6 +285,7 @@ export default function AppShell() {
                 <Search size={20} />
               </button>
             )}
+            <ChatButton />
             <JukeboxButton />
             <RecentButton />
             <NewButton compact={!isTablet} />

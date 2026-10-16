@@ -13,7 +13,7 @@ import { syncStamp } from '../sync';
 import { db } from '../../firebase';
 import type { Drawing, Entity, LiveMark, Scene, SceneGrid, Token, User } from '../../types';
 import { compressImage, forgetMedia, isMediaRef, mediaIdOf, primeMediaCache } from '../media';
-import { DEFAULT_GRID, encodeNums, healthOf, type UvttImport } from './geometry';
+import { DEFAULT_GRID, encodeNums, encodePoints, healthOf, pointsOf, type UvttImport } from './geometry';
 
 const nowIso = () => new Date().toISOString();
 
@@ -169,6 +169,21 @@ export function addDrawing(sceneId: string, d: Omit<Drawing, 'id' | 'createdAt'>
   const ref = doc(drawingsCol(sceneId));
   const drawing = clean({ ...d, id: ref.id, createdAt: nowIso() }) as Drawing;
   return { drawing, saved: setDoc(ref, drawing) };
+}
+
+/**
+ * Move a drawing by (dx, dy) squares: one batch that removes it and adds it at the new place
+ * (a drawing itself is never edited, only its sharing). Returns the moved copy.
+ */
+export async function moveDrawing(sceneId: string, d: Drawing, dx: number, dy: number): Promise<Drawing> {
+  const ref = doc(drawingsCol(sceneId));
+  const pts = pointsOf(d.points).map((p) => ({ x: Math.round((p.x + dx) * 100) / 100, y: Math.round((p.y + dy) * 100) / 100 }));
+  const moved = clean({ ...d, id: ref.id, points: encodePoints(pts), createdAt: nowIso() }) as Drawing;
+  const batch = writeBatch(db);
+  batch.delete(doc(drawingsCol(sceneId), d.id));
+  batch.set(ref, moved);
+  await batch.commit();
+  return moved;
 }
 
 /** Put a drawing back exactly as it was (undo of an erase). */

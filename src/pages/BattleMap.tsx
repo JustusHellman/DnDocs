@@ -6,6 +6,7 @@ import {
   Circle,
   Triangle,
   Undo2,
+  Dices,
   Zap,
   EyeOff,
   CloudFog,
@@ -36,6 +37,7 @@ import { useScene } from '../hooks/useScene';
 import MapViewer, { type ToolPhase, type ViewerApi } from '../components/map/MapViewer';
 import BattleBoard, { cellAt, type DraftShape, type Ruler, type Tool } from '../components/battle/BattleBoard';
 import InitiativeTracker from '../components/battle/InitiativeTracker';
+import { openTableChat } from '../components/chat/ChatDock';
 import TokenCard, { AURA_TIMER } from '../components/battle/TokenCard';
 import AddTokens, { specForEntity, type TokenSpec } from '../components/battle/AddTokens';
 import ScenePanel, { type PanelTab } from '../components/battle/ScenePanel';
@@ -70,6 +72,7 @@ import {
   clearTokens,
   createScene,
   deleteDrawing,
+  moveDrawing,
   deleteScene,
   deleteToken,
   markKnown,
@@ -124,6 +127,10 @@ interface LayerProps {
   selectedDrawingId: string | null;
   onDrawingSelect?: (d: Drawing) => void;
   onDrawingShare?: (d: Drawing) => void;
+  onDrawingMove?: (d: Drawing, dx: number, dy: number) => void;
+  /** A token to spotlight (pointed at in the initiative list): the others dim. */
+  spotlightId: string | null;
+  onTokenHover: (id: string | null) => void;
   /** DM only: creatures the party has now seen get marked as known. */
   onDiscovered?: (ids: string[]) => void;
 }
@@ -234,6 +241,9 @@ function BattleLayer(p: LayerProps) {
       selectedDrawingId={p.selectedDrawingId}
       onDrawingSelect={p.onDrawingSelect}
       onDrawingShare={p.onDrawingShare}
+      onDrawingMove={p.onDrawingMove}
+      spotlightId={p.spotlightId}
+      onTokenHover={p.onTokenHover}
     />
   );
 }
@@ -250,13 +260,30 @@ function ToolButton({ active, label, onClick, children, disabled }: { active?: b
       disabled={disabled}
       onClick={onClick}
       className={clsx(
-        'flex size-9 items-center justify-center rounded-md transition-colors disabled:opacity-40',
+        'flex size-9 items-center justify-center rounded-md transition-colors disabled:opacity-40 [&>svg]:size-[1.1rem]',
         active ? 'bg-amber-500 text-stone-950' : 'text-stone-300 hover:bg-stone-800 hover:text-stone-50',
       )}
     >
       {children}
     </button>
   );
+}
+
+/** Pen thickness in squares. */
+const PEN_SIZES = [
+  { v: 0.05, label: 'Fine pen' },
+  { v: 0.1, label: 'Normal pen' },
+  { v: 0.2, label: 'Thick pen' },
+  { v: 0.4, label: 'Marker' },
+];
+const PEN_KEY = 'dndocs-pen';
+function savedPen() {
+  try {
+    const v = Number(localStorage.getItem(PEN_KEY));
+    return PEN_SIZES.some((p) => p.v === v) ? v : 0.1;
+  } catch {
+    return 0.1;
+  }
 }
 
 const DRAW_SHAPES: { kind: Drawing['kind']; label: string; icon: React.ElementType }[] = [
@@ -302,6 +329,15 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
   const [tool, setTool] = useState<Tool>('select');
   const [drawKind, setDrawKind] = useState<Drawing['kind']>('free');
   const [ink, setInk] = useState(INK_COLORS[0]);
+  const [pen, setPenState] = useState(savedPen);
+  const setPen = (v: number) => {
+    setPenState(v);
+    try {
+      localStorage.setItem(PEN_KEY, String(v));
+    } catch {
+      /* ignore */
+    }
+  };
   const [fogReveal, setFogReveal] = useState(true);
   const [fogSize, setFogSize] = useState(1);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -321,6 +357,10 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
   const [busy, setBusy] = useState(false);
   const [importing, setImporting] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  // Pointing at a row in the initiative list spotlights that token; pointing at a token on the map
+  // highlights its row.
+  const [spotlightId, setSpotlightId] = useState<string | null>(null);
+  const [mapHoverId, setMapHoverId] = useState<string | null>(null);
   const [entryOpen, setEntryOpen] = useState<string | null>(null);
   // In full screen the side panel would open behind the map, so entries open in a dialog instead.
   const openEntry = (e: Entity) => (fullscreen ? setEntryOpen(e.id) : peek(e));
@@ -335,6 +375,11 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
   const rulerTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const fogRef = useRef<FogMask | null>(null);
   const measuring = useRef(false);
+  /** Click-to-click ruler: it follows the mouse until a double-click, Enter or Escape. */
+  const clickRuler = useRef(false);
+  const lastRulerDown = useRef<{ at: number; x: number; y: number } | null>(null);
+  const removeWaypointRef = useRef<() => void>(() => undefined);
+  const finishRulerRef = useRef<() => void>(() => undefined);
   const dwellTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const draftOrigin = useRef<Pt | null>(null);
   const [beamWidth, setBeamWidth] = useState(1);
@@ -368,19 +413,28 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
   const undoRef = useRef(undo);
   undoRef.current = undo;
 
-  // Ruler waypoints: right-click (while still holding the left button) or Space / W.
+  // Ruler turning points. Dragging: right-click (left button still held) or Space / W adds one.
+  // Click-to-click: right-click or Backspace takes the last one back, Enter finishes.
   useEffect(() => {
     if (tool !== 'measure') return;
     const onDown = (e: MouseEvent) => {
       if (e.button === 2 && measuring.current) {
         e.preventDefault();
-        addWaypointRef.current();
+        if (clickRuler.current) removeWaypointRef.current();
+        else addWaypointRef.current();
       }
     };
     const onKey = (e: KeyboardEvent) => {
-      if ((e.key === ' ' || e.key === 'w') && measuring.current) {
+      if (!measuring.current) return;
+      if (e.key === ' ' || e.key === 'w') {
         e.preventDefault();
         addWaypointRef.current();
+      } else if (e.key === 'Backspace') {
+        e.preventDefault();
+        removeWaypointRef.current();
+      } else if (e.key === 'Enter' && clickRuler.current) {
+        e.preventDefault();
+        finishRulerRef.current();
       }
     };
     const noMenu = (e: MouseEvent) => measuring.current && e.preventDefault();
@@ -502,6 +556,22 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
   // --- tools ------------------------------------------------------------------------
   const share = (mark: Parameters<typeof sendLiveMark>[3]) => user && sendLiveMark(scene.id, user, scene.campaignId, mark).catch((err) => toast.error(err, 'Share on the map'));
 
+  /** Click-to-click ruler: the end follows the mouse. */
+  const onRulerHover = (cx: number, cy: number) => {
+    if (!clickRuler.current || !measuring.current) return;
+    const api = apiRef.current;
+    const board = boardRef.current;
+    if (!api || !board) return;
+    const p = cellAt(api, board, cx, cy);
+    const q = grid.snap ? snapToCellCenter(p) : p;
+    setRuler((r) => {
+      if (!r) return r;
+      const last = r.pts[r.pts.length - 1];
+      if (last.x === q.x && last.y === q.y) return r;
+      const pts = [...r.pts.slice(0, -1), q];
+      return { pts, label: rulerLabel(pts) };
+    });
+  };
   /** Ruler total: each leg by the table's diagonal rule. */
   const rulerLabel = (pts: Pt[]) => {
     let ft = 0;
@@ -510,6 +580,39 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
   };
   /** Pin the ruler's current end as a waypoint and carry on measuring from there. */
   addWaypointRef.current = () => addWaypoint();
+  removeWaypointRef.current = () => removeWaypoint();
+  finishRulerRef.current = () => finishRuler();
+  /** Take back the last turning point (or the whole ruler when there is none). */
+  const removeWaypoint = () => {
+    const r = rulerRef.current;
+    if (!r || !measuring.current) return;
+    if (r.pts.length <= 2) {
+      measuring.current = false;
+      clickRuler.current = false;
+      setRuler(null);
+      return;
+    }
+    const pts = [...r.pts.slice(0, -2), r.pts[r.pts.length - 1]];
+    setRuler({ pts, label: rulerLabel(pts) });
+  };
+  /** Done measuring: the ruler stays a few seconds (and players share it with the table). */
+  const finishRuler = () => {
+    const r = rulerRef.current;
+    measuring.current = false;
+    clickRuler.current = false;
+    if (!r) return;
+    // A double click leaves the same point twice: drop repeats.
+    const pts = r.pts.filter((p, i) => i === 0 || p.x !== r.pts[i - 1].x || p.y !== r.pts[i - 1].y);
+    if (pts.length < 2) return setRuler(null);
+    const done = { pts, label: rulerLabel(pts) };
+    setRuler(done);
+    const a = pts[0];
+    const b = pts[pts.length - 1];
+    // Players' rulers are shared with the table. The DM's stay private: a line between hidden
+    // monsters would give them away (the DM can ping to point at something).
+    if (!isDM) share({ kind: 'measure', x: a.x, y: a.y, x2: b.x, y2: b.y, label: done.label, pts: pts.length > 2 ? encodePoints(pts) : undefined });
+    rulerTimer.current = setTimeout(() => setRuler(null), 5000);
+  };
   const addWaypoint = () =>
     setRuler((r) => {
       if (!r || !measuring.current) return r;
@@ -545,10 +648,26 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
     if (!api || !board) return;
     const p = cellAt(api, board, cx, cy);
     if (tool === 'measure') {
+      // Two ways to measure: hold and drag (right-click or Space for a turning point), or click
+      // once and the ruler follows the mouse: each click turns, right-click takes the last turn
+      // back, a double-click or Enter finishes, Escape cancels.
       const q = grid.snap ? snapToCellCenter(p) : p;
       clearTimeout(rulerTimer.current);
       clearTimeout(dwellTimer.current);
       if (phase === 'down') {
+        const now = Date.now();
+        const prevDown = lastRulerDown.current;
+        lastRulerDown.current = { at: now, x: cx, y: cy };
+        if (clickRuler.current) {
+          if (prevDown && now - prevDown.at < 400 && Math.hypot(cx - prevDown.x, cy - prevDown.y) < 8) finishRuler();
+          else
+            setRuler((r) => {
+              if (!r) return r;
+              const pts = [...r.pts.slice(0, -1), q, q];
+              return { pts, label: rulerLabel(pts) };
+            });
+          return;
+        }
         measuring.current = true;
         setRuler({ pts: [q, q], label: '0 ft' });
       } else if (phase === 'move') {
@@ -560,17 +679,19 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
         // Touch screens have no right click: holding still for a moment drops a waypoint.
         if (pointerType === 'touch') dwellTimer.current = setTimeout(addWaypoint, 650);
       } else if (phase === 'up') {
-        measuring.current = false;
+        if (clickRuler.current) return;
         const r = rulerRef.current;
         const a = r?.pts[0];
         const b = r?.pts[r.pts.length - 1];
-        // Players' rulers are shared with the table. The DM's stay private: a line between hidden
-        // monsters would give them away (the DM can ping to point at something).
-        if (r && a && b && !isDM && (a.x !== b.x || a.y !== b.y || r.pts.length > 2))
-          share({ kind: 'measure', x: a.x, y: a.y, x2: b.x, y2: b.y, label: r.label, pts: r.pts.length > 2 ? encodePoints(r.pts) : undefined });
-        rulerTimer.current = setTimeout(() => setRuler(null), 5000);
+        // A click without dragging (mouse): start a click-to-click ruler that follows the mouse.
+        if (r && a && b && pointerType === 'mouse' && r.pts.length === 2 && a.x === b.x && a.y === b.y) {
+          clickRuler.current = true;
+          return;
+        }
+        finishRuler();
       } else {
         measuring.current = false;
+        clickRuler.current = false;
         setRuler(null);
       }
       return;
@@ -582,7 +703,7 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
     if (tool === 'draw') {
       const d = draftRef.current;
       const template = TEMPLATES.includes(drawKind);
-      if (phase === 'down') setDraft({ kind: drawKind, color: ink, points: [p, p], width: drawKind === 'beam' ? beamWidth : undefined });
+      if (phase === 'down') setDraft({ kind: drawKind, color: ink, points: [p, p], width: drawKind === 'beam' ? beamWidth : undefined, thick: template ? undefined : pen });
       else if (phase === 'move' && d) {
         setDraft((cur) => {
           if (!cur) return cur;
@@ -610,7 +731,7 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
         if (size > 0.1 || (d.kind === 'free' && pts.length > 2)) {
           // The shape shows at once (the listener has it before the server confirms), so the draft
           // goes now: waiting for the server would wipe a quick second stroke.
-          const { drawing, saved } = addDrawing(scene.id, { campaignId: scene.campaignId, by: uid, kind: d.kind, color: d.color, points: encodePoints(pts), width: d.width, shared: isDM ? drawShared : true });
+          const { drawing, saved } = addDrawing(scene.id, { campaignId: scene.campaignId, by: uid, kind: d.kind, color: d.color, points: encodePoints(pts), width: d.width, thick: d.thick, shared: isDM ? drawShared : true });
           pushUndo(template ? 'Spell area' : 'Drawing', () => deleteDrawing(scene.id, drawing.id));
           saved.catch((err) => toast.error(err, 'Save drawing'));
         }
@@ -700,6 +821,7 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
   // on Escape, so nothing is left stuck on the map.
   const stopGestures = () => {
     measuring.current = false;
+    clickRuler.current = false;
     clearTimeout(rulerTimer.current);
     clearTimeout(dwellTimer.current);
     setRuler(null);
@@ -724,6 +846,10 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === 'r' && !isDraft) {
+        openTableChat({ dice: true, toggle: true });
+        return;
+      }
       const keys: Record<string, Tool> = { v: 'select', m: 'measure', d: 'draw', p: 'ping', e: 'erase', f: 'fog' };
       if (e.key === 'Escape') {
         setArmed(null);
@@ -824,6 +950,15 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
       .then(() => toast.show(d.shared ? 'Drawing hidden from players' : 'Drawing shown to players'))
       .catch((err) => toast.error(err, 'Share drawing'));
   const selectedDrawing = drawingId ? drawings.find((d) => d.id === drawingId) : undefined;
+  // Dragging a selected drawing: it's saved as a copy at the new place (two writes), selection follows.
+  const moveSelectedDrawing = (d: Drawing, dx: number, dy: number) => {
+    moveDrawing(scene.id, d, dx, dy)
+      .then((moved) => {
+        setDrawingId(moved.id);
+        pushUndo('Drawing moved', () => moveDrawing(scene.id, moved, -dx, -dy).then(() => setDrawingId(null)));
+      })
+      .catch((err) => toast.error(err, 'Move drawing'));
+  };
   const myDrawings = drawings.filter((d) => d.by === uid);
   const eraseMine = () => {
     const list = [...myDrawings];
@@ -860,6 +995,9 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
         )}
         <ToolButton label={undoCount ? `Undo: ${undoStack.current[undoStack.current.length - 1]?.label} (Ctrl+Z)` : 'Nothing to undo'} onClick={() => undo()} disabled={!undoCount}>
           <Undo2 size={17} />
+        </ToolButton>
+        <ToolButton label="Dice and table chat (R)" onClick={() => openTableChat({ dice: true })}>
+          <Dices size={17} />
         </ToolButton>
         {(asDM || myCharacter) && <span className="mx-0.5 h-6 w-px bg-stone-700" />}
         {asDM ? (
@@ -910,6 +1048,16 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
           {INK_COLORS.map((c) => (
             <button key={c} type="button" aria-label={`Ink ${c}`} onClick={() => setInk(c)} className={clsx('m-0.5 size-6 rounded-full ring-2', ink === c ? 'ring-amber-400' : 'ring-stone-700')} style={{ background: c }} />
           ))}
+          {!TEMPLATES.includes(drawKind) && (
+            <>
+              <span className="mx-0.5 h-6 w-px bg-stone-700" />
+              {PEN_SIZES.map((p, i) => (
+                <ToolButton key={p.v} label={p.label} active={pen === p.v} onClick={() => setPen(p.v)}>
+                  <span className="block rounded-full" style={{ width: `${0.3 + i * 0.2}rem`, height: `${0.3 + i * 0.2}rem`, background: ink === '#111111' ? '#e8dcc0' : ink }} />
+                </ToolButton>
+              ))}
+            </>
+          )}
           {isDM && (
             <>
               <span className="mx-0.5 h-6 w-px bg-stone-700" />
@@ -976,11 +1124,11 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
             busy={busy}
           />
         ) : (
-          !isDraft && <InitiativeTracker scene={scene} tokens={tokens} tokensReady={tokensReady} uid={uid} asDM={asDM} entityMap={entityMap} onSelect={(id) => setSelectedId(id)} />
+          !isDraft && <InitiativeTracker scene={scene} tokens={tokens} tokensReady={tokensReady} uid={uid} asDM={asDM} entityMap={entityMap} onSelect={(id) => setSelectedId(id)} onHover={setSpotlightId} highlightId={mapHoverId} />
         )}
       </div>
-      {selectedDrawing && isDM && !selected && (
-        <div className="absolute bottom-2 left-2 w-64 rounded-xl border border-stone-700/80 bg-stone-950/95 p-3 text-sm shadow-2xl backdrop-blur pb-safe">
+      {selectedDrawing && (isDM || selectedDrawing.by === uid) && !selected && (
+        <div className="absolute bottom-2 left-2 w-72 rounded-xl border border-stone-700/80 bg-stone-950/95 p-3 text-sm shadow-2xl backdrop-blur pb-safe">
           <div className="flex items-center gap-2">
             <span className="size-4 shrink-0 rounded-full ring-2 ring-stone-700" style={{ background: selectedDrawing.color }} />
             <span className="flex-1 font-semibold text-stone-100">{selectedDrawing.by === uid ? 'Your drawing' : `Drawing by ${memberName(selectedDrawing.by)}`}</span>
@@ -988,11 +1136,16 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
               <X size={15} />
             </button>
           </div>
-          <p className="mt-1 text-xs text-stone-400">{selectedDrawing.shared ? 'Players can see it.' : 'Only you can see it.'} Right-click a drawing to switch quickly.</p>
+          <p className="mt-1 text-xs text-stone-400">
+            Drag it to move it.{' '}
+            {isDM && <>{selectedDrawing.shared ? 'Players can see it.' : 'Only you can see it.'} Right-click a drawing to switch quickly.</>}
+          </p>
           <div className="mt-2 flex gap-1.5">
-            <button type="button" className="btn btn-secondary btn-sm flex-1" onClick={() => toggleShare(selectedDrawing)}>
-              {selectedDrawing.shared ? <EyeOff size={13} /> : <Eye size={13} />} {selectedDrawing.shared ? 'Hide from players' : 'Show to players'}
-            </button>
+            {isDM && (
+              <button type="button" className="btn btn-secondary btn-sm flex-1" onClick={() => toggleShare(selectedDrawing)}>
+                {selectedDrawing.shared ? <EyeOff size={13} /> : <Eye size={13} />} {selectedDrawing.shared ? 'Hide from players' : 'Show to players'}
+              </button>
+            )}
             <button
               type="button"
               className="btn btn-ghost btn-sm text-rose-300"
@@ -1026,6 +1179,23 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
             combat={scene.combat}
             feetPerSquare={grid.feet}
           />
+        </div>
+      )}
+      {ruler && ruler.pts.length > 1 && ruler.label !== '0 ft' && (
+        // The measurement, big and the same size at any zoom: when you measure, it's the number you want.
+        <div className="pointer-events-none absolute top-16 left-1/2 -translate-x-1/2 sm:top-3" aria-live="polite">
+          <div className="flex flex-col items-center rounded-2xl border border-stone-600/70 bg-stone-950/92 px-5 py-2 text-center shadow-2xl backdrop-blur">
+            <div className="font-display text-4xl leading-tight font-bold text-stone-50 tabular-nums">{ruler.label}</div>
+            <div className="text-sm text-stone-400 tabular-nums">
+              {(() => {
+                const legs = ruler.pts.slice(1).map((p, i) => distanceFeet(ruler.pts[i], p, grid)).filter((ft) => ft > 0);
+                const ft = legs.reduce((a, b) => a + b, 0);
+                const squares = Math.round(ft / (grid.feet || 5));
+                return `${squares} square${squares === 1 ? '' : 's'}${legs.length > 1 ? ` · ${legs.join(' + ')} ft` : ''}`;
+              })()}
+            </div>
+            {clickRuler.current && measuring.current && <div className="mt-0.5 text-xs text-stone-500">Click to turn · right-click: undo a turn · double-click: done</div>}
+          </div>
         </div>
       )}
       {armed && (
@@ -1084,6 +1254,7 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
           crosshair={!!armed}
           onMapClick={(x, y) => (armed ? placeArmed(x, y) : (setSelectedId(null), setDrawingId(null)))}
           onTool={gridDragOn ? onGridDrag : !isDraft && tool !== 'select' ? onTool : null}
+          onHover={tool === 'measure' ? onRulerHover : null}
           toolbar={toolbar}
           overlay={overlay}
           layers={(api) => (
@@ -1141,7 +1312,10 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
                 deleteDrawing(scene.id, d.id).catch((err) => toast.error(err, 'Erase drawing'));
               }}
               selectedDrawingId={drawingId}
-              onDrawingSelect={isDM ? (d) => (setDrawingId(d.id), setSelectedId(null)) : undefined}
+              onDrawingSelect={(d) => (setDrawingId(d.id), setSelectedId(null))}
+              onDrawingMove={moveSelectedDrawing}
+              spotlightId={spotlightId}
+              onTokenHover={setMapHoverId}
               onDrawingShare={isDM ? toggleShare : undefined}
               onDiscovered={isDM && !isDraft ? (ids) => markKnown(scene.id, ids).catch(() => undefined) : undefined}
             />

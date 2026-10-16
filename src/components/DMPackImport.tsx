@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useCampaignData } from '../contexts/CampaignDataContext';
 import { useConfirm } from '../contexts/ConfirmContext';
 import { useToast } from '../contexts/ToastContext';
-import { buildPlan, isPackEntityId, parsePackText, type ImportPlan } from '../lib/campaignImport';
+import { buildPlan, isPackEntityId, packScope, parsePackText, type ImportPlan } from '../lib/campaignImport';
 import { needsUpdate, removePack, runImport, type ImportMode, type ImportSummary } from '../lib/campaignImportWrite';
 import { typeMeta } from '../lib/entityTypes';
 import { bulk } from '../lib/dbMeter';
@@ -28,7 +28,7 @@ export default function DMPackImport() {
 
   const existingIds = useMemo(() => new Set(entities.map((e) => e.id)), [entities]);
   const alreadyThere = plan ? plan.entities.filter((e) => existingIds.has(e.id)).length : 0;
-  const importedBefore = plan?.pack ? entities.filter((e) => isPackEntityId(plan.pack!.id, e.id)).length : 0;
+  const importedBefore = plan?.pack ? entities.filter((e) => isPackEntityId(plan.pack!.scope, e.id)).length : 0;
   // Entries whose text differs from the pack (only these are written on "refresh").
   const changed = useMemo(() => {
     if (!plan) return 0;
@@ -43,7 +43,7 @@ export default function DMPackImport() {
   const diff = useMemo(() => {
     const none = { newRels: 0, changedRels: 0, staleRels: 0, missing: [] as string[] };
     if (!plan?.pack) return none;
-    const packId = plan.pack.id;
+    const packId = plan.pack.scope;
     const have = new Map(relationships.map((x) => [x.id, x]));
     const planRels = new Set(plan.relationships.map((x) => x.id));
     const inPack = new Set(plan.entities.map((e) => e.id));
@@ -89,7 +89,9 @@ export default function DMPackImport() {
       setFatal(error);
       return;
     }
-    setPlan(buildPlan(raw, { campaignId: currentCampaign.id, uid: user.uid }));
+    const packId = (raw as { pack?: { id?: unknown } } | null)?.pack?.id;
+    const idScope = typeof packId === 'string' ? packScope(packId, currentCampaign.id, existingIds) : undefined;
+    setPlan(buildPlan(raw, { campaignId: currentCampaign.id, uid: user.uid, idScope }));
   };
 
   const doImport = async () => {
@@ -156,7 +158,7 @@ export default function DMPackImport() {
     if (!ok) return;
     setBusy('remove');
     try {
-      const r = await bulk('removing a pack', () => removePack(plan.pack.id, currentCampaign.id, { entities }));
+      const r = await bulk('removing a pack', () => removePack(plan.pack.scope, currentCampaign.id, { entities }));
       if (r.failed) toast.error(new Error(`${r.failed} items couldn't be removed. Try again.`), 'Remove pack');
       else toast.success(`Removed ${r.entities} entries, ${r.relationships} links and ${r.maps} maps.`);
       setSummary(null);
