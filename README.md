@@ -134,6 +134,12 @@ Icons: [game-icons.net](https://game-icons.net) by Lorc, Delapouite and contribu
   - The DM is the bank: in the Codex's DM tools (*Hand out*, and the trader) the DM gives and takes
     items and coin for the party or any player, and sees what every player carries. Item entries linked to the
     Codex also get *Give to…* (DM), which puts the item straight into a player's or the party's satchel.
+  - **Unidentified and cursed items:** when the DM gives a magic item to a player in the Codex, it can
+    go *unidentified* (the player sees only how it looks, like "Unidentified ring · Rare") and/or with
+    a *curse* the DM types. What the item really is and any hidden curse are kept in
+    `codex/{campaign}/secrets/unid`, which only DMs can read, so they never reach the player's device.
+    DM tools → *Hand out* → *Unidentified & cursed* has *Identify*, *Reveal curse*, *Take back* and
+    *Lift curse*. (Needs the current `firestore.rules`.)
   - A player character's page shows what that player carries in the Codex (satchel and purse) under
     *Carried*, with *Open my satchel*. Only the player and the DM see it. Item entries the DM placed
     on the character are listed there too.
@@ -209,7 +215,7 @@ The Scavenger's Codex adds `codex/{campaignId}` (the party: everyone in the camp
 writes it; only DMs change which homebrew is in play), `codex/{campaignId}/satchels/{uid}` (a
 player's own satchel and purse: theirs and the DM's), `codex/{campaignId}/satchels/{uid}/inbox/{id}`
 (gifts: anyone in the campaign can leave one, signed with their own uid; only the receiver and the
-DM can read or take them) and `codex/{campaignId}/packs/{name}` (the DM's homebrew).
+DM can read or take them; the party document also holds the party's goals) and `codex/{campaignId}/packs/{name}` (the DM's homebrew).
 Deploy the rules with the app, or the Codex can't save.
 
 ### Table chat and dice (Realtime Database)

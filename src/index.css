@@ -209,6 +209,14 @@
     radial-gradient(120% 80% at 0% 0%, rgb(255 220 160 / 0.06), transparent 60%),
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.1 0 0 0 0 0.06 0 0 0 0 0.03 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
+/* Text fields in the leather frame (the table chat, its dice): a dark well with light ink, like the
+   search bar. Without this the frame's light ink lands on the parchment field and typing is invisible. */
+.leather .input {
+  background-color: #150d08;
+  border-color: var(--color-stone-600);
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.55);
+}
+.leather .input::placeholder { color: var(--color-stone-500); }
 .leather-edge-r { box-shadow: inset -1px 0 0 rgb(217 178 95 / 0.25), inset -5px 0 0 #1a110b, inset -6px 0 0 rgb(217 178 95 / 0.18); }
 .leather-edge-b { box-shadow: inset 0 -1px 0 rgb(217 178 95 / 0.3), 0 2px 8px rgb(40 22 10 / 0.35); }
 .leather-edge-t { box-shadow: inset 0 1px 0 rgb(217 178 95 / 0.3), 0 -2px 8px rgb(40 22 10 / 0.3); }

@@ -17,6 +17,8 @@
  *   DnDocs → Codex   { type: 'dndocs:give', id, ok, error? }     (the codex gives it back if not ok)
  *   Codex  → DnDocs  { type: 'codex:bank', move: { id, uid, items, cp } }   DM: give to / take from a player
  *   DnDocs → Codex   { type: 'dndocs:bank', id, ok, error? }
+ *   Codex  → DnDocs  { type: 'codex:unid', req }   DM: hand out unidentified/cursed, identify, reveal …
+ *   DnDocs → Codex   { type: 'dndocs:unid', ok, error? }
  *
  * The frame is sandboxed without allow-same-origin, so the codex can't read DnDocs' sign-in even
  * though both live on justushellman.github.io. Messages are only accepted from that frame.
@@ -36,6 +38,7 @@ import { CODEX_URL, codexFrameUrl } from '../lib/codex/catalog';
 import {
   applyPartyOps,
   applySatchelOps,
+  applySecretOps,
   cleanGift,
   cleanBankMove,
   packsCol,
@@ -43,8 +46,13 @@ import {
   partyRef,
   satchelRef,
   savePacks,
+  secretsRef,
 } from '../lib/codex/service';
 import {
+  cleanCurses,
+  cleanLooks,
+  cleanSecrets,
+  cleanUnidRequest,
   codexKeys,
   type CodexParty,
   KEY_HOMEBREW,
@@ -57,6 +65,8 @@ import {
   pruneZeroOps,
   satchelOps,
   type SatchelDoc,
+  type SecretsDoc,
+  unidPlan,
 } from '../lib/codex/state';
 
 const positiveItems = (m?: Record<string, number>) => Object.fromEntries(Object.entries(m ?? {}).filter(([, v]) => Number(v) > 0));
@@ -130,7 +140,7 @@ export default function CodexPage() {
           uid: m.uid,
           name: chars.length ? `${chars.join(', ')} (${m.displayName})` : m.displayName,
           role: dms.has(m.uid) ? 'dm' : 'player',
-          ...(isDM ? { items: positiveItems(sat?.items), cp: Math.max(0, Math.floor(Number(sat?.cp) || 0)) } : {}),
+          ...(isDM ? { items: positiveItems(sat?.items), cp: Math.max(0, Math.floor(Number(sat?.cp) || 0)), unid: cleanLooks(sat?.unid), curses: cleanCurses(sat?.curses) } : {}),
         };
       })
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -143,6 +153,8 @@ export default function CodexPage() {
     party: null as PartyDoc | null,
     satchel: null as SatchelDoc | null,
     packs: [] as PackDoc[],
+    /** DM only. */
+    secrets: null as SecretsDoc | null,
     loaded: { party: false, satchel: false, packs: false },
     pending: false,
     helloSent: false,
@@ -158,7 +170,7 @@ export default function CodexPage() {
   const post = (msg: unknown) => frame.current?.contentWindow?.postMessage(msg, sandboxed ? '*' : CODEX_ORIGIN);
 
   const allLoaded = () => s.current.loaded.party && s.current.loaded.satchel && s.current.loaded.packs;
-  const keysNow = () => codexKeys(s.current.party, s.current.satchel, s.current.packs);
+  const keysNow = () => codexKeys(s.current.party, s.current.satchel, s.current.packs, isDM ? s.current.secrets : undefined);
 
   const sendHello = () => {
     if (!allLoaded() || !currentCampaign || !user) return;
@@ -239,10 +251,22 @@ export default function CodexPage() {
         after();
       },
     );
+    // DM: what the unidentified items really are (players can't read this at all).
+    const u4 = isDM
+      ? onSnapshot(
+          secretsRef(campaignId),
+          (snap) => {
+            st.secrets = snap.exists() ? (snap.data() as SecretsDoc) : null;
+            if (!snap.metadata.hasPendingWrites) after();
+          },
+          () => undefined,
+        )
+      : () => undefined;
     return () => {
       u1();
       u2();
       u3();
+      u4();
     };
   }, [campaignId, uid, isDM]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -318,6 +342,22 @@ export default function CodexPage() {
           post({ type: 'dndocs:bank', id: move.id, ok: true });
         } catch (err) {
           post({ type: 'dndocs:bank', id: typeof raw?.id === 'string' ? raw.id : '', ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
+      } else if (d.type === 'codex:unid' && isDM) {
+        try {
+          const req = cleanUnidRequest((d as { req?: unknown }).req);
+          if (!req) throw new Error('That didn’t look right');
+          const secrets = cleanSecrets(s.current.secrets?.items);
+          const owner = req.action === 'give' || req.action === 'lift' ? req.uid : secrets[req.key]?.uid;
+          const who = membersRef.current.find((m) => m.uid === owner && m.role !== 'dm');
+          if (!who) throw new Error('That player isn’t in this campaign');
+          const plan = unidPlan(req, secrets, who, { now: Date.now(), newKey: () => Date.now().toString(36) + Math.random().toString(36).slice(2, 9) });
+          // The satchel first: if that fails, the secret list still matches what they carry.
+          if (plan.satchel.length) await applySatchelOps(campaignId, plan.uid, plan.satchel);
+          if (plan.secrets.length) await applySecretOps(campaignId, plan.secrets);
+          post({ type: 'dndocs:unid', ok: true });
+        } catch (err) {
+          post({ type: 'dndocs:unid', ok: false, error: err instanceof Error ? err.message : String(err) });
         }
       } else if (d.type === 'codex:entry' && (d as { action?: string }).action === 'handout' && isDM) {
         const h = (d as { handout?: Partial<HandoutDraft> }).handout;

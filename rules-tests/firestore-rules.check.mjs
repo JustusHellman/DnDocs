@@ -368,6 +368,11 @@ describe("Scavenger's Codex", () => {
     await assertFails(getDoc(mine('p2', 'p1')));
     await assertFails(updateDoc(mine('p2', 'p1'), { 'items.healers-moss': 0 }));
   });
+  it('the party can keep goals', async () => {
+    await assertSucceeds(setDoc(party('p1'), { items: {}, clock: 8, goals: { 'cloak-of-elvenkind': true } }));
+    await assertSucceeds(updateDoc(party('p2'), { 'goals.rope': true }));
+    await assertFails(updateDoc(party('p1'), { goals: 'cloak' }));
+  });
   it('purses are whole copper pieces', async () => {
     await assertSucceeds(setDoc(party('p1'), { items: {}, clock: 8, cp: 1250 }));
     await assertFails(updateDoc(party('p1'), { cp: 'lots' }));
@@ -385,6 +390,20 @@ describe("Scavenger's Codex", () => {
     await assertSucceeds(getDocs(collection(as('p2'), 'codex/c1/satchels/p2/inbox')));
     await assertFails(updateDoc(doc(as('p2'), 'codex/c1/satchels/p2/inbox/g1'), { cp: 100 }));
     await assertSucceeds(deleteDoc(doc(as('p2'), 'codex/c1/satchels/p2/inbox/g1')));
+  });
+  it('unidentified items: the real thing is the DM’s secret', async () => {
+    const sec = (uid, id = 'unid') => doc(as(uid), `codex/c1/secrets/${id}`);
+    await assertSucceeds(setDoc(sec('dm'), { items: { k1abcdef: { uid: 'p1', id: 'ring-of-protection', state: 'unid', at: 1 } } }));
+    await assertSucceeds(getDoc(sec('dm')));
+    await assertFails(getDoc(sec('p1')));
+    await assertFails(updateDoc(sec('p1'), { 'items.k1abcdef': null }));
+    await assertFails(setDoc(sec('dm', 'other'), { items: {} }));
+    await assertFails(setDoc(sec('dm'), { items: {}, extra: 1 }));
+    // What the player sees: just the look, in their own satchel.
+    await assertSucceeds(setDoc(doc(as('dm'), 'codex/c1/satchels/p1'), { items: {}, prefs: {}, unid: { k1abcdef: { name: 'Unidentified ring', tier: 'rare' } }, curses: {} }));
+    await assertSucceeds(getDoc(doc(as('p1'), 'codex/c1/satchels/p1')));
+    await assertFails(getDoc(doc(as('p2'), 'codex/c1/satchels/p1')));
+    await assertFails(updateDoc(doc(as('dm'), 'codex/c1/satchels/p1'), { unid: 'ring' }));
   });
   it('homebrew packs: the DM adds them, everyone loads them', async () => {
     await assertSucceeds(setDoc(doc(as('dm'), 'codex/c1/packs/swamp'), { name: 'swamp', addedAt: now, data: '{}' }));

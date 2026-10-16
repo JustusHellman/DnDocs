@@ -19,6 +19,14 @@ export const KEY_SATCHEL = 'scavengers-codex.satchel.v1';
 export const KEY_HOMEBREW = 'scavengers-codex.homebrew';
 /** A player's coin purse, in copper pieces. */
 export const KEY_PURSE = 'scavengers-codex.purse.v1';
+/** A player's unidentified items: only how they look (name, maybe rarity), never what they are. */
+export const KEY_UNID = 'scavengers-codex.unid.v1';
+/** Curses the DM has revealed to this player, by item id. */
+export const KEY_CURSES = 'scavengers-codex.curses.v1';
+/** DM only: what every unidentified item really is, and curses not yet revealed. */
+export const KEY_SECRETS = 'scavengers-codex.dmsecrets.v1';
+/** Written by DnDocs alone (codex:unid), never saved back from the codex. */
+const HOST_KEYS = new Set([KEY_UNID, KEY_CURSES, KEY_SECRETS]);
 /** Keys that are about this device only, never saved to the campaign. */
 const DEVICE_KEYS = new Set(['scavengers-codex.dmUnlocked', 'scavengers-codex.localPin', 'scavengers-codex.siteUrl', KEY_PARTY_CODE]);
 
@@ -38,6 +46,8 @@ export interface CodexParty {
   packs?: string[] | null;
   /** The party purse, in copper pieces. */
   cp?: number;
+  /** What the party is working towards (codex item ids). */
+  goals?: string[];
 }
 
 /**
@@ -58,6 +68,7 @@ export interface PartyDoc {
   spoil?: boolean | null;
   packs?: string[] | null;
   cp?: number;
+  goals?: Record<string, boolean>;
   updatedAt?: unknown;
 }
 
@@ -67,6 +78,34 @@ export interface SatchelDoc {
   prefs?: Record<string, string>;
   /** The player's purse, in copper pieces. */
   cp?: number;
+  /** Unidentified items, by a random key: how they look, nothing more. */
+  unid?: Record<string, UnidLook>;
+  /** Revealed curses, by item id. */
+  curses?: Record<string, string>;
+}
+
+/** What a player sees of an unidentified item. */
+export interface UnidLook {
+  name: string;
+  /** Left out when the DM keeps the rarity hidden too. */
+  tier?: string;
+  att?: boolean;
+  at?: number;
+}
+
+/** DM only (codex/{campaignId}/secrets/unid → items): what a handed-out item really is. */
+export interface SecretEntry {
+  uid: string;
+  id: string;
+  /** unid: still unidentified. known: identified, but its curse is still hidden. */
+  state: 'unid' | 'known';
+  curse?: string;
+  /** How it looks to the player (for unidentified ones). */
+  look?: string;
+  at: number;
+}
+export interface SecretsDoc {
+  items?: Record<string, SecretEntry>;
 }
 
 export interface PackDoc {
@@ -130,6 +169,7 @@ export function toCodexParty(d: PartyDoc | null | undefined): CodexParty {
     spoil: doc.spoil ?? null,
     packs: Array.isArray(doc.packs) ? doc.packs : null,
     cp: coins(doc.cp),
+    goals: trueKeys(doc.goals).sort(),
   };
 }
 
@@ -182,6 +222,7 @@ export function partyOps(prev: CodexParty | null, next: CodexParty | null, opts:
     ...countOps('items', a.items, b.items),
     ...setOps('learned', a.learned, b.learned),
     ...setOps('known', a.known, b.known),
+    ...setOps('goals', a.goals, b.goals),
     ...mapOps('research', a.research, b.research),
     ...mapOps('stamps', a.stamps, b.stamps, (v) => JSON.stringify(v)),
     ...listOps('projects', a.projects, b.projects, now),
@@ -215,7 +256,7 @@ export function pruneZeroOps(field: string, m?: Record<string, number>): FieldOp
 }
 
 export function isPrefKey(key: string) {
-  return key.startsWith('scavengers-codex.') && !DEVICE_KEYS.has(key) && key !== KEY_PARTY && key !== KEY_SATCHEL && key !== KEY_HOMEBREW && key !== KEY_PURSE && !key.startsWith('scavengers-codex.party.v1.');
+  return key.startsWith('scavengers-codex.') && !DEVICE_KEYS.has(key) && !HOST_KEYS.has(key) && key !== KEY_PARTY && key !== KEY_SATCHEL && key !== KEY_HOMEBREW && key !== KEY_PURSE && !key.startsWith('scavengers-codex.party.v1.');
 }
 
 /** What to write to a player's satchel document. */
@@ -247,7 +288,7 @@ export function packChanges(prev: unknown, next: unknown): { put: CodexPack[]; r
 }
 
 /** Everything the codex needs at start-up (or after a change), as its own storage keys. */
-export function codexKeys(party: PartyDoc | null, satchel: SatchelDoc | null, packs: PackDoc[]): Record<string, unknown> {
+export function codexKeys(party: PartyDoc | null, satchel: SatchelDoc | null, packs: PackDoc[], secrets?: SecretsDoc | null): Record<string, unknown> {
   const keys: Record<string, unknown> = {
     [KEY_PARTY_CODE]: PARTY_CODE,
     [KEY_PARTY]: toCodexParty(party),
@@ -257,6 +298,10 @@ export function codexKeys(party: PartyDoc | null, satchel: SatchelDoc | null, pa
       .map((p) => ({ name: p.name, addedAt: p.addedAt, data: parse(p.data) }))
       .filter((p) => p.data && typeof p.data === 'object'),
   };
+  keys[KEY_UNID] = cleanLooks(satchel?.unid);
+  keys[KEY_CURSES] = cleanCurses(satchel?.curses);
+  // Only the DM's DnDocs passes these (players can't even read them).
+  if (secrets !== undefined) keys[KEY_SECRETS] = cleanSecrets(secrets?.items);
   for (const [k, v] of Object.entries(satchel?.prefs ?? {})) if (isPrefKey(k)) keys[k] = parse(v);
   return keys;
 }
@@ -272,4 +317,118 @@ export function fmtCoins(cp: number | null | undefined) {
   if (!c) return '0 gp';
   const gp = Math.floor(c / 100), sp = Math.floor((c % 100) / 10), cc = c % 10;
   return [gp && `${gp.toLocaleString('en-US')} gp`, sp && `${sp} sp`, cc && `${cc} cp`].filter(Boolean).join(' ');
+}
+
+/* ---- unidentified and cursed items (codex:unid, DM only) ---- */
+
+const ITEM_ID = /^[a-z0-9-]{1,80}$/;
+const UNID_KEY = /^[a-z0-9]{6,40}$/;
+const TIERS = new Set(['mundane', 'common', 'uncommon', 'rare', 'very-rare', 'legendary', 'artifact']);
+const text = (v: unknown, max: number) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : '');
+
+export function cleanLooks(m?: Record<string, unknown> | null): Record<string, UnidLook> {
+  const out: Record<string, UnidLook> = {};
+  for (const [k, v] of Object.entries(m ?? {})) {
+    const l = v as Partial<UnidLook> | null;
+    const name = l && text(l.name, 80);
+    if (!UNID_KEY.test(k) || !name) continue;
+    out[k] = { name, ...(typeof l.tier === 'string' && TIERS.has(l.tier) ? { tier: l.tier } : {}), ...(l.att ? { att: true } : {}), ...(typeof l.at === 'number' ? { at: l.at } : {}) };
+  }
+  return out;
+}
+export function cleanCurses(m?: Record<string, unknown> | null): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(m ?? {})) {
+    const t = text(v, 600);
+    if (ITEM_ID.test(k) && t) out[k] = t;
+  }
+  return out;
+}
+export function cleanSecrets(m?: Record<string, unknown> | null): Record<string, SecretEntry> {
+  const out: Record<string, SecretEntry> = {};
+  for (const [k, v] of Object.entries(m ?? {})) {
+    const e = v as Partial<SecretEntry> | null;
+    if (!UNID_KEY.test(k) || !e || typeof e.uid !== 'string' || typeof e.id !== 'string' || !ITEM_ID.test(e.id)) continue;
+    const curse = text(e.curse, 600), look = text(e.look, 80);
+    out[k] = { uid: e.uid, id: e.id, state: e.state === 'known' ? 'known' : 'unid', at: typeof e.at === 'number' ? e.at : 0, ...(curse ? { curse } : {}), ...(look ? { look } : {}) };
+  }
+  return out;
+}
+
+/** What the DM asked for, checked. */
+export type UnidRequest =
+  | { action: 'give'; uid: string; id: string; q: number; look: Omit<UnidLook, 'at'> | null; curse: string }
+  | { action: 'identify' | 'reveal' | 'take' | 'forget'; key: string }
+  | { action: 'lift'; uid: string; id: string };
+
+export function cleanUnidRequest(raw: unknown): UnidRequest | null {
+  const r = raw as Record<string, unknown> | null;
+  if (!r || typeof r.action !== 'string') return null;
+  if (r.action === 'give') {
+    if (typeof r.uid !== 'string' || !r.uid || typeof r.id !== 'string' || !ITEM_ID.test(r.id)) return null;
+    const q = Math.floor(Number(r.q));
+    if (!(q >= 1 && q <= 10)) return null;
+    const l = r.look as Partial<UnidLook> | null | undefined;
+    const name = l ? text(l.name, 80) : '';
+    const look = l ? (name ? { name, ...(typeof l.tier === 'string' && TIERS.has(l.tier) ? { tier: l.tier } : {}), ...(l.att ? { att: true } : {}) } : null) : null;
+    if (l && !look) return null;
+    const curse = text(r.curse, 600);
+    if (!look && !curse) return null;
+    return { action: 'give', uid: r.uid, id: r.id, q, look, curse };
+  }
+  if (r.action === 'lift') return typeof r.uid === 'string' && r.uid && typeof r.id === 'string' && ITEM_ID.test(r.id) ? { action: 'lift', uid: r.uid, id: r.id } : null;
+  if (['identify', 'reveal', 'take', 'forget'].includes(r.action)) return typeof r.key === 'string' && UNID_KEY.test(r.key) ? { action: r.action as 'identify', key: r.key } : null;
+  return null;
+}
+
+/**
+ * The writes for one request: to the player's satchel and to the DM's secrets. Throws a readable
+ * error when it can't be done (already identified, not theirs any more …).
+ */
+export function unidPlan(req: UnidRequest, secrets: Record<string, SecretEntry>, holder: { unid?: Record<string, UnidLook> } | null, opts: { now: number; newKey: () => string }) {
+  const sat: FieldOp[] = [];
+  const sec: FieldOp[] = [];
+  let uid: string;
+  if (req.action === 'give') {
+    uid = req.uid;
+    if (req.look) {
+      for (let i = 0; i < req.q; i++) {
+        const k = opts.newKey();
+        sat.push({ path: ['unid', k], set: { ...req.look, at: opts.now } });
+        sec.push({ path: ['items', k], set: { uid, id: req.id, state: 'unid', at: opts.now, look: req.look.name, ...(req.curse ? { curse: req.curse } : {}) } });
+      }
+    } else {
+      // Known to the player, but cursed: it goes in the satchel as usual, the curse stays with the DM.
+      sat.push({ path: ['items', req.id], inc: req.q });
+      sec.push({ path: ['items', opts.newKey()], set: { uid, id: req.id, state: 'known', at: opts.now, curse: req.curse } });
+    }
+    return { uid, satchel: sat, secrets: sec };
+  }
+  if (req.action === 'lift') return { uid: req.uid, satchel: [{ path: ['curses', req.id], del: true }] as FieldOp[], secrets: sec };
+  const e = secrets[req.key];
+  if (!e) throw new Error('That item isn’t on the list any more.');
+  uid = e.uid;
+  const held = e.state !== 'unid' || !!holder?.unid?.[req.key];
+  if (req.action === 'forget') {
+    if (e.state === 'unid' && held) throw new Error('Identify it or take it back instead.');
+    sec.push({ path: ['items', req.key], del: true });
+  } else if (req.action === 'take') {
+    if (e.state !== 'unid') throw new Error('Take it back from DM tools → Hand out.');
+    if (held) sat.push({ path: ['unid', req.key], del: true });
+    sec.push({ path: ['items', req.key], del: true });
+  } else {
+    if (!held) throw new Error('They don’t carry it any more.');
+    if (e.state === 'unid') {
+      sat.push({ path: ['unid', req.key], del: true }, { path: ['items', e.id], inc: 1 });
+    }
+    if (req.action === 'reveal') {
+      if (!e.curse) throw new Error('It has no curse.');
+      sat.push({ path: ['curses', e.id], set: e.curse });
+      sec.push({ path: ['items', req.key], del: true });
+    } else if (e.state !== 'unid') {
+      throw new Error('It’s already identified.');
+    } else if (e.curse) sec.push({ path: ['items', req.key, 'state'], set: 'known' });
+    else sec.push({ path: ['items', req.key], del: true });
+  }
+  return { uid, satchel: sat, secrets: sec };
 }

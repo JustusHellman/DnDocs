@@ -469,8 +469,9 @@ service cloud.firestore {
 
     function isValidCodexParty() {
       let d = request.resource.data;
-      return d.keys().hasOnly(['items', 'clock', 'learned', 'known', 'research', 'stamps', 'projects', 'beds', 'log', 'session', 'spoil', 'packs', 'cp', 'updatedAt']) &&
+      return d.keys().hasOnly(['items', 'clock', 'learned', 'known', 'research', 'stamps', 'projects', 'beds', 'log', 'session', 'spoil', 'packs', 'cp', 'goals', 'updatedAt']) &&
              (!('items' in d) || d.items is map) &&
+             (!('goals' in d) || d.goals is map) &&
              (!('cp' in d) || d.cp is int) &&
              (!('clock' in d) || d.clock is number) &&
              (!('known' in d) || d.known is map) &&
@@ -491,8 +492,10 @@ service cloud.firestore {
         allow read: if isAuthenticated() && (isAdmin() || (isCampaignMember(campaignId) && (request.auth.uid == uid || isCampaignDM(campaignId))));
         allow create, update: if isAuthenticated() && (isAdmin() || (
           isCampaignMember(campaignId) && (request.auth.uid == uid || isCampaignDM(campaignId)) &&
-          request.resource.data.keys().hasOnly(['items', 'prefs', 'cp', 'updatedAt']) &&
+          request.resource.data.keys().hasOnly(['items', 'prefs', 'cp', 'unid', 'curses', 'updatedAt']) &&
           (!('items' in request.resource.data) || request.resource.data.items is map) &&
+          (!('unid' in request.resource.data) || request.resource.data.unid is map) &&
+          (!('curses' in request.resource.data) || request.resource.data.curses is map) &&
           (!('prefs' in request.resource.data) || request.resource.data.prefs is map) &&
           (!('cp' in request.resource.data) || request.resource.data.cp is int)));
         allow delete: if isAuthenticated() && (isAdmin() || isCampaignDM(campaignId));
@@ -508,6 +511,15 @@ service cloud.firestore {
             request.resource.data.items is map && request.resource.data.items.size() <= 50 &&
             request.resource.data.cp is int && request.resource.data.cp >= 0;
         }
+      }
+
+      // DM only: what each unidentified item handed out really is, and curses not yet revealed.
+      // Players can't read it, so the real item never reaches their device before it's identified.
+      match /secrets/{docId} {
+        allow read, delete: if isAuthenticated() && (isAdmin() || isCampaignDM(campaignId));
+        allow create, update: if isAuthenticated() && (isAdmin() || isCampaignDM(campaignId)) && docId == 'unid' &&
+          request.resource.data.keys().hasOnly(['items', 'updatedAt']) &&
+          (!('items' in request.resource.data) || request.resource.data.items is map);
       }
 
       // Homebrew packs the DM added in the codex, loaded by every player.

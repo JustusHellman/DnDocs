@@ -19,6 +19,8 @@ import { type FieldOp, type CodexPack, logKey, NEW_PARTY, type PackDoc } from '.
 export const partyRef = (campaignId: string) => doc(db, 'codex', campaignId);
 export const satchelRef = (campaignId: string, uid: string) => doc(db, 'codex', campaignId, 'satchels', uid);
 export const packsCol = (campaignId: string) => collection(db, 'codex', campaignId, 'packs');
+/** DM only: what unidentified items really are, and curses not yet revealed (see state.ts). */
+export const secretsRef = (campaignId: string) => doc(db, 'codex', campaignId, 'secrets', 'unid');
 /** Gifts on their way to a player: others can drop things here, only the owner takes them out. */
 export const inboxCol = (campaignId: string, uid: string) => collection(db, 'codex', campaignId, 'satchels', uid, 'inbox');
 
@@ -68,6 +70,10 @@ export function applyPartyOps(campaignId: string, ops: FieldOp[]) {
 
 export function applySatchelOps(campaignId: string, uid: string, ops: FieldOp[]) {
   return applyOps(satchelRef(campaignId, uid), ops, { items: {}, prefs: {} });
+}
+
+export function applySecretOps(campaignId: string, ops: FieldOp[]) {
+  return applyOps(secretsRef(campaignId), ops, { items: {} });
 }
 
 export async function savePacks(campaignId: string, change: { put: CodexPack[]; remove: string[] }) {
@@ -156,6 +162,7 @@ export async function deleteCodexData(campaignId: string, memberIds: string[] = 
   const inboxes = await Promise.all([...uids].map((u) => getDocs(inboxCol(campaignId, u)).catch(() => null)));
   await Promise.all(inboxes.flatMap((q) => q?.docs ?? []).map((d) => deleteDoc(d.ref)));
   await Promise.all([...satchels.docs, ...packs.docs].map((d) => deleteDoc(d.ref)));
+  await deleteDoc(secretsRef(campaignId)).catch(() => undefined);
   if ((await getDoc(partyRef(campaignId))).exists()) await deleteDoc(partyRef(campaignId));
 }
 

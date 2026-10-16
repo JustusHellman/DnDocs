@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  cleanSecrets,
+  cleanUnidRequest,
   codexKeys,
   fmtCoins,
+  isPrefKey,
+  KEY_CURSES,
+  KEY_SECRETS,
+  KEY_UNID,
+  unidPlan,
   KEY_HOMEBREW,
   KEY_PARTY,
   KEY_PURSE,
@@ -95,9 +102,15 @@ describe('codex party ↔ Firestore', () => {
       spoil: true,
       packs: ['core-cookbook'],
       cp: 1250,
+      goals: ['cloak'],
     });
     const doc = apply({ items: {}, clock: 8 }, partyOps(null, full, { isDM: true, now: 1 }));
     expect(toCodexParty(doc as PartyDoc)).toEqual(full);
+  });
+
+  it('keeps party goals as a set', () => {
+    expect(partyOps(party({ goals: ['cloak'] }), party({ goals: ['cloak', 'rope'] }), { isDM: false })).toEqual([{ path: ['goals', 'rope'], set: true }]);
+    expect(partyOps(party({ goals: ['cloak'] }), party({ goals: [] }), { isDM: false })).toEqual([{ path: ['goals', 'cloak'], del: true }]);
   });
 
   it('trims the log to its newest lines', () => {
@@ -152,5 +165,93 @@ describe('SRD stat blocks from the codex', () => {
     expect(out.statBlock).toBe('*Large beast, unaligned*\n\n***Bite.*** Hit.');
     expect(hasStats(out.dndStats)).toBe(true);
     expect(hasStats({ ...out.dndStats, armorClass: '', hitPoints: ' ' })).toBe(false);
+  });
+});
+
+describe('unidentified and cursed items', () => {
+  const keys = () => {
+    let n = 0;
+    return () => `key00${++n}`;
+  };
+  const opts = () => ({ now: 5, newKey: keys() });
+
+  it('accepts only sensible requests', () => {
+    expect(cleanUnidRequest({ action: 'give', uid: 'p1', id: 'ring-of-protection', q: 1, look: { name: 'Unidentified ring', tier: 'rare', att: true } })).toEqual({
+      action: 'give', uid: 'p1', id: 'ring-of-protection', q: 1, look: { name: 'Unidentified ring', tier: 'rare', att: true }, curse: '',
+    });
+    expect(cleanUnidRequest({ action: 'give', uid: 'p1', id: 'rope', q: 1, look: null })).toBeNull(); // nothing secret about it
+    expect(cleanUnidRequest({ action: 'give', uid: 'p1', id: 'rope', q: 50, curse: 'x' })).toBeNull();
+    expect(cleanUnidRequest({ action: 'give', uid: 'p1', id: 'Bad Id', q: 1, curse: 'x' })).toBeNull();
+    expect(cleanUnidRequest({ action: 'identify', key: 'key001' })).toEqual({ action: 'identify', key: 'key001' });
+    expect(cleanUnidRequest({ action: 'explode', key: 'key001' })).toBeNull();
+  });
+
+  it('an unidentified item: the player gets the look, the DM keeps the truth', () => {
+    const req = cleanUnidRequest({ action: 'give', uid: 'p1', id: 'berserker-axe', q: 2, look: { name: 'Unidentified axe', tier: 'rare' }, curse: 'Rage when hurt' })!;
+    const p = unidPlan(req, {}, null, opts());
+    expect(p.uid).toBe('p1');
+    expect(p.satchel).toEqual([
+      { path: ['unid', 'key001'], set: { name: 'Unidentified axe', tier: 'rare', at: 5 } },
+      { path: ['unid', 'key002'], set: { name: 'Unidentified axe', tier: 'rare', at: 5 } },
+    ]);
+    expect(JSON.stringify(p.satchel)).not.toContain('berserker');
+    expect(JSON.stringify(p.satchel)).not.toContain('Rage');
+    expect(p.secrets[0]).toEqual({ path: ['items', 'key001'], set: { uid: 'p1', id: 'berserker-axe', state: 'unid', at: 5, look: 'Unidentified axe', curse: 'Rage when hurt' } });
+  });
+
+  it('a known but cursed item goes in the satchel as usual', () => {
+    const p = unidPlan(cleanUnidRequest({ action: 'give', uid: 'p1', id: 'weapon-1', q: 1, curse: 'Hums at night' })!, {}, null, opts());
+    expect(p.satchel).toEqual([{ path: ['items', 'weapon-1'], inc: 1 }]);
+    expect(p.secrets).toEqual([{ path: ['items', 'key001'], set: { uid: 'p1', id: 'weapon-1', state: 'known', at: 5, curse: 'Hums at night' } }]);
+  });
+
+  const secrets = cleanSecrets({
+    key001: { uid: 'p1', id: 'ring-of-protection', state: 'unid', at: 1 },
+    key002: { uid: 'p1', id: 'berserker-axe', state: 'unid', at: 1, curse: 'Rage' },
+    key003: { uid: 'p1', id: 'weapon-1', state: 'known', at: 1, curse: 'Hums' },
+  });
+  const holder = { unid: { key001: { name: 'Unidentified ring' }, key002: { name: 'Unidentified axe' } } };
+
+  it('identify: the real item replaces the look; a curse stays hidden', () => {
+    expect(unidPlan({ action: 'identify', key: 'key001' }, secrets, holder, opts())).toEqual({
+      uid: 'p1',
+      satchel: [{ path: ['unid', 'key001'], del: true }, { path: ['items', 'ring-of-protection'], inc: 1 }],
+      secrets: [{ path: ['items', 'key001'], del: true }],
+    });
+    const cursed = unidPlan({ action: 'identify', key: 'key002' }, secrets, holder, opts());
+    expect(cursed.secrets).toEqual([{ path: ['items', 'key002', 'state'], set: 'known' }]);
+    expect(JSON.stringify(cursed.satchel)).not.toContain('Rage');
+  });
+
+  it('reveal: the curse goes to the player (identifying it too if needed)', () => {
+    expect(unidPlan({ action: 'reveal', key: 'key003' }, secrets, holder, opts()).satchel).toEqual([{ path: ['curses', 'weapon-1'], set: 'Hums' }]);
+    expect(unidPlan({ action: 'reveal', key: 'key002' }, secrets, holder, opts()).satchel).toEqual([
+      { path: ['unid', 'key002'], del: true },
+      { path: ['items', 'berserker-axe'], inc: 1 },
+      { path: ['curses', 'berserker-axe'], set: 'Rage' },
+    ]);
+    expect(() => unidPlan({ action: 'reveal', key: 'key001' }, secrets, holder, opts())).toThrow(/no curse/);
+  });
+
+  it('take back, forget, and things that are gone', () => {
+    expect(unidPlan({ action: 'take', key: 'key001' }, secrets, holder, opts()).satchel).toEqual([{ path: ['unid', 'key001'], del: true }]);
+    expect(() => unidPlan({ action: 'forget', key: 'key001' }, secrets, holder, opts())).toThrow();
+    expect(unidPlan({ action: 'forget', key: 'key001' }, secrets, { unid: {} }, opts()).secrets).toEqual([{ path: ['items', 'key001'], del: true }]);
+    expect(() => unidPlan({ action: 'identify', key: 'key001' }, secrets, { unid: {} }, opts())).toThrow(/any more/);
+    expect(() => unidPlan({ action: 'identify', key: 'nope00' }, secrets, holder, opts())).toThrow();
+  });
+
+  it('the codex gets the looks and revealed curses; only the DM gets the secrets', () => {
+    const sat = { items: {}, unid: { key001: { name: 'Unidentified ring', tier: 'rare' } }, curses: { 'weapon-1': 'Hums' } };
+    const k = codexKeys(null, sat, []);
+    expect(k[KEY_UNID]).toEqual({ key001: { name: 'Unidentified ring', tier: 'rare' } });
+    expect(k[KEY_CURSES]).toEqual({ 'weapon-1': 'Hums' });
+    expect(KEY_SECRETS in k).toBe(false);
+    expect(codexKeys(null, sat, [], { items: { key001: { uid: 'p1', id: 'ring-of-protection', state: 'unid', at: 1 } } })[KEY_SECRETS]).toEqual({
+      key001: { uid: 'p1', id: 'ring-of-protection', state: 'unid', at: 1 },
+    });
+    // The codex can't write these back itself.
+    expect(isPrefKey(KEY_UNID) || isPrefKey(KEY_CURSES) || isPrefKey(KEY_SECRETS)).toBe(false);
+    expect(satchelOps(KEY_UNID, {}, { x: 1 })).toEqual([]);
   });
 });
