@@ -149,8 +149,9 @@ export async function sendRoll(campaignId: string, user: Pick<User, 'uid' | 'dis
  * The owner's app: claim the room (once) and keep its member list in step with the campaign, so the
  * chat's rules know who may read and write. Also tidies away messages older than three weeks.
  */
-export async function syncChatRoom(campaign: Campaign, uid: string) {
-  if (!chatAvailable || campaign.dmId !== uid) return;
+/** Resolves true when it changed the room (claimed it, or updated who's in it). */
+export async function syncChatRoom(campaign: Campaign, uid: string): Promise<boolean> {
+  if (!chatAvailable || campaign.dmId !== uid) return false;
   const members: Record<string, 'dm' | 'player'> = { [campaign.dmId]: 'dm' };
   for (const p of campaign.players ?? []) members[p] = 'player';
   for (const d of campaign.coDms ?? []) members[d] = 'dm';
@@ -167,7 +168,8 @@ export async function syncChatRoom(campaign: Campaign, uid: string) {
     } catch {
       /* ignore */
     }
-    if (known !== want || !owner.exists()) {
+    const changed = known !== want || !owner.exists();
+    if (changed) {
       await m.set(m.ref(db, `${room(campaign.id)}/members`), members);
       try {
         localStorage.setItem(key, want);
@@ -185,8 +187,10 @@ export async function syncChatRoom(campaign: Campaign, uid: string) {
       });
       if (Object.keys(gone).length) await m.update(m.ref(db, `${room(campaign.id)}/${where}`), gone);
     }
+    return changed;
   } catch (err) {
     logError('Table chat setup', err);
+    return false;
   }
 }
 

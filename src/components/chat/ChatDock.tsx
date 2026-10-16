@@ -141,8 +141,19 @@ export function ChatButton() {
     setShowDmRolls(read(showKey(cid)) === '1');
     setSeenAt(Number(read(seenKey(cid, uid)) || 0));
     setLocal([]);
+  }, [cid, uid]);
+  // Listen again when the room may have just opened up for us (the owner's app registered it, or
+  // the DM added us): no need to leave the campaign and come back.
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (!cid || !uid) return;
     return listenChat(cid, isDM, setMessages, setStatus);
-  }, [cid, uid, isDM]);
+  }, [cid, uid, isDM, attempt]);
+  useEffect(() => {
+    if (status !== 'waiting') return;
+    const t = setTimeout(() => setAttempt((a) => a + 1), 15_000);
+    return () => clearTimeout(t);
+  }, [status, attempt]);
 
   // Table colours: one live list for the campaign, shared with the map and the members page.
   const ready = status === 'ready';
@@ -168,7 +179,7 @@ export function ChatButton() {
   // The owner's app keeps the chat's member list in step with the campaign.
   const memberKey = currentCampaign ? [currentCampaign.dmId, ...(currentCampaign.coDms ?? []), '|', ...(currentCampaign.players ?? [])].join(',') : '';
   useEffect(() => {
-    if (currentCampaign && uid) syncChatRoom(currentCampaign, uid);
+    if (currentCampaign && uid) syncChatRoom(currentCampaign, uid).then((changed) => changed && setAttempt((a) => a + 1));
   }, [cid, uid, memberKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Opened from elsewhere (the battle map's dice button, R).
