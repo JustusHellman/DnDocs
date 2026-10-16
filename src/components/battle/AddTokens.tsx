@@ -12,7 +12,8 @@ import { TOKEN_COLORS, TOKEN_SIZES } from '../../lib/battle/table';
 import type { Entity, Token } from '../../types';
 import EncounterMeter from './EncounterMeter';
 import { useCampaignData } from '../../contexts/CampaignDataContext';
-import { type CatalogMonster, loadCatalog, searchCatalog, sizeSquares, type Catalog } from '../../lib/codex/catalog';
+import { codexTokenPicture } from '../../lib/codex/plates';
+import { type CatalogMonster, codexStatFor, findInCatalog, type CodexStat, hasStats, loadCatalog, loadStatblocks, searchCatalog, sizeSquares, type Catalog } from '../../lib/codex/catalog';
 
 /** What to place, armed until the DM taps the map. */
 export interface TokenSpec {
@@ -33,9 +34,11 @@ export interface TokenSpec {
 
 const TOKEN_TYPES = ['character', 'npc', 'monster'];
 
-export function specForEntity(e: Entity, opts: { count?: number; hidden?: boolean; size?: number } = {}): TokenSpec {
+export function specForEntity(e: Entity, opts: { count?: number; hidden?: boolean; size?: number; codexStat?: CodexStat | null } = {}): TokenSpec {
   const kind = baseType(e.type);
   const isCharacter = e.type === 'character';
+  // No stat block of its own? A linked codex creature's SRD hit points will do.
+  const hp = hasStats(e.dndStats) ? e.dndStats?.hitPoints : opts.codexStat?.hp;
   return {
     name: e.name,
     entityId: e.id,
@@ -45,7 +48,7 @@ export function specForEntity(e: Entity, opts: { count?: number; hidden?: boolea
     hidden: opts.hidden ?? false,
     controlledBy: isCharacter && e.playerId ? [e.playerId] : [],
     // Characters use their own HP; others start at the stat block's hit points.
-    hpMax: isCharacter ? null : parseHp(e.dndStats?.hitPoints),
+    hpMax: isCharacter ? null : parseHp(hp),
     img: e.coverThumb ?? null,
     codexRef: kind === 'monster' && typeof e.attributes?.codexRef === 'string' ? e.attributes.codexRef : null,
   };
@@ -73,6 +76,13 @@ export default function AddTokens({ open, onClose, onArm, onMap, tokens }: Props
     if (mode !== 'codex' || catalog) return;
     loadCatalog().then(setCatalog, (err) => setCatalogError(err instanceof Error ? err.message : String(err)));
   }, [mode, catalog]);
+  // SRD stat blocks: hit points for codex creatures (and for entries linked to one).
+  const [stats, setStats] = useState<Record<string, CodexStat> | null>(null);
+  useEffect(() => {
+    if (!open || stats) return;
+    Promise.all([loadStatblocks(), catalog ? Promise.resolve(catalog) : loadCatalog().then((c) => (setCatalog(c), c))]).then(([st]) => setStats(st), () => undefined);
+  }, [open, stats, catalog]);
+  const statOf = (id: string | null | undefined) => (stats ? codexStatFor(stats, catalog, id) ?? null : null);
   const [term, setTerm] = useState('');
   const beasts = useMemo(() => (catalog ? (searchCatalog(catalog, 'monster', term, 60) as CatalogMonster[]) : []), [catalog, term]);
   const [picked, setPicked] = useState<Entity | null>(null);
@@ -104,9 +114,28 @@ export default function AddTokens({ open, onClose, onArm, onMap, tokens }: Props
     setBeast(null);
   };
 
-  const arm = () => {
-    if (mode === 'entry' && picked) onArm(specForEntity(picked, { count, hidden, size }));
-    else if (mode === 'codex' && beast) onArm({ name: beast.name, entityId: null, color: '#8e2020', size, count, hidden, controlledBy: [], hpMax: null, img: null, codexRef: beast.id });
+  const [arming, setArming] = useState(false);
+  const arm = async () => {
+    // Codex creatures without a picture of their own get the codex's silhouette for their kind.
+    const pictureFor = async (ref: string | null | undefined) => {
+      const m = ref && catalog ? (findInCatalog(catalog, 'monster', ref) as CatalogMonster | undefined) : undefined;
+      return m ? codexTokenPicture(m) : null;
+    };
+    if (mode === 'entry' && picked) {
+      const ref = typeof picked.attributes?.codexRef === 'string' ? picked.attributes.codexRef : null;
+      const spec = specForEntity(picked, { count, hidden, size, codexStat: statOf(ref) });
+      if (!spec.img && ref) {
+        setArming(true);
+        spec.img = await pictureFor(ref);
+        setArming(false);
+      }
+      onArm(spec);
+    } else if (mode === 'codex' && beast) {
+      setArming(true);
+      const img = await codexTokenPicture(beast);
+      setArming(false);
+      onArm({ name: beast.name, entityId: null, color: '#8e2020', size, count, hidden, controlledBy: [], hpMax: parseHp(statOf(beast.id)?.hp), img, codexRef: beast.id });
+    }
     else if (mode === 'custom' && name.trim()) onArm({ name: name.trim(), entityId: null, color, size, count, hidden, controlledBy: [], hpMax: null, img });
     else return;
     reset();
@@ -125,7 +154,7 @@ export default function AddTokens({ open, onClose, onArm, onMap, tokens }: Props
           <button type="button" className="btn btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          <button type="button" className="btn btn-primary" onClick={arm} disabled={mode === 'entry' ? !picked : mode === 'codex' ? !beast : !name.trim()}>
+          <button type="button" className="btn btn-primary" onClick={arm} disabled={arming || (mode === 'entry' ? !picked : mode === 'codex' ? !beast : !name.trim())}>
             <MapPin size={15} /> Place on the map
           </button>
         </>
@@ -195,11 +224,11 @@ export default function AddTokens({ open, onClose, onArm, onMap, tokens }: Props
               >
                 <TypeIcon type="monster" className="shrink-0 text-stone-500" />
                 <span className="min-w-0 flex-1 truncate">{m.name}</span>
-                <span className="text-[10px] text-stone-500">{[m.size, m.type, m.cr != null ? `CR ${m.cr}` : ''].filter(Boolean).join(' · ')}</span>
+                <span className="text-[10px] text-stone-500">{[m.size, m.type, m.cr != null ? `CR ${m.cr}` : '', statOf(m.id) ? `AC ${parseInt(statOf(m.id)!.ac, 10)} · ${parseHp(statOf(m.id)!.hp)} HP` : ''].filter(Boolean).join(' · ')}</span>
               </button>
             ))}
           </div>
-          <p className="hint">No DnDocs entry needed. After the fight, “Harvest the fallen” sends them to the Codex.</p>
+          <p className="hint">No DnDocs entry needed: they start with their SRD hit points, and the token card shows the full stat block. After the fight, “Harvest the fallen” sends them to the Codex.</p>
         </>
       ) : (
         <div className="space-y-3">

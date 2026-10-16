@@ -143,3 +143,14 @@ describe('coin', () => {
     expect(fmtCoins(7)).toBe('7 cp');
   });
 });
+
+describe('SRD stat blocks from the codex', () => {
+  it('become DnDocs stat block fields', async () => {
+    const { toDndStats, hasStats } = await import('../lib/codex/catalog');
+    const out = toDndStats({ ac: '14 (natural armor)', hp: '37 (5d10 + 10)', speed: '50 ft.', ab: [17, 15, 15, 3, 12, 7], skills: 'Perception +3', senses: 'passive Perception 13', languages: '—', cr: '1 (200 XP)', pb: '+2', size: 'Large', type: 'beast', align: 'unaligned', text: '***Bite.*** Hit.', ed: '2014' });
+    expect(out.dndStats).toMatchObject({ armorClass: '14 (natural armor)', hitPoints: '37 (5d10 + 10)', str: 17, cha: 7, challenge: '1 (200 XP)' });
+    expect(out.statBlock).toBe('*Large beast, unaligned*\n\n***Bite.*** Hit.');
+    expect(hasStats(out.dndStats)).toBe(true);
+    expect(hasStats({ ...out.dndStats, armorClass: '', hitPoints: ' ' })).toBe(false);
+  });
+});

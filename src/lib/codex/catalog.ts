@@ -4,6 +4,8 @@
  * creatures on a battle map without making a DnDocs entry first.
  */
 
+import type { DndStats } from '../../types';
+
 /** On GitHub Pages the codex is a sibling of DnDocs (…github.io/ScavengersCodex/). */
 export const CODEX_URL: string = (import.meta.env.VITE_CODEX_URL as string | undefined) || 'https://justushellman.github.io/ScavengersCodex/';
 
@@ -105,4 +107,66 @@ export function sizeSquares(size?: string) {
 export function codexHash(kind: CodexKind, e: { id: string; kind?: string }) {
   if (kind === 'monster') return `#/monster/${encodeURIComponent(e.id)}`;
   return `#/${e.kind === 'material' ? 'material' : 'item'}/${encodeURIComponent(e.id)}`;
+}
+
+/** An SRD stat block from the codex (statblocks.json, built by the codex's tools/statblocks.py). */
+export interface CodexStat {
+  ac: string;
+  hp: string;
+  speed: string;
+  /** STR, DEX, CON, INT, WIS, CHA */
+  ab: number[];
+  skills: string;
+  senses: string;
+  languages: string;
+  cr: string;
+  pb: string;
+  size?: string;
+  type?: string;
+  align?: string;
+  /** Saving throws, resistances, traits, actions … as Markdown. */
+  text: string;
+  /** Which SRD: '2014' (5.1) or '2024' (5.2.1). */
+  ed: string;
+}
+
+let statsPending: Promise<Record<string, CodexStat>> | null = null;
+
+/** Every codex creature's SRD stat block, by codex id (loaded once, only when needed). */
+export function loadStatblocks(): Promise<Record<string, CodexStat>> {
+  if (!statsPending) {
+    statsPending = fetch(new URL('statblocks.json', new URL(CODEX_URL, location.href)).toString())
+      .then((r) => {
+        if (!r.ok) throw new Error(`The Codex stat blocks aren't available (${r.status}).`);
+        return r.json() as Promise<{ creatures?: Record<string, CodexStat> }>;
+      })
+      .then((d) => d.creatures ?? {})
+      .catch((err) => {
+        statsPending = null;
+        throw err;
+      });
+  }
+  return statsPending;
+}
+
+/** The SRD stat block of a codex creature (old ids are followed through the aliases). */
+export function codexStatFor(stats: Record<string, CodexStat>, cat: Catalog | null, id: string | null | undefined): CodexStat | undefined {
+  if (!id) return undefined;
+  const real = cat?.aliases.monsters[id] ?? id;
+  return stats[real] ?? stats[id];
+}
+
+/** DnDocs' stat block fields from a codex stat block. */
+export function toDndStats(sb: CodexStat): { dndStats: DndStats; statBlock: string } {
+  const [str, dex, con, int, wis, cha] = sb.ab;
+  const kind = [sb.size, sb.type].filter(Boolean).join(' ') + (sb.align ? `, ${sb.align}` : '');
+  return {
+    dndStats: { armorClass: sb.ac, hitPoints: sb.hp, speed: sb.speed, str, dex, con, int, wis, cha, skills: sb.skills, senses: sb.senses, languages: sb.languages, challenge: sb.cr, proficiencyBonus: sb.pb },
+    statBlock: [kind ? `*${kind}*` : '', sb.text].filter(Boolean).join('\n\n'),
+  };
+}
+
+/** Whether a stat block has actually been filled in (a new entry starts with empty fields). */
+export function hasStats(d: DndStats | null | undefined): boolean {
+  return !!d && !!(String(d.hitPoints ?? '').trim() || String(d.armorClass ?? '').trim());
 }

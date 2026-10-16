@@ -42,6 +42,7 @@ import { HitPoints } from './HitPoints';
 import { LocationTree, useVisibleChildren } from './LocationTree';
 import CarriedCodex from '../codex/CarriedCodex';
 import GiveCodexThing from '../codex/GiveCodexThing';
+import CodexCarriers from '../codex/CodexCarriers';
 import { RelationshipsSection } from './Relationships';
 import QuickCreateModal from './QuickCreateModal';
 import { useImageSrc } from '../../hooks/useImageSrc';
@@ -417,6 +418,7 @@ export default function EntityView({ entityId, variant = 'page' }: { entityId: s
         <GiKnapsack size={15} /> Open in the Scavenger’s Codex
       </Link>
       {isDM && codexKind === 'thing' && <GiveCodexThing codexRef={codexRef} fallbackName={entity.name} />}
+
       {isDM && codexKind === 'monster' && (
         <Link className="btn btn-ghost btn-sm" to="/codex" state={{ codexOpen: { fight: [{ id: codexRef, n: 1 }] } }} onClick={() => panel && closePeek()}>
           Harvest one
@@ -584,6 +586,8 @@ export default function EntityView({ entityId, variant = 'page' }: { entityId: s
           )}
 
           {codexLink}
+          {/* Who carries it comes from the Codex satchels (the party's and, for the DM, everyone's). */}
+          {codexRef && codexKind === 'thing' && <CodexCarriers codexRef={codexRef} />}
 
           {hasStatBlock && (
             <Section title="Stat block" eye={<FieldEye entity={entity} field="statBlock" />}>

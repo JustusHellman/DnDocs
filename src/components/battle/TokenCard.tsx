@@ -1,3 +1,6 @@
+import { useCodexStat } from '../../hooks/useCodexStat';
+import { type CatalogMonster, findInCatalog, hasStats, loadCatalog, toDndStats } from '../../lib/codex/catalog';
+import { codexTokenPicture } from '../../lib/codex/plates';
 import { useEffect, useRef, useState } from 'react';
 import { BookOpen, Eye, EyeOff, HeartCrack, ImagePlus, Plus, Trash2, X } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
@@ -61,8 +64,16 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
   useEffect(() => setName(t.name), [t.id, t.name]);
 
   const controller = t.controlledBy.includes(uid);
-  // Stats: for the DM, and for anyone who may see that entry's stat block (e.g. a player's own character).
-  const stats = entity?.dndStats && (asDM || canViewField(entity, 'statBlock')) ? entity.dndStats : null;
+  // Stats: for the DM, whoever controls the token (a beast master's wolf) and anyone who may see that
+  // entry's stat block (e.g. a player's own character).
+  const mayRead = asDM || controller;
+  const own = entity && hasStats(entity.dndStats) && (mayRead || canViewField(entity, 'statBlock')) ? { stats: entity.dndStats!, text: entity.statBlock ?? '' } : null;
+  // No stat block of its own: the SRD one of the codex creature it stands for.
+  const codexRef = t.codexRef || (typeof entity?.attributes?.codexRef === 'string' ? entity.attributes.codexRef : null);
+  const srd = useCodexStat(mayRead && !own && codexRef ? codexRef : null);
+  const fromSrd = srd ? toDndStats(srd) : null;
+  const shown = own ?? (fromSrd ? { stats: fromSrd.dndStats, text: fromSrd.statBlock } : null);
+  const stats = shown?.stats ?? null;
   const editConditions = asDM || controller;
   const isCharacter = entity?.type === 'character';
   const n = parseInt(amount, 10);
@@ -275,7 +286,8 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
           <details className="group">
             <summary className="cursor-pointer text-xs font-semibold text-amber-400 select-none">Full stat block</summary>
             <div className="mt-2">
-              <StatBlock stats={entity!.dndStats} text={entity!.statBlock} />
+              <StatBlock stats={shown!.stats} text={shown!.text} />
+              {!own && <p className="mt-1 text-[11px] text-stone-500 italic">SRD stat block from the Scavenger’s Codex.</p>}
             </div>
           </details>
         </div>
@@ -478,6 +490,22 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
             <button type="button" className="btn btn-ghost btn-sm px-2" onClick={() => picFile.current?.click()}>
               <ImagePlus size={13} /> {t.img ? 'Change' : 'Upload'}
             </button>
+            {codexRef && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm px-2"
+                title="The Codex's picture for this kind of creature"
+                onClick={async () => {
+                  const cat = await loadCatalog().catch(() => null);
+                  const m = cat ? (findInCatalog(cat, 'monster', codexRef) as CatalogMonster | undefined) : undefined;
+                  const img = m ? await codexTokenPicture(m) : null;
+                  if (img) save({ img }, 'Token picture');
+                  else toast.show('The Codex picture isn’t available right now.');
+                }}
+              >
+                Codex
+              </button>
+            )}
             {entity?.coverThumb && entity.coverThumb !== t.img && (
               <button type="button" className="btn btn-ghost btn-sm px-2" onClick={() => save({ img: entity.coverThumb }, 'Token picture')}>
                 Entry’s

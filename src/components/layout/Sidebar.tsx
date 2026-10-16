@@ -1,13 +1,23 @@
-import { useMemo, useRef, useState } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
-import { ArrowLeftRight, ChevronsLeft, ChevronsRight, LogOut, QrCode, UserCog } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { ArrowLeftRight, ChevronDown, ChevronsLeft, ChevronsRight, LogOut, QrCode, UserCog } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
-import { useVisibleEntities } from '../../contexts/CampaignDataContext';
+import { useCampaignData, useVisibleEntities } from '../../contexts/CampaignDataContext';
 import { Avatar } from '../ui/bits';
 import { MenuItem, Popover } from '../ui/Popover';
 import InviteModal from '../InviteModal';
 import { navGroups } from './nav';
+
+const COLLAPSED_KEY = 'sidebar:collapsed';
+function readCollapsed(): Set<string> {
+  try {
+    const v = JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]');
+    return new Set(Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
 
 interface SidebarProps {
   /** 'rail' shows icons only (tablets / collapsed desktop). */
@@ -23,6 +33,31 @@ export default function Sidebar({ compact, onToggleCompact, onNavigate }: Sideba
   const [menuOpen, setMenuOpen] = useState(false);
   const userAnchor = useRef<HTMLButtonElement>(null);
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const { entityMap } = useCampaignData();
+  // Folded headings (remembered on this device). Going to a page in a folded group unfolds it.
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const saveCollapsed = (next: Set<string>) => {
+    try {
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
+    } catch {
+      /* ignore */
+    }
+    return next;
+  };
+  const toggleGroup = (label: string) =>
+    setCollapsed((c) => {
+      const next = new Set(c);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return saveCollapsed(next);
+    });
+  const entityType = pathname.startsWith('/entity/') ? entityMap.get(decodeURIComponent(pathname.split('/')[2] ?? ''))?.type : undefined;
+  const isHere = (i: { to: string; type?: string }) => pathname === i.to || pathname.startsWith(i.to + '/') || (!!entityType && i.type === entityType);
+  useEffect(() => {
+    const g = navGroups().find((gr) => gr.label && collapsed.has(gr.label) && gr.items.some(isHere));
+    if (g?.label) setCollapsed((c) => saveCollapsed(new Set([...c].filter((l) => l !== g.label))));
+  }, [pathname, entityType]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
@@ -52,14 +87,25 @@ export default function Sidebar({ compact, onToggleCompact, onNavigate }: Sideba
         {navGroups().map((group, gi) => {
           const items = group.items.filter((i) => !i.dmOnly || isDM);
           if (!items.length) return null;
+          const folded = !compact && !!group.label && collapsed.has(group.label);
           return (
-            <div key={gi} className={gi > 0 ? 'mt-4' : undefined}>
+            <div key={gi} className={gi > 0 ? (folded ? 'mt-1' : 'mt-4') : undefined}>
               {group.label &&
                 (compact ? (
                   <div className="mx-3 mb-2 border-t border-stone-800" />
                 ) : (
-                  <div className="mb-1 px-3 text-[10px] font-bold tracking-[0.14em] text-stone-500 uppercase">{group.label}</div>
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(group.label!)}
+                    aria-expanded={!folded}
+                    className="group/h mb-1 flex w-full items-center gap-1 rounded px-3 py-0.5 text-left text-[10px] font-bold tracking-[0.14em] text-stone-500 uppercase hover:text-stone-300"
+                  >
+                    <span className="flex-1">{group.label}</span>
+                    {folded && <span className="font-normal tracking-normal text-stone-600 normal-case">{items.length}</span>}
+                    <ChevronDown size={12} className={clsx('transition-transform', folded && '-rotate-90', !folded && 'opacity-0 group-hover/h:opacity-100')} />
+                  </button>
                 ))}
+              {!folded && (
               <ul className="space-y-0.5">
                 {items.map((item) => (
                   <li key={item.to}>
@@ -86,6 +132,7 @@ export default function Sidebar({ compact, onToggleCompact, onNavigate }: Sideba
                   </li>
                 ))}
               </ul>
+              )}
             </div>
           );
         })}

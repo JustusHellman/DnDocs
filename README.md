@@ -120,9 +120,14 @@ Icons: [game-icons.net](https://game-icons.net) by Lorc, Delapouite and contribu
     the same name). They then open in the Codex, and revealing the entry adds it to the party's
     Codex journal.
   - On a battle map, *Add tokens → From the Codex* puts any Codex creature on the map without a
-    DnDocs entry, and *Harvest the fallen* sends the defeated to the Codex's after-the-fight panel.
-  - In the Codex, *Record in DnDocs* (DM) turns a crafted item into a secret item entry on the
-    character who has it.
+    DnDocs entry, with its SRD hit points and the Codex's picture for its kind of creature. The token
+    card shows its full SRD stat block to the DM and to whoever controls the token (a beast master's
+    companion); exact HP stays with the DM. *Codex* in a token's Picture row gives any Codex-linked
+    token that picture.
+    *Harvest the fallen* sends the defeated to the Codex's after-the-fight panel.
+  - Monster and NPC entries get *Fill from the SRD* in the editor: the stat block of the linked Codex
+    creature (or the SRD creature with the same name), editable afterwards. A linked entry without a
+    stat block of its own also uses the SRD one on the battle map.
   - Coin lives in the Codex too: each player's purse and the party purse. Players can **give** items
     or coin to each other (*Give…* in the Codex satchel); a gift waits in the receiver's inbox and is
     put in their satchel as soon as they have DnDocs open.
@@ -132,6 +137,15 @@ Icons: [game-icons.net](https://game-icons.net) by Lorc, Delapouite and contribu
   - A player character's page shows what that player carries in the Codex (satchel and purse) under
     *Carried*, with *Open my satchel*. Only the player and the DM see it. Item entries the DM placed
     on the character are listed there too.
+  - Inside DnDocs the Codex keeps its own sidebar and search (it's a tool you open) but takes on
+    DnDocs' parchment look.
+  - One rule for items: what someone carries lives in the Codex satchels. A DnDocs item entry linked
+    to the Codex is its page (lore, pictures, secrets) and shows who carries it; it can't be placed on
+    a character, only somewhere nobody carries it (a chest, a shop). *Make a DnDocs page* in the Codex
+    (DM) creates such a page. Unique items with no Codex version are placed like any other entry.
+  - Sharing a recipe: *Teach the party* on a Codex formula (DM) teaches everyone at once; handout
+    links and QR codes open DnDocs and unlock for the whole party; *Post as a handout in DnDocs*
+    makes a note for everyone or chosen players (optionally shown on their screens).
   - The Codex runs in a sandboxed frame, so it can't read your DnDocs sign-in.
 - **Images** are stored as WebP (JPEG on browsers without WebP) at up to 1280 px, with a tiny preview
   on each entry so lists show pictures without loading the full images.

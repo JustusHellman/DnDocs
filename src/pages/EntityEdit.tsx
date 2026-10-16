@@ -18,6 +18,7 @@ import MarkdownField from '../components/editor/MarkdownField';
 import ImageManager from '../components/editor/ImageManager';
 import StatBlockEditor from '../components/editor/StatBlockEditor';
 import CodexLinkField from '../components/editor/CodexLinkField';
+import FillFromSrd from '../components/editor/FillFromSrd';
 import { codexKindFor } from '../lib/codex/catalog';
 import { RelationshipList, RelationshipModal } from '../components/entity/Relationships';
 import QuickCreateModal from '../components/entity/QuickCreateModal';
@@ -301,6 +302,8 @@ export default function EntityEdit() {
   if (!draft) return <Spinner className="py-24" />;
 
   const meta = typeMeta(draft.type);
+  // Linked to a Codex item: carried in the satchels, so it isn't placed on a character here.
+  const codexCarried = baseType(draft.type) === 'item' && typeof draft.attributes?.codexRef === 'string' && !!draft.attributes.codexRef;
   const schema = fieldsFor(draft.type);
   const isCharacter = draft.type === 'character';
   // A player who created their character decides whether the party sees it; one the DM made, the DM shares.
@@ -569,9 +572,17 @@ export default function EntityEdit() {
               title="Stat block"
               description={isCharacter ? 'Armor class, maximum hit points, speed and ability scores. The HP tracker uses the hit points here as the maximum.' : 'Optional combat stats, shown as a D&D-style block.'}
             >
-              {showFieldPerms && (
-                <div className="-mt-2 mb-3 flex justify-end">
-                  <FieldPermissionToggle permission={draft.fieldPermissions?.statBlock} onChange={(p) => setFieldPerm('statBlock', p)} players={players} inheritsPublic={inheritsPublic} fieldLabel="Stat block" />
+              {(showFieldPerms || (isDM && !isCharacter)) && (
+                <div className="-mt-2 mb-3 flex flex-wrap items-center justify-end gap-2">
+                  {isDM && !isCharacter && (
+                    <FillFromSrd
+                      codexRef={typeof draft.attributes?.codexRef === 'string' && draft.attributes.codexRef ? draft.attributes.codexRef : null}
+                      name={draft.name}
+                      current={draft.dndStats}
+                      onFill={(v) => setDraft((d) => (d ? { ...d, dndStats: v.dndStats, statBlock: v.statBlock } : d))}
+                    />
+                  )}
+                  {showFieldPerms && <FieldPermissionToggle permission={draft.fieldPermissions?.statBlock} onChange={(p) => setFieldPerm('statBlock', p)} players={players} inheritsPublic={inheritsPublic} fieldLabel="Stat block" />}
                 </div>
               )}
               <StatBlockEditor stats={draft.dndStats} text={draft.statBlock ?? ''} onStats={(s) => set('dndStats', s)} onText={(t) => set('statBlock', t)} />
@@ -802,14 +813,19 @@ export default function EntityEdit() {
 
           <Card title={draft.type === 'note' ? 'Attached to' : 'Location'}>
             {fieldLabel({ field: "locationId", label: draft.type === 'note' ? 'About' : 'Located in' })}
+            {codexCarried && (
+              <p className="mb-2 text-sm text-stone-400">
+                Linked to the Scavenger’s Codex: whoever carries it has it in their Codex satchel, and the page shows who. Only set a place here when nobody carries it (a chest, a shop, an altar). To hand it to someone, use <b>Give to…</b> on the page.
+              </p>
+            )}
             <EntityPicker
-              options={locationOptions}
+              options={codexCarried ? locationOptions.filter((o) => o.type !== 'character') : locationOptions}
               value={draft.locationId ?? ''}
               onChange={(v) => set('locationId', v)}
-              placeholder={draft.type === 'note' ? 'Not attached' : 'Top level'}
+              placeholder={draft.type === 'note' ? 'Not attached' : codexCarried ? 'Nowhere (or carried)' : 'Top level'}
               onCreateNew={isDM ? (name) => setQuickLocation(name) : undefined}
             />
-            {draft.type !== 'note' && (
+            {draft.type !== 'note' && !codexCarried && (
               <p className="hint">
                 A {meta.label.toLowerCase()} can be inside: {meta.parents.map((p) => typeMeta(p).label.toLowerCase()).join(', ')}.
               </p>

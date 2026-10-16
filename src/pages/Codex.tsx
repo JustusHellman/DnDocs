@@ -4,13 +4,14 @@
  * party shares one satchel, clock, workbench and garden, and every player has their own satchel.
  *
  *   Codex  → DnDocs  { type: 'codex:ready' }                     loaded, waiting for hello
- *   DnDocs → Codex   { type: 'dndocs:hello', role, name, campaign, keys, open?, members }
+ *   DnDocs → Codex   { type: 'dndocs:hello', role, name, campaign, keys, open?, members, embed, home }
  *   DnDocs → Codex   { type: 'dndocs:members', members: [{ uid, name, role, items?, cp? }] }   (the DM also gets each satchel)
  *   DnDocs → Codex   { type: 'dndocs:state', keys }               someone else changed something
  *   Codex  → DnDocs  { type: 'codex:save', changes: [{ key, prev, next }] }
  *   DnDocs → Codex   { type: 'dndocs:saved', ok, error? }         only when saving failed
  *   DnDocs → Codex   { type: 'dndocs:open', open: { hash } | { fight: [{ id, n }] } }
  *   Codex  → DnDocs  { type: 'codex:entry', action: 'record', thing }   DM: make a DnDocs item
+ *   Codex  → DnDocs  { type: 'codex:entry', action: 'handout', handout }   DM: post a handout note
  *   Codex  → DnDocs  { type: 'codex:error', stage: 'load' }      its data didn't load
  *   Codex  → DnDocs  { type: 'codex:give', gift: { id, to, items, cp } }   left in their inbox
  *   DnDocs → Codex   { type: 'dndocs:give', id, ok, error? }     (the codex gives it back if not ok)
@@ -30,8 +31,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useCampaignData } from '../contexts/CampaignDataContext';
 import { useToast } from '../contexts/ToastContext';
 import { Modal } from '../components/ui/Modal';
-import { quickCreateEntity } from '../lib/entityService';
-import { baseType } from '../lib/entityTypes';
+import { applySharingUpdate, quickCreateEntity } from '../lib/entityService';
 import { CODEX_URL, codexFrameUrl } from '../lib/codex/catalog';
 import {
   applyPartyOps,
@@ -58,7 +58,6 @@ import {
   satchelOps,
   type SatchelDoc,
 } from '../lib/codex/state';
-import type { Entity } from '../types';
 
 const positiveItems = (m?: Record<string, number>) => Object.fromEntries(Object.entries(m ?? {}).filter(([, v]) => Number(v) > 0));
 
@@ -90,10 +89,12 @@ export default function CodexPage() {
   const [satchels, setSatchels] = useState<Record<string, SatchelDoc>>({});
   const { members: campaignMembers, entities, canView } = useCampaignData();
   const location = useLocation();
+  const navigate = useNavigate();
   const frame = useRef<HTMLIFrameElement>(null);
   const [sandboxed, setSandboxed] = useState(true);
   const [status, setStatus] = useState<'loading' | 'ready' | 'stuck'>('loading');
   const [record, setRecord] = useState<RecordThing | null>(null);
+  const [handout, setHandout] = useState<HandoutDraft | null>(null);
 
   // Where to start: a codex page (?open=#/monster/dire-wolf) or a battle's fallen (router state).
   const open = useMemo<CodexOpen | null>(() => {
@@ -163,10 +164,12 @@ export default function CodexPage() {
     if (!allLoaded() || !currentCampaign || !user) return;
     const keys = keysNow();
     s.current.sent = Object.fromEntries(Object.entries(keys).map(([k, v]) => [k, JSON.stringify(v)]));
-    post({ type: 'dndocs:hello', role: isDM ? 'dm' : 'player', name: user.displayName, campaign: { id: currentCampaign.id, name: currentCampaign.name }, keys, open: s.current.open, members: membersRef.current });
+    post({ type: 'dndocs:hello', role: isDM ? 'dm' : 'player', name: user.displayName, campaign: { id: currentCampaign.id, name: currentCampaign.name }, keys, open: s.current.open, members: membersRef.current, embed: true, home: window.location.origin + window.location.pathname });
     s.current.helloSent = true;
     s.current.wantsHello = false;
     setStatus('ready');
+    // An unlock code was in the address (a handout link): it's used now, so don't keep it there.
+    if (s.current.open?.hash?.startsWith('#/journal/')) navigate('/codex', { replace: true });
   };
 
   // Tell the codex what changed (never while our own writes are still on their way).
@@ -316,6 +319,9 @@ export default function CodexPage() {
         } catch (err) {
           post({ type: 'dndocs:bank', id: typeof raw?.id === 'string' ? raw.id : '', ok: false, error: err instanceof Error ? err.message : String(err) });
         }
+      } else if (d.type === 'codex:entry' && (d as { action?: string }).action === 'handout' && isDM) {
+        const h = (d as { handout?: Partial<HandoutDraft> }).handout;
+        if (h && typeof h.code === 'string') setHandout({ code: h.code, title: String(h.title || 'Handout').slice(0, 120), text: String(h.text || '').slice(0, 4000), what: Array.isArray(h.what) ? h.what.map(String).slice(0, 20) : [] });
       } else if (d.type === 'codex:entry' && d.thing && isDM) {
         setRecord(d.thing);
       } else if (d.type === 'codex:error' && d.stage === 'load' && sandboxed) {
@@ -373,29 +379,115 @@ export default function CodexPage() {
         allow="clipboard-write"
         {...(sandboxed ? { sandbox: SANDBOX } : {})}
       />
+      {handout && <HandoutModal draft={handout} onClose={() => setHandout(null)} />}
       {record && <RecordModal thing={record} onClose={() => setRecord(null)} onDone={(name, ok, error) => post({ type: 'dndocs:entry', ok, name, error })} />}
     </div>
   );
 }
 
-const CATEGORY: Record<string, string> = { weapon: 'Weapon', ammunition: 'Weapon', armor: 'Armor', potion: 'Potion', oil: 'Potion', poison: 'Potion', scroll: 'Scroll' };
-const HOLDER_TYPES = ['character', 'npc', 'shop'];
+interface HandoutDraft {
+  code: string;
+  title: string;
+  text: string;
+  what: string[];
+}
 
-/** DM: make a DnDocs item entry for something from the codex, on the character (or NPC, shop) who has it. */
-function RecordModal({ thing, onClose, onDone }: { thing: RecordThing; onClose: () => void; onDone: (name: string, ok: boolean, error?: string) => void }) {
+/** DM: post a codex handout as a DnDocs note. Opening its link unlocks the codex entries for the party. */
+function HandoutModal({ draft, onClose }: { draft: HandoutDraft; onClose: () => void }) {
   const { user, currentCampaign } = useAuth();
-  const { entities } = useCampaignData();
+  const { players } = useCampaignData();
   const toast = useToast();
   const navigate = useNavigate();
-  const [holder, setHolder] = useState('');
+  const [title, setTitle] = useState(draft.title);
+  const [text, setText] = useState(draft.text);
+  const [everyone, setEveryone] = useState(true);
+  const [chosen, setChosen] = useState<string[]>([]);
+  const [show, setShow] = useState(true);
   const [saving, setSaving] = useState(false);
-  const holders = useMemo(
-    () =>
-      entities
-        .filter((e: Entity) => HOLDER_TYPES.includes(baseType(e.type)) || e.type === 'character')
-        .sort((a, b) => Number(b.type === 'character') - Number(a.type === 'character') || a.name.localeCompare(b.name)),
-    [entities],
+  const link = `/codex?open=${encodeURIComponent(`#/journal/${draft.code}`)}`;
+  const save = async () => {
+    if (!currentCampaign || !user || !title.trim() || (!everyone && !chosen.length)) return;
+    setSaving(true);
+    try {
+      const content = [text.trim(), draft.what.length > 1 ? `*${draft.what.join(' · ')}*` : '', `[Open it in the Scavenger's Codex](${link}) · code **${draft.code}**`].filter(Boolean).join('\n\n');
+      const e = await quickCreateEntity({ campaign: currentCampaign, user, name: title.trim(), type: 'note', content, tags: ['handout'] });
+      const now = Date.now();
+      await applySharingUpdate(e.id, {
+        isPublic: everyone,
+        allowedPlayers: everyone ? [] : chosen,
+        ...(show ? { lastPushedAt: now, lastPushedTo: everyone ? [] : chosen } : {}),
+      });
+      toast.show(`Posted “${title.trim()}” for ${everyone ? 'everyone' : `${chosen.length} player${chosen.length === 1 ? '' : 's'}`}`, { action: { label: 'Open', onClick: () => navigate(`/entity/${e.id}`) } });
+      onClose();
+    } catch (err) {
+      toast.error(err, 'Post handout');
+      setSaving(false);
+    }
+  };
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Post a handout in DnDocs"
+      description="It becomes a note for your players. Its link opens the Codex and unlocks what it's about for the whole party."
+      footer={
+        <>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="button" className="btn btn-primary" onClick={save} disabled={saving || !title.trim() || (!everyone && !chosen.length)}>
+            {saving ? 'Posting…' : 'Post handout'}
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <label className="block">
+          <span className="label">Title</span>
+          <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} />
+        </label>
+        <label className="block">
+          <span className="label">The note</span>
+          <textarea className="input" rows={4} value={text} onChange={(e) => setText(e.target.value)} />
+        </label>
+        <fieldset className="space-y-2">
+          <legend className="label">Who gets it</legend>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="radio" checked={everyone} onChange={() => setEveryone(true)} /> Everyone in the campaign
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="radio" checked={!everyone} onChange={() => setEveryone(false)} /> Only…
+          </label>
+          {!everyone && (
+            <div className="ml-6 flex flex-wrap gap-x-4 gap-y-1">
+              {players.map((p) => (
+                <label key={p.uid} className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={chosen.includes(p.uid)} onChange={(e) => setChosen((c) => (e.target.checked ? [...c, p.uid] : c.filter((x) => x !== p.uid)))} />
+                  {p.displayName}
+                </label>
+              ))}
+            </div>
+          )}
+        </fieldset>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} /> Show it on their screens now
+        </label>
+      </div>
+    </Modal>
   );
+}
+
+const CATEGORY: Record<string, string> = { weapon: 'Weapon', ammunition: 'Weapon', armor: 'Armor', potion: 'Potion', oil: 'Potion', poison: 'Potion', scroll: 'Scroll' };
+
+/**
+ * DM: a DnDocs page for something from the codex (lore, pictures, secrets). Who carries it is the
+ * satchels' business, so the page has no location of its own.
+ */
+function RecordModal({ thing, onClose, onDone }: { thing: RecordThing; onClose: () => void; onDone: (name: string, ok: boolean, error?: string) => void }) {
+  const { user, currentCampaign } = useAuth();
+  const toast = useToast();
+  const navigate = useNavigate();
+  const [saving, setSaving] = useState(false);
   const save = async () => {
     if (!currentCampaign || !user) return;
     setSaving(true);
@@ -405,7 +497,7 @@ function RecordModal({ thing, onClose, onDone }: { thing: RecordThing; onClose: 
         user,
         name: thing.name,
         type: 'item',
-        locationId: holder || null,
+        locationId: null,
         content: thing.desc ?? '',
         tags: ['codex'],
         attributes: {
@@ -415,35 +507,26 @@ function RecordModal({ thing, onClose, onDone }: { thing: RecordThing; onClose: 
         },
       });
       onDone(thing.name, true);
-      toast.show(`Recorded “${thing.name}” in DnDocs (secret until you reveal it)`, { action: { label: 'Open', onClick: () => navigate(`/entity/${e.id}`) } });
+      toast.show(`Made a page for “${thing.name}” (secret until you reveal it)`, { action: { label: 'Open', onClick: () => navigate(`/entity/${e.id}`) } });
       onClose();
     } catch (err) {
       onDone(thing.name, false, err instanceof Error ? err.message : String(err));
-      toast.error(err, 'Record item');
+      toast.error(err, 'Make a page');
       setSaving(false);
     }
   };
   return (
-    <Modal open onClose={onClose} title={`Record “${thing.name}” in DnDocs`}>
+    <Modal open onClose={onClose} title={`A DnDocs page for “${thing.name}”`}>
       <div className="space-y-4">
-        <p className="text-sm text-stone-400">Makes an item entry linked to the codex. It starts secret; reveal it when the party should see it.</p>
-        <label className="block">
-          <span className="label">Who has it?</span>
-          <select className="input" value={holder} onChange={(e) => setHolder(e.target.value)}>
-            <option value="">Nobody yet</option>
-            {holders.map((h) => (
-              <option key={h.id} value={h.id}>
-                {h.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <p className="text-sm text-stone-400">
+          An item entry linked to the Codex, for its lore, pictures and secrets. It starts secret; reveal it when the party should see it. Who carries it stays in the Codex satchels, and the page shows that by itself.
+        </p>
         <div className="flex justify-end gap-2">
           <button type="button" className="btn btn-ghost" onClick={onClose}>
             Cancel
           </button>
           <button type="button" className="btn btn-primary" onClick={save} disabled={saving}>
-            {saving ? 'Saving…' : 'Record item'}
+            {saving ? 'Saving…' : 'Make the page'}
           </button>
         </div>
       </div>
