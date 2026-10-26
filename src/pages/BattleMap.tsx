@@ -35,7 +35,7 @@ import { useConfirm } from '../contexts/ConfirmContext';
 import { useImageSrc } from '../hooks/useImageSrc';
 import { useScene } from '../hooks/useScene';
 import MapViewer, { type ToolPhase, type ViewerApi } from '../components/map/MapViewer';
-import BattleBoard, { cellAt, type DraftShape, type Ruler, type Tool } from '../components/battle/BattleBoard';
+import BattleBoard, { cellAt, tokenHold, type DraftShape, type Ruler, type Tool } from '../components/battle/BattleBoard';
 import InitiativeTracker from '../components/battle/InitiativeTracker';
 import { openTableChat } from '../components/chat/ChatDock';
 import TokenCard, { AURA_TIMER } from '../components/battle/TokenCard';
@@ -361,6 +361,10 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
   // highlights its row.
   const [spotlightId, setSpotlightId] = useState<string | null>(null);
   const [mapHoverId, setMapHoverId] = useState<string | null>(null);
+  // The token card sits in the lower-left corner, unless the token you picked is there: then it
+  // moves to the lower right, so it never covers the token you just tapped.
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [cardRight, setCardRight] = useState(false);
   const [entryOpen, setEntryOpen] = useState<string | null>(null);
   // In full screen the side panel would open behind the map, so entries open in a dialog instead.
   const openEntry = (e: Entity) => (fullscreen ? setEntryOpen(e.id) : peek(e));
@@ -463,6 +467,18 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
   // Players never get hidden tokens, except their own (shown faded, still theirs to move).
   const tokens = useMemo(() => (asDM ? allTokens : allTokens.filter((t) => !t.hidden || t.controlledBy.includes(uid))), [allTokens, asDM, uid]);
   const selected = tokens.find((t) => t.id === selectedId) ?? null;
+  useLayoutEffect(() => {
+    const card = cardRef.current;
+    const area = card?.offsetParent?.getBoundingClientRect();
+    const el = selected ? document.querySelector(`[data-token="${CSS.escape(selected.id)}"]`) : null;
+    if (!card || !area || !el || window.innerWidth < 640) return setCardRight(false);
+    const t = el.getBoundingClientRect();
+    const cx = t.left + t.width / 2;
+    const cy = t.top + t.height / 2;
+    const margin = 24;
+    const underLeft = cx < area.left + 8 + card.offsetWidth + margin && cy > area.bottom - 8 - card.offsetHeight - margin;
+    setCardRight(underLeft);
+  }, [selected?.id, selected?.x, selected?.y]); // eslint-disable-line react-hooks/exhaustive-deps
   const fogOn = (scene.fog?.mode ?? 'off') !== 'off';
 
   useEffect(() => {
@@ -676,8 +692,8 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
           const pts = [...r.pts.slice(0, -1), q];
           return { pts, label: rulerLabel(pts) };
         });
-        // Touch screens have no right click: holding still for a moment drops a waypoint.
-        if (pointerType === 'touch') dwellTimer.current = setTimeout(addWaypoint, 650);
+        // Touch screens (fingers and pens) have no right click: holding still for a moment drops a waypoint.
+        if (pointerType !== 'mouse') dwellTimer.current = setTimeout(addWaypoint, 650);
       } else if (phase === 'up') {
         if (clickRuler.current) return;
         const r = rulerRef.current;
@@ -1162,7 +1178,7 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
         </div>
       )}
       {selected && !isDraft && (
-        <div className="absolute bottom-2 left-2 pb-safe">
+        <div ref={cardRef} className={clsx('absolute bottom-2 pb-safe', cardRight ? 'right-16' : 'left-2')}>
           <TokenCard
             key={selected.id}
             token={selected}
@@ -1252,7 +1268,7 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
           pageFullscreen
           onFullscreenChange={setFullscreen}
           crosshair={!!armed}
-          onMapClick={(x, y) => (armed ? placeArmed(x, y) : (setSelectedId(null), setDrawingId(null)))}
+          onMapClick={(x, y) => (armed ? placeArmed(x, y) : tokenHold.active ? undefined : (setSelectedId(null), setDrawingId(null)))}
           onTool={gridDragOn ? onGridDrag : !isDraft && tool !== 'select' ? onTool : null}
           onHover={tool === 'measure' ? onRulerHover : null}
           toolbar={toolbar}

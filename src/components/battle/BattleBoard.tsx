@@ -123,6 +123,12 @@ function textWidth(label: string, fs: number) {
   return w * fs;
 }
 
+/**
+ * A press-and-hold on a token is in progress or just ended (it showed the distance): the map's own
+ * tap handling skips that release, so the selection stays.
+ */
+export const tokenHold = { active: false };
+
 export default function BattleBoard(props: Props) {
   const { api, board, scene, tokens, drawings, marks, uid, asDM, tool, selectedId, turnId, fog, showWalls, ruler, draft } = props;
   // Everyone's table colour: their pings, rulers and the ring on the tokens they play.
@@ -162,6 +168,36 @@ export default function BattleBoard(props: Props) {
   /** `n` screen pixels (at the normal text size) in squares. */
   const px = (n: number) => (n * remPx) / 16 / pxPerCell;
   const [hoverId, setHoverId] = useState<string | null>(null);
+  // Touch has no hover: with a token selected, pressing and holding another one shows how far
+  // apart they are (for a few seconds), instead of selecting it.
+  const [heldId, setHeldId] = useState<string | null>(null);
+  const holdTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const heldFor = useRef<string | null>(null);
+  const holdClear = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const startHold = (t: Token, e: React.PointerEvent) => {
+    clearTimeout(holdTimer.current);
+    heldFor.current = null;
+    if (e.pointerType === 'mouse' || !selectedId || selectedId === t.id) return;
+    holdTimer.current = setTimeout(() => {
+      heldFor.current = t.id;
+      tokenHold.active = true;
+      clearTimeout(holdClear.current);
+      setHeldId(t.id);
+    }, 450);
+  };
+  const cancelHold = () => clearTimeout(holdTimer.current);
+  /** The press was a hold (the distance was shown): don't treat it as a tap. */
+  const endHold = (t: Token) => {
+    clearTimeout(holdTimer.current);
+    if (heldFor.current !== t.id) return false;
+    heldFor.current = null;
+    // After the map has seen this release (it listens first).
+    setTimeout(() => (tokenHold.active = false), 0);
+    clearTimeout(holdClear.current);
+    holdClear.current = setTimeout(() => setHeldId((h) => (h === t.id ? null : h)), 3000);
+    return true;
+  };
+  useEffect(() => () => (clearTimeout(holdTimer.current), clearTimeout(holdClear.current)), []);
   /** A drawing being dragged to a new place (offset in squares). */
   const [moving, setMoving] = useState<{ id: string; start: Pt; dx: number; dy: number; moved: boolean } | null>(null);
 
@@ -211,16 +247,25 @@ export default function BattleBoard(props: Props) {
   };
   const tokenDown = (t: Token) => (e: React.PointerEvent) => {
     if (tool !== 'select') return;
+    startHold(t, e);
     if (!props.canMove(t)) {
       // Not yours to move: the map pans as usual (so a finger can start on any token), and a tap
       // without moving still selects it.
       const start = { x: e.clientX, y: e.clientY, id: e.pointerId };
+      const move = (ev: PointerEvent) => {
+        if (ev.pointerId === start.id && Math.hypot(ev.clientX - start.x, ev.clientY - start.y) >= 8) cancelHold();
+      };
       const up = (ev: PointerEvent) => {
         if (ev.pointerId !== start.id) return;
         window.removeEventListener('pointerup', up);
-        if (ev.type === 'pointerup' && Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 8) tapToken(t);
+        window.removeEventListener('pointercancel', up);
+        window.removeEventListener('pointermove', move);
+        const held = endHold(t);
+        if (!held && ev.type === 'pointerup' && Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 8) tapToken(t);
       };
       window.addEventListener('pointerup', up);
+      window.addEventListener('pointercancel', up);
+      window.addEventListener('pointermove', move);
       return;
     }
     e.stopPropagation();
@@ -236,11 +281,13 @@ export default function BattleBoard(props: Props) {
     const x = p.x - drag.dx;
     const y = p.y - drag.dy;
     const moved = drag.moved || Math.hypot(x - t.x, y - t.y) > 0.15;
+    if (moved) cancelHold();
     setDrag({ ...drag, x, y, moved });
   };
   const tokenUp = (t: Token) => (e: React.PointerEvent) => {
     if (!drag || drag.id !== t.id) return;
     e.stopPropagation();
+    const held = endHold(t);
     if (drag.moved) {
       const c = snapTokenCorner({ x: drag.x + t.size / 2, y: drag.y + t.size / 2 }, t.size, scene.grid.snap);
       if (c.x !== t.x || c.y !== t.y) {
@@ -248,7 +295,7 @@ export default function BattleBoard(props: Props) {
         if (!asDM && dragWalk?.blocked && props.onBlocked) props.onBlocked(t, c.x, c.y);
         else props.onMove(t.id, c.x, c.y);
       }
-    } else tapToken(t);
+    } else if (!held) tapToken(t);
     setDrag(null);
   };
 
@@ -661,9 +708,10 @@ export default function BattleBoard(props: Props) {
       {/* Range check: with a token selected, pointing at another shows how far apart they are
           (5e: from the nearest squares; 5 ft when they're next to each other). */}
       {(() => {
-        if (!selectedId || !hoverId || hoverId === selectedId || drag) return null;
+        const other = heldId ?? hoverId;
+        if (!selectedId || !other || other === selectedId || (drag && (drag.moved || !heldId))) return null;
         const a = tokens.find((t) => t.id === selectedId);
-        const b = tokens.find((t) => t.id === hoverId);
+        const b = tokens.find((t) => t.id === other);
         if (!a || !b) return null;
         const gap = (a0: number, as: number, b0: number, bs: number) => {
           const g = Math.max(a0, b0) - Math.min(a0 + as, b0 + bs);
