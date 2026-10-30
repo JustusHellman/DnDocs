@@ -17,6 +17,7 @@ import type { Drawing, LiveMark, Scene, Token } from '../../types';
 import { walk, WallIndex } from '../../lib/battle/pathing';
 import { distanceFeet } from '../../lib/battle/geometry';
 import { squaresIn, templatePolygon, type TemplateKind } from '../../lib/battle/templates';
+import { useTableLive } from '../../lib/play/live';
 
 const TEMPLATE_KINDS: string[] = ['circle', 'cone', 'beam', 'cube'];
 
@@ -133,6 +134,9 @@ export default function BattleBoard(props: Props) {
   const { api, board, scene, tokens, drawings, marks, uid, asDM, tool, selectedId, turnId, fog, showWalls, ruler, draft } = props;
   // Everyone's table colour: their pings, rulers and the ring on the tokens they play.
   const tableColors = useTableColors();
+  // Reactions used and concentration (a creature's only for the DM), from the table's live state.
+  const table = useTableLive();
+  const liveOf = (t: Token) => (t.entityId ? table.play[`c_${t.entityId}`] : undefined) ?? table.play[`t_${t.id}`];
   const markColor = (m: { id: string }) => colorOf(tableColors, m.id.replace(/-m$/, ''));
   const id = useId().replace(/:/g, '');
   const [drag, setDrag] = useState<{ id: string; x: number; y: number; dx: number; dy: number; moved: boolean } | null>(null);
@@ -378,6 +382,28 @@ export default function BattleBoard(props: Props) {
             </text>
           </g>
         )}
+        {(() => {
+          const lv = liveOf(t);
+          const dmConc = asDM && !!table.dm[`t_${t.id}`]?.conc;
+          return (
+            <>
+              {(lv?.conc || dmConc) && (
+                <circle cx={r} cy={r} r={r + 0.08} fill="none" stroke="#4dabf7" strokeWidth={0.05} strokeDasharray={lv?.conc ? undefined : '0.14 0.09'} style={{ pointerEvents: 'none' }}>
+                  <title>{lv?.conc ? `Concentrating${lv.cs ? ` on ${lv.cs}` : ''}` : 'Concentrating (only you see this)'}</title>
+                </circle>
+              )}
+              {lv?.re && (
+                <g>
+                  <title>Reaction used</title>
+                  <circle cx={-0.02} cy={r} r={0.13} fill="#c92a2a" stroke="#fff" strokeWidth={0.03} />
+                  <text x={-0.02} y={r + 0.005} textAnchor="middle" dominantBaseline="central" fontSize={0.15} fontWeight={700} fill="#fff">
+                    R
+                  </text>
+                </g>
+              )}
+            </>
+          );
+        })()}
         {t.conditions.length > 0 && (
           <g>
             <circle cx={0.12} cy={0.12} r={0.13} fill="#5b3a7d" stroke="#fff" strokeWidth={0.03} />

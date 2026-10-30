@@ -8,6 +8,7 @@ import { setCombat, setInitiativeOrder, setInitiatives, setTurn, updateScene, up
 import { rollD20 } from '../../lib/battle/table';
 import type { Entity, Scene, Token } from '../../types';
 import EncounterMeter from './EncounterMeter';
+import { patchPlay, tableLive } from '../../lib/play/live';
 import { colorOf, useTableColors } from '../../lib/chat/colorStore';
 import { setInitiativeContext, useSittingOut } from '../../lib/battle/initiativeStore';
 import { openTableChat } from '../chat/ChatDock';
@@ -51,6 +52,16 @@ export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asD
   useEffect(() => {
     if (combat.active && !narrow()) setOpen(true);
   }, [combat.active]);
+
+  // A creature's reaction comes back at the start of its turn (the DM's screen does it, or the
+  // player's own for their character).
+  useEffect(() => {
+    if (!combat.active || !turnToken || !(asDM || mine(turnToken))) return;
+    const play = tableLive().play;
+    const key = turnToken.entityId && play[`c_${turnToken.entityId}`] ? `c_${turnToken.entityId}` : `t_${turnToken.id}`;
+    const live = play[key];
+    if (live?.re && live.uid) patchPlay(scene.campaignId, key, live.uid, live.name ?? turnToken.name, { re: null }).catch(() => undefined);
+  }, [combat.turn, combat.round]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The DM's screen keeps the stored order in step with the rolls (players can't see hidden tokens).
   // Only the order field is written, so a turn a player just passed on is never overwritten.
@@ -157,6 +168,13 @@ export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asD
       await setCombat(scene.id, { active: false, round: 0, turn: null, order: [] });
       // Round counts mean nothing outside combat: timed effects stay on, until removed by hand.
       await Promise.all(tokens.filter((t) => t.timers && Object.keys(t.timers).length).map((t) => updateToken(scene.id, t.id, { timers: {} })));
+      // Reactions are a per-round thing: everyone on this map has theirs back when the fight ends.
+      const play = tableLive().play;
+      for (const t of tokens) {
+        const key = t.entityId && play[`c_${t.entityId}`] ? `c_${t.entityId}` : `t_${t.id}`;
+        const live = play[key];
+        if (live?.re && live.uid) await patchPlay(scene.campaignId, key, live.uid, live.name ?? t.name, { re: null }).catch(() => undefined);
+      }
     }, 'End combat');
   };
   // The DM's say on the order (ties the players talk out, or anything else): one place at a time.
@@ -206,9 +224,22 @@ export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asD
           {open ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
         </button>
         {/* Folded, with someone of yours still to roll: the way to the roll stays one click away. */}
-        {!open && canRollSome && (
+        {!open && canRollSome && !(combat.active && asDM) && (
           <button type="button" className="btn btn-primary btn-sm mr-1.5 px-2" onClick={rollInChat} title="Roll for initiative (in the table chat)">
             <Dices size={13} /> Roll
+          </button>
+        )}
+        {/* Folded during a fight: moving the turn on doesn't need the whole list. */}
+        {!open && combat.active && (asDM || myTurn) && (
+          <button
+            type="button"
+            className="btn btn-primary btn-sm mr-1.5 shrink-0 px-2"
+            onClick={next}
+            disabled={busy}
+            aria-label={asDM ? 'Next turn' : 'End my turn'}
+            title={asDM ? 'Next turn' : 'End my turn'}
+          >
+            {asDM ? <SkipForward size={13} /> : <Flag size={13} />} {asDM ? 'Next' : 'Done'}
           </button>
         )}
       </div>

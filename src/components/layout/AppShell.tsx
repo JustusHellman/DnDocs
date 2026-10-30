@@ -6,6 +6,7 @@ import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
 import CodexInbox from '../codex/CodexInbox';
 import { ChatButton } from '../chat/ChatDock';
+import { QuickBookButton } from '../play/QuickBook';
 import { RunawayWarning } from '../DbUsageCard';
 import { useCampaignData } from '../../contexts/CampaignDataContext';
 import { usePeek } from '../../contexts/PeekContext';
@@ -285,6 +286,7 @@ export default function AppShell() {
                 <Search size={20} />
               </button>
             )}
+            <QuickBookButton />
             <ChatButton />
             <JukeboxButton />
             <RecentButton />

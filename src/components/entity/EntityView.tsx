@@ -39,6 +39,7 @@ import { Markdown } from './Markdown';
 import { ImageThumb, Lightbox } from './Images';
 import { StatBlock } from './StatBlock';
 import { HitPoints } from './HitPoints';
+import CharacterPlay from '../play/CharacterPlay';
 import { LocationTree, useVisibleChildren } from './LocationTree';
 import CarriedCodex from '../codex/CarriedCodex';
 import GiveCodexThing from '../codex/GiveCodexThing';
@@ -153,7 +154,7 @@ function useVisibleAttributes(entity: Entity) {
     const schema = fieldsFor(entity.type);
     // A character's HP has its own tracker.
     // A character's HP has its own tracker; the Codex link has its own button.
-    const skip: readonly string[] = [...(entity.type === 'character' ? HP_KEYS : []), 'codexRef'];
+    const skip: readonly string[] = [...(entity.type === 'character' ? HP_KEYS : []), 'codexRef', 'play'];
     const entries = Object.entries(entity.attributes ?? {}).filter(
       ([key, v]) => v !== undefined && v !== null && v !== '' && !skip.includes(key) && canViewField(entity, key),
     );
@@ -545,6 +546,7 @@ export default function EntityView({ entityId, variant = 'page' }: { entityId: s
       <div className={clsx('grid gap-4', !panel && '@4xl:grid-cols-[minmax(0,1fr)_320px]', panel && 'px-3 pb-6')}>
         <div className="min-w-0 space-y-4">
           {showHp && <HitPoints entity={entity} maxText={hpMax} editable={editable} />}
+          {isCharacter && editable && <CharacterPlay entity={entity} />}
           {details('@4xl:hidden')}
           {knowledge && (
             <section className="rounded-2xl border border-amber-700/40 bg-amber-950/20 p-4 sm:p-5">

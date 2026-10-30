@@ -15,6 +15,7 @@ import firebaseConfig from '../../../firebase-applet-config.json';
 import type { Campaign, User } from '../../types';
 import { logError } from '../errors';
 import type { ChatRoll } from './rolls';
+import { parseEvent, type TableEvent } from './events';
 
 const DATABASE_URL: string | undefined =
   (import.meta.env.VITE_FIREBASE_DATABASE_URL as string | undefined) || (firebaseConfig as { databaseURL?: string }).databaseURL;
@@ -27,10 +28,14 @@ export interface ChatMessage {
   uid: string;
   name: string;
   at: number;
-  /** text: a message. roll: dice everyone sees. hidden: "the DM rolls behind the screen" (no result). */
-  kind: 'text' | 'roll' | 'hidden';
+  /** text: a message. roll: dice everyone sees. hidden: "the DM rolls behind the screen" (no result).
+   *  event: something that happened at the table (a spell cast, a slot used, a rest…). */
+  kind: 'text' | 'roll' | 'hidden' | 'event';
   text?: string;
   roll?: ChatRoll;
+  ev?: TableEvent;
+  /** A whisper: only the two of them (and the DM) see it. */
+  whisper?: { to: string; toName: string };
   /** Only in the DMs' copy: a roll the players don't see. */
   secret?: boolean;
 }
@@ -40,6 +45,9 @@ type DbModule = typeof import('firebase/database');
 let loading: Promise<{ db: Db; m: DbModule }> | null = null;
 
 /** The Realtime Database, loaded only when the chat is first used (keeps the app's start fast). */
+export function chatDb() {
+  return rtdb();
+}
 function rtdb() {
   if (!DATABASE_URL) return Promise.reject(new Error('The table chat needs a Realtime Database (see the README).'));
   loading ??= Promise.all([import('firebase/database'), import('../../firebase')]).then(([m, f]) => ({ db: m.getDatabase(f.app, DATABASE_URL), m }));
@@ -64,8 +72,10 @@ function toMessage(id: string, v: Record<string, unknown>, secret = false): Chat
     uid: v.uid,
     name: typeof v.name === 'string' ? v.name : 'Someone',
     at: v.at,
-    kind: v.kind === 'roll' || v.kind === 'hidden' ? v.kind : 'text',
+    kind: v.kind === 'roll' || v.kind === 'hidden' || v.kind === 'event' ? v.kind : 'text',
     ...(typeof v.text === 'string' ? { text: v.text } : {}),
+    ...(typeof v.e === 'string' ? { ev: parseEvent(v.e) } : {}),
+    ...(typeof v.to === 'string' ? { whisper: { to: v.to, toName: typeof v.toName === 'string' ? v.toName : '' } } : {}),
     ...(roll ? { roll } : {}),
     ...(secret ? { secret: true } : {}),
   };
@@ -77,13 +87,14 @@ export type ChatStatus = 'connecting' | 'ready' | 'waiting' | 'unavailable';
  * The latest messages (and, for DMs, the secret rolls), live. `waiting`: this account isn't in
  * the chat's member list yet (the owner's app adds new players the next time it's open).
  */
-export function listenChat(campaignId: string, isDM: boolean, onData: (messages: ChatMessage[]) => void, onStatus: (s: ChatStatus) => void): () => void {
+export function listenChat(campaignId: string, isDM: boolean, onData: (messages: ChatMessage[]) => void, onStatus: (s: ChatStatus) => void, me?: string): () => void {
   let stopped = false;
   const unsubs: (() => void)[] = [];
   let pub: ChatMessage[] = [];
   let sec: ChatMessage[] = [];
+  let wsp: ChatMessage[] = [];
   // DMs see the real secret rolls, so the players' "rolls behind the screen" lines are noise for them.
-  const emit = () => onData([...(isDM ? pub.filter((m) => m.kind !== 'hidden') : pub), ...sec].sort((a, b) => a.at - b.at || a.id.localeCompare(b.id)).slice(-KEEP));
+  const emit = () => onData([...(isDM ? pub.filter((m) => m.kind !== 'hidden') : pub), ...sec, ...wsp].sort((a, b) => a.at - b.at || a.id.localeCompare(b.id)).slice(-KEEP));
   if (!chatAvailable) {
     onStatus('unavailable');
     return () => undefined;
@@ -112,6 +123,29 @@ export function listenChat(campaignId: string, isDM: boolean, onData: (messages:
         );
       unsubs.push(listen(`${room(campaignId)}/messages`, false, (l) => (pub = l)));
       if (isDM) unsubs.push(listen(`${room(campaignId)}/secret`, true, (l) => (sec = l)));
+      // Whispers: your own box (the DM: everyone's; each whisper is in both people's boxes, under one id).
+      if (me) {
+        const path = isDM ? `${room(campaignId)}/whispers` : `${room(campaignId)}/whispers/${me}`;
+        unsubs.push(
+          m.onValue(
+            m.ref(db, path),
+            (snap) => {
+              const seen = new Map<string, ChatMessage>();
+              const add = (c: { key: string | null; val: () => unknown }) => {
+                const msg = toMessage(c.key!, c.val() as Record<string, unknown>);
+                if (msg) seen.set(msg.id, msg);
+              };
+              snap.forEach((c) => {
+                if (isDM) c.forEach((w) => void add(w));
+                else add(c);
+              });
+              wsp = [...seen.values()].sort((a, b) => a.at - b.at).slice(-KEEP);
+              emit();
+            },
+            () => undefined,
+          ),
+        );
+      }
     })
     .catch((err) => {
       logError('Table chat', err);
@@ -123,9 +157,34 @@ export function listenChat(campaignId: string, isDM: boolean, onData: (messages:
   };
 }
 
-async function post(campaignId: string, where: 'messages' | 'secret', data: Record<string, unknown>) {
+async function post(campaignId: string, where: 'messages' | 'secret', data: Record<string, unknown>): Promise<string | null> {
   const { db, m } = await rtdb();
-  await m.push(m.ref(db, `${room(campaignId)}/${where}`), { ...data, at: m.serverTimestamp() });
+  const r = await m.push(m.ref(db, `${room(campaignId)}/${where}`), { ...data, at: m.serverTimestamp() });
+  return r.key;
+}
+
+/** Something that happened at the table, for everyone (a spell cast, a slot used, a rest…). */
+export function sendEvent(campaignId: string, user: Pick<User, 'uid' | 'displayName'>, ev: TableEvent) {
+  return post(campaignId, 'messages', { uid: user.uid, name: user.displayName.slice(0, 60), kind: 'event', e: JSON.stringify(ev).slice(0, 4000) });
+}
+
+/** A whisper: written to both people's boxes under the same id (the DM reads all boxes). */
+export async function sendWhisper(campaignId: string, user: Pick<User, 'uid' | 'displayName'>, to: { uid: string; name: string }, text: string) {
+  const t = text.trim().slice(0, 500);
+  if (!t) return;
+  const { db, m } = await rtdb();
+  const id = m.push(m.ref(db, `${room(campaignId)}/whispers/${user.uid}`)).key!;
+  const data = { uid: user.uid, name: user.displayName.slice(0, 60), to: to.uid, toName: to.name.slice(0, 60), text: t, at: m.serverTimestamp() };
+  await m.update(m.ref(db), {
+    [`${room(campaignId)}/whispers/${user.uid}/${id}`]: data,
+    ...(to.uid !== user.uid ? { [`${room(campaignId)}/whispers/${to.uid}/${id}`]: data } : {}),
+  });
+}
+
+/** Take back your own message (e.g. an "Undo" of a slot used). */
+export async function deleteMessage(campaignId: string, id: string) {
+  const { db, m } = await rtdb();
+  await m.remove(m.ref(db, `${room(campaignId)}/messages/${id}`));
 }
 
 export function sendText(campaignId: string, user: Pick<User, 'uid' | 'displayName'>, text: string) {

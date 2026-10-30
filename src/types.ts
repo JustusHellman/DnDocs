@@ -27,6 +27,8 @@ export interface Campaign {
 export interface HouseRules {
   /** 5e massive damage: damage left over after 0 HP ≥ the HP maximum kills outright. Default on. */
   massiveDamage?: boolean;
+  /** Which rules the trackers follow (rests, concentration, class tables, SRD spells). Default 2014. */
+  edition?: '2014' | '2024';
 }
 
 export type BuiltinType =

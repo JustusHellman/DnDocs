@@ -153,6 +153,47 @@ Icons: [game-icons.net](https://game-icons.net) by Lorc, Delapouite and contribu
     links and QR codes open DnDocs and unlock for the whole party; *Post as a handout in DnDocs*
     makes a note for everyone or chosen players (optionally shown on their screens).
   - The Codex runs in a sandboxed frame, so it can't read your DnDocs sign-in.
+- **At the table: slots, resources, spells and rests** – every character gets trackers worked out
+  from its "Class & Level" (e.g. `Druid 5`, `Fighter 2 / Wizard 3`) and stats: spell slots (multiclass
+  too), warlock pact slots, the class's own resources (Rage, Ki/Focus, Wild Shape, Channel Divinity,
+  Sorcery Points, Lay on Hands…), hit dice, concentration and reaction. The full sheet is on the
+  character page; at the table it's one tap away: the **spellbook button** next to the chat (and on
+  the battle map's toolbar, key `B`) opens your ready spells grouped by level with their slots, your
+  resources and the rests. The token card shows concentration and reaction. Everything can be
+  overridden (gear button), and players add their own counters for subclass features, feats and
+  items (uses can follow the proficiency bonus or a modifier); a counter tied to a spell casts it
+  without a slot. State lasts between fights until a rest.
+  - **Spells**: the free SRD spells as cards (2014: SRD 5.1, 2024: SRD 5.2.1 — the DM picks the rules
+    edition under Members), known/prepared per class with an *Always* mark for always-prepared spells,
+    any class list, and the campaign's own cards that players write in their own words. *Cast* uses the
+    slot at once, posts the card to the chat, then offers the rolls ("Roll it here", "I rolled __", or
+    leave it) and *Place it on the map* (the area follows the pointer, from the caster for cones,
+    lines and self-centred areas). *Undo cast* gives it all back. Nothing is ever rolled for you.
+  - **Finding and reading spells**: every spell list has a search. *Ready* shows cards or *With text*
+    (the descriptions right there). Cards are coloured by level, school, casting time or effect
+    (damage / healing / save or attack / other) — each person picks on their own device, with a
+    legend. Spells from other books have no text in the app: anyone at the table can write what one
+    does in their own words (*Write what it does* on its card), shared with the whole campaign. Anyone
+    can improve it later (the card says who edited it last).
+  - **The DM's spellbook**: the same button opens any character's spells, or *All spells (the
+    library)* with search, level and class filters. *Cast for a creature* takes the save DC and attack
+    from the stat block, rolls (or not), can tell the table or stay quiet, and places the area from
+    the token picked on the map.
+  - **Esc** stops the ruler, drawing and other map tools (or tap *Done* on the pill at the bottom),
+    cancels placing a spell's area, and closes the chat and the spellbook panel.
+  - **Rests**: short rest spends hit dice (roll here or type it), long rest restores HP, slots,
+    resources and hit dice by the edition's rule. The DM can rest the whole party at once (Members →
+    Party rest, or `/rest party long`).
+  - **Concentration**: damage to a concentrating character asks its player in the chat for the
+    Constitution save (DC 10 or half the damage). Creatures' reactions are visible to all and come
+    back at the start of their turn; a creature's concentration is only on the DM's screen.
+  - **Chat commands** (type `/` for the list): `/math 12+7` (or `= 12+7`), `/cast fireball 4`,
+    `/cast 2` (your spell names are suggested as you type), `/use rage`, `/regain ki 2`, `/conc`, `/react`, `/check`, `/init 17`,
+    `/w Name message` (whisper), `/me …`, `/rest short|long`, `/help`. Lines like "used a slot" have
+    an *Undo*.
+  - Initiative can be typed in (rolled with real dice) or rolled in the chat.
+  - Needs the current `database.rules.json` published (the trackers live next to the chat, so they
+    cost no Firestore reads or writes).
 - **Images** are stored as WebP (JPEG on browsers without WebP) at up to 1280 px, with a tiny preview
   on each entry so lists show pictures without loading the full images.
 
@@ -235,6 +276,21 @@ and downloaded instead, and a chat line is a few hundred bytes). One-time setup:
 
 Without a `databaseURL` the chat still works as a local dice roller. DM rolls are hidden from the
 players by default (they see "rolls behind the screen"); the DM can switch that in the chat header.
+
+### Spell data
+
+`src/data/spells-*.json` and `classes-*.json` are built from the SRD by `scripts/build-srd.py` (from
+[5e-bits/5e-database](https://github.com/5e-bits/5e-database)). They include material from the
+System Reference Document 5.1 and 5.2.1 by Wizards of the Coast LLC, available under the
+[Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/legalcode).
+Every SRD spell card in the app says which SRD it comes from.
+
+Spells outside the SRD (Xanathar's, Tasha's, the rest of the Player's Handbook and so on, about 200)
+are in `src/data/spells-extra.json` as **facts only**: level, school, casting time, range,
+components, duration, area, dice, save or attack, classes and the book. No rules text: their cards
+say which book to read. Built by `scripts/build-extra-spells.py` from `scripts/spell-facts/*.jsonl`
+(collected from public spell lists; Unearthed Arcana left out). The spellbook's *Other books* box
+hides them.
 
 User profiles can no longer be given a `role` by their owner (an `admin` role used to be
 self-assignable). Set roles in the Firebase console.

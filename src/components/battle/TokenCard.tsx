@@ -2,12 +2,14 @@ import { useCodexStat } from '../../hooks/useCodexStat';
 import { type CatalogMonster, findInCatalog, hasStats, loadCatalog, toDndStats } from '../../lib/codex/catalog';
 import { codexTokenPicture } from '../../lib/codex/plates';
 import { useEffect, useRef, useState } from 'react';
-import { BookOpen, Eye, EyeOff, HeartCrack, ImagePlus, Plus, Trash2, X } from 'lucide-react';
+import { BookOpen, Brain, Crop, Eye, EyeOff, HeartCrack, ImagePlus, Plus, Trash2, X, Zap } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import clsx from 'clsx';
 import { useToast } from '../../contexts/ToastContext';
 import { useConfirm } from '../../contexts/ConfirmContext';
-import { updateCharacterHp } from '../../lib/entityService';
+import { setCoverFraming, updateCharacterHp } from '../../lib/entityService';
+import { resolveImageSrc } from '../../lib/media';
+import PictureFraming from './PictureFraming';
 import { applyHp, deathSavesAfter, deathState, hpToAttributes, readDeathSaves, readHp, rollDeathSave, writeDeathSaves, type DeathSaves, type HpChange } from '../../lib/hitPoints';
 import { arrayRemove, arrayUnion, deleteField } from 'firebase/firestore';
 import { deleteToken, patchToken, restoreToken, setTokenHp, updateToken } from '../../lib/battle/sceneService';
@@ -17,6 +19,12 @@ import { StatBlock, modifier } from '../entity/StatBlock';
 import RevealButton from '../entity/RevealButton';
 import { useCampaignData } from '../../contexts/CampaignDataContext';
 import type { Entity, SceneCombat, Token, User } from '../../types';
+import { usePlayer } from '../../lib/play/usePlayer';
+import { concentrationDC, playKey } from '../../lib/play/model';
+import { patchPlay, setDmConc, useTableLive } from '../../lib/play/live';
+import { tableChat } from '../../lib/chat/bus';
+import { TurnChips } from '../play/PlayTracker';
+import { openQuickBook } from '../play/QuickBook';
 
 interface Props {
   token: Token;
@@ -26,6 +34,8 @@ interface Props {
   /** The linked entry, when the viewer can see it. */
   entity: Entity | undefined;
   canEditEntity: boolean;
+  /** DM: an entry's token picture was framed anew (update the tokens' copies). */
+  onFramed?: (entityId: string, img: string) => void;
   secretHp: { cur: number; max: number } | undefined;
   players: User[];
   onClose: () => void;
@@ -52,7 +62,8 @@ const DURATIONS = [
 
 const HEALTH_WORD: Record<string, string> = { healthy: 'Unhurt', bloodied: 'Bloodied', down: 'Down' };
 
-export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEditEntity, secretHp, players, onClose, onOpenEntry, onUndoable, combat, feetPerSquare = 5 }: Props) {
+export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEditEntity, secretHp, players, onClose, onOpenEntry, onUndoable, combat, feetPerSquare = 5, onFramed }: Props) {
+  const [framing, setFraming] = useState<string | null>(null);
   const toast = useToast();
   const { currentCampaign } = useAuth();
   const confirm = useConfirm();
@@ -76,6 +87,14 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
   const stats = shown?.stats ?? null;
   const editConditions = asDM || controller;
   const isCharacter = entity?.type === 'character';
+  // Table state: a character's trackers; a creature's reaction (everyone sees it) and, for the DM,
+  // whether it's concentrating (only the DM sees that).
+  const player = usePlayer(isCharacter ? entity : null);
+  const table = useTableLive();
+  const creatureKey = playKey(null, t.id);
+  const creatureLive = table.play[creatureKey];
+  const creatureConc = !!table.dm[creatureKey]?.conc;
+  const edition = currentCampaign?.houseRules?.edition === '2024' ? '2024' : '2014';
   const n = parseInt(amount, 10);
   const valid = Number.isFinite(n) && n >= 0;
 
@@ -112,7 +131,7 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
   const timerOr = (name: string) => t.timers?.[name] ?? deleteField();
   const addCondition = (name: string) => {
     // Characters Firestore can't use in a field name are left out.
-    const c = name.replace(/[.~*/[\]`]/g, '').trim().slice(0, 40);
+    const c = name.replace(/[.~*/[\]`]/g, '').trim().slice(0, 60);
     if (!c || t.conditions.includes(c)) return;
     // A timed condition runs out at the start of this same turn, that many rounds later.
     const timer = duration && combat?.active ? { round: combat.round + duration, turn: combat.turn } : null;
@@ -164,7 +183,9 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
     const auraGoes = concentrating && !!t.aura?.conc;
     const conditions = t.conditions.filter((c) => c !== 'Concentrating');
     if (isCharacter && !conditions.includes('Unconscious')) conditions.push('Unconscious');
-    if (concentrating) toast.show(`${t.name} drops to 0 HP and loses concentration.`);
+    if (concentrating || player?.live.conc) toast.show(`${t.name} drops to 0 HP and loses concentration.`);
+    if (player?.live.conc) player.setConc(false).catch(() => undefined);
+    if (creatureConc && currentCampaign) setDmConc(currentCampaign.id, creatureKey, false).catch(() => undefined);
     return tokenSide(
       conditions,
       concentrating ? { [timerKey('Concentrating')]: deleteField(), ...(auraGoes ? { aura: null, [timerKey(AURA_TIMER)]: deleteField() } : {}) } : {},
@@ -175,9 +196,14 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
   const changeHp = (kind: HpChange) => {
     if (busy) return;
     const concentrationCheck = () => {
-      // Concentration: any damage means a Constitution save, DC 10 or half the damage.
-      if (kind === 'damage' && n > 0 && t.conditions.includes('Concentrating')) {
-        toast.show(`${t.name} is concentrating: Constitution save DC ${Math.max(10, Math.floor(n / 2))} to keep the spell.`);
+      // Concentration: any damage means a Constitution save, DC 10 or half the damage. A
+      // character's goes to the chat for its player; a creature's is a note only the DM sees.
+      if (kind !== 'damage' || n <= 0) return;
+      if (player?.live.conc) return void player.damaged(n);
+      if (t.conditions.includes('Concentrating') || creatureConc) {
+        const msg = `${t.name} is concentrating: Constitution save DC ${concentrationDC(n, edition)} to keep the spell.`;
+        if (asDM && !isCharacter) tableChat.note(msg);
+        toast.show(msg);
       }
     };
     const label = kind === 'damage' ? `${n} damage` : kind === 'heal' ? `${n} healing` : 'HP';
@@ -360,6 +386,44 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
         </div>
       )}
 
+      {/* Reaction and concentration. */}
+      {!isCharacter && (asDM || creatureLive?.re) && (
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            disabled={!asDM}
+            aria-pressed={!!creatureLive?.re}
+            onClick={() => currentCampaign && patchPlay(currentCampaign.id, creatureKey, currentCampaign.dmId, t.name, { re: creatureLive?.re ? null : 1 }).catch((err) => toast.error(err, 'Reaction'))}
+            className={clsx('flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ring-1', creatureLive?.re ? 'bg-rose-500/20 text-rose-200 ring-rose-400/60 line-through' : 'text-stone-400 ring-stone-700 hover:text-stone-200')}
+            title="Everyone sees when a creature has used its reaction. It comes back at the start of its turn."
+          >
+            <Zap size={13} /> {creatureLive?.re ? 'Reaction used' : 'Reaction ready'}
+          </button>
+          {asDM && (
+            <button
+              type="button"
+              aria-pressed={creatureConc}
+              onClick={() => currentCampaign && setDmConc(currentCampaign.id, creatureKey, !creatureConc).catch((err) => toast.error(err, 'Concentration'))}
+              className={clsx('flex items-center gap-1 rounded-full border border-dashed px-2.5 py-1 text-xs font-semibold', creatureConc ? 'border-sky-400/70 bg-sky-500/15 text-sky-200' : 'border-stone-700 text-stone-400 hover:text-stone-200')}
+              title="Only you see this. Damage then reminds you of the Constitution save."
+            >
+              <Brain size={13} /> {creatureConc ? 'Concentrating (only you see)' : 'Concentration'}
+            </button>
+          )}
+        </div>
+      )}
+      {/* A character: concentration and reaction here; spells, slots and rests in the spellbook panel. */}
+      {player && (
+        <div className="mt-3 space-y-2">
+          <TurnChips p={player} />
+          {player.canEdit && (
+            <button type="button" className="btn btn-secondary btn-sm w-full" onClick={() => openQuickBook({ entityId: entity!.id })}>
+              <BookOpen size={13} /> Spells, abilities &amp; rests
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="mt-3">
         <span className="label">Conditions &amp; effects</span>
         <div className="flex flex-wrap gap-1">
@@ -382,16 +446,16 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
         </div>
         {editConditions && (
           <form
-            className="mt-1.5 flex gap-1"
+            className="mt-1.5 flex flex-wrap gap-1"
             onSubmit={(e) => {
               e.preventDefault();
               addCondition(newCondition);
             }}
           >
             <input
-              className="input min-h-8 min-w-0 flex-1 py-1 text-xs"
+              className={clsx('input min-h-8 min-w-0 flex-1 py-1 text-xs', combat?.active && 'basis-full')}
               list={`cond-${t.id}`}
-              placeholder="Prone, Blessed, Hex…"
+              placeholder="Type anything: Prone, +1d4 next save…"
               aria-label="Condition or effect"
               value={newCondition}
               onChange={(e) => setNewCondition(e.target.value)}
@@ -404,7 +468,7 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
                 ))}
             </datalist>
             {combat?.active && (
-              <select className="input min-h-8 w-auto py-1 text-xs" value={duration} onChange={(e) => setDuration(Number(e.target.value))} aria-label="Duration">
+              <select className="input min-h-8 w-auto flex-1 py-1 text-xs" value={duration} onChange={(e) => setDuration(Number(e.target.value))} aria-label="Duration">
                 {DURATIONS.map((d) => (
                   <option key={d.value} value={d.value}>
                     {d.label}
@@ -480,6 +544,37 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
             </button>
           </div>
         </div>
+      )}
+
+      {/* The entry's picture, framed for the round token (players: their own character). */}
+      {entity && canEditEntity && entity.imageUrls?.[0] && (
+        <div className={clsx('flex items-center gap-2', !asDM && 'mt-3 border-t border-stone-800 pt-3', asDM && 'mt-3')}>
+          <span className="label mb-0 w-16">Framing</span>
+          {entity.coverThumb && <img src={entity.coverThumb} alt="" className="size-8 rounded-full object-cover ring-2 ring-stone-700" />}
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm px-2"
+            onClick={async () => {
+              const full = await resolveImageSrc(entity.imageUrls![0]).catch(() => null);
+              setFraming(full ?? entity.coverThumb ?? null);
+            }}
+            title="Choose which part of the picture shows on the token"
+          >
+            <Crop size={13} /> Adjust
+          </button>
+        </div>
+      )}
+      {framing && entity && (
+        <PictureFraming
+          src={framing}
+          title={`Token picture: ${entity.name}`}
+          onClose={() => setFraming(null)}
+          onSave={async (url) => {
+            await setCoverFraming(entity, url);
+            // Tokens show their own copy to players who can't open the entry (monsters): update it too.
+            if (asDM) onFramed?.(entity.id, url);
+          }}
+        />
       )}
 
       {asDM && (

@@ -7,7 +7,9 @@ import { useToast } from '../contexts/ToastContext';
 import { useConfirm } from '../contexts/ConfirmContext';
 import { removePlayer, renameCampaign, setCoDm, setHouseRules, updateProfile } from '../lib/entityService';
 import type { User } from '../types';
-import { Avatar, Page, PageHeader, Toggle } from '../components/ui/bits';
+import { Avatar, Page, PageHeader, Segmented, Toggle } from '../components/ui/bits';
+import { partyRest } from '../lib/play/usePlayer';
+import { tableLive } from '../lib/play/live';
 import { GiMeepleGroup } from 'react-icons/gi';
 import { Modal } from '../components/ui/Modal';
 import { MenuItem, Popover } from '../components/ui/Popover';
@@ -229,6 +231,24 @@ export default function Members() {
               }
             />
           </div>
+          <div className="mt-4 flex flex-wrap items-start gap-3 border-t border-stone-800 pt-4">
+            <div className="min-w-0 flex-1 basis-56">
+              <div className="text-stone-100">Rules edition</div>
+              <p className="text-xs text-stone-500">
+                Which free rules the spells, class tables and rests follow. 2014 (SRD 5.1): a long rest gives back half your hit dice. 2024 (SRD 5.2.1): all of them, and the 2024 spell texts.
+              </p>
+            </div>
+            <Segmented
+              size="sm"
+              value={currentCampaign?.houseRules?.edition === '2024' ? '2024' : '2014'}
+              onChange={(edition) => currentCampaign && setHouseRules(currentCampaign.id, { ...(currentCampaign.houseRules ?? {}), edition }).catch((err) => toast.error(err, 'Table rules'))}
+              options={[
+                { value: '2014', label: '2014' },
+                { value: '2024', label: '2024' },
+              ]}
+            />
+          </div>
+          <PartyRest />
           <div className="mt-4 border-t border-stone-800 pt-4">
             <div className="text-xs text-stone-500">Join code</div>
             <div className="font-mono text-lg tracking-[0.25em] text-amber-300">{currentCampaign?.joinCode}</div>
@@ -295,5 +315,51 @@ export default function Members() {
         </form>
       </Modal>
     </Page>
+  );
+}
+
+/** The DM rests every player's character at once (they don't have to do anything). */
+function PartyRest() {
+  const { currentCampaign } = useAuth();
+  const { entities } = useCampaignData();
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [busy, setBusy] = useState(false);
+  const chars = entities.filter((e) => e.type === 'character' && e.playerId);
+  const rest = async (kind: 'short' | 'long') => {
+    if (!currentCampaign) return;
+    const ok = await confirm({
+      title: kind === 'long' ? 'Long rest for the whole party?' : 'Short rest for the whole party?',
+      message:
+        kind === 'long'
+          ? `${chars.map((c) => c.name).join(', ')}: hit points, spell slots and resources back, and hit dice as the rules say. It shows in the chat.`
+          : `${chars.map((c) => c.name).join(', ')}: short-rest resources and pact slots back. Everyone can still spend hit dice with Short rest on their own tracker.`,
+      confirmLabel: kind === 'long' ? 'Long rest' : 'Short rest',
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await partyRest(currentCampaign.id, currentCampaign.dmId, chars, currentCampaign.houseRules?.edition === '2024' ? '2024' : '2014', kind, tableLive().play);
+      toast.success(kind === 'long' ? 'The party is rested' : 'Short rest done');
+    } catch (err) {
+      toast.error(err, 'Party rest');
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!chars.length) return null;
+  return (
+    <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-stone-800 pt-4">
+      <div className="min-w-0 flex-1 basis-56">
+        <div className="text-stone-100">Party rest</div>
+        <p className="text-xs text-stone-500">Rests every player’s character straight away (also /rest party long in the chat).</p>
+      </div>
+      <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => rest('short')}>
+        Short rest
+      </button>
+      <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => rest('long')}>
+        Long rest
+      </button>
+    </div>
   );
 }

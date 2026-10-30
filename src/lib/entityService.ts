@@ -273,6 +273,19 @@ export async function saveEntity(draft: EntityDraft, ctx: SaveContext): Promise<
   return normalizeEntity(entity);
 }
 
+/**
+ * The round picture used on tokens and in lists, framed by hand (e.g. so a character's head isn't
+ * cut off). Stays until the entry's first picture is replaced.
+ */
+export async function setCoverFraming(entity: Entity, coverThumb: string) {
+  await updateDoc(doc(db, 'entities', entity.id), { coverThumb, updatedAt: nowIso(), ...syncStamp() });
+}
+
+/** A character's tracker setup (classes, overrides, counters, spells): attributes.play. */
+export async function setPlayDef(entityId: string, def: Record<string, unknown>) {
+  await updateDoc(doc(db, 'entities', entityId), { 'attributes.play': JSON.parse(JSON.stringify(def)), updatedAt: nowIso(), ...syncStamp() });
+}
+
 /** One-off: give an older entry (saved before previews existed) its inline preview. */
 export async function backfillCoverThumb(entity: Entity) {
   const coverThumb = await coverThumbFor(entity.imageUrls?.[0], undefined);

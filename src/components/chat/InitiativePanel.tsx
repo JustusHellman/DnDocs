@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import clsx from 'clsx';
-import { ChevronDown, ChevronUp, Dices, Swords } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Dices, Swords } from 'lucide-react';
 import { useToast } from '../../contexts/ToastContext';
 import { parseFormula, rollFormula } from '../../lib/dice';
 import { toChatRoll, type ChatRoll } from '../../lib/chat/rolls';
 import { setInitiatives } from '../../lib/battle/sceneService';
+import { tableChat } from '../../lib/chat/bus';
 import { setSittingOut, useSittingOut, type InitiativeContext, type InitiativeToken } from '../../lib/battle/initiativeStore';
 
 const signed = (n: number) => (n >= 0 ? `+${n}` : `${n}`);
@@ -43,6 +44,8 @@ export default function InitiativePanel({
   const list = ctx.asDM ? dmList : mine;
   const [bonus, setBonus] = useState<Record<string, string>>({});
   const [adv, setAdv] = useState<Record<string, 'adv' | 'dis' | undefined>>({});
+  // What you rolled at the table (typed in): never rolled for you.
+  const [typed, setTyped] = useState<Record<string, string>>({});
   // The DM's picks: creatures unless sitting out; players' characters only when ticked (they roll their own).
   const [players, setPlayers] = useState<Set<string>>(new Set());
   useEffect(() => setPlayers((p) => new Set([...p].filter((id) => dmList.some((t) => t.id === id)))), [dmList.map((t) => t.id).join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -72,6 +75,30 @@ export default function InitiativePanel({
     // Rolled after all (joined the fight late): no longer sitting out.
     if (out.includes(t.id)) setSittingOut(ctx.sceneId, out.filter((x) => x !== t.id));
   };
+  const saveTyped = async (t: InitiativeToken) => {
+    const n = parseInt(typed[t.id] ?? '', 10);
+    if (!Number.isFinite(n)) return;
+    if (!(await save({ [t.id]: Math.max(-10, Math.min(99, n)) }))) return;
+    setTyped((x) => ({ ...x, [t.id]: '' }));
+    tableChat.event({ t: 'init', who: t.name, total: n });
+    if (out.includes(t.id)) setSittingOut(ctx.sceneId, out.filter((x) => x !== t.id));
+  };
+  const typedBox = (t: InitiativeToken) => (
+    <span className="flex items-center rounded-md ring-1 ring-stone-700 focus-within:ring-amber-500/60" title="Rolled at the table? Type the total here">
+      <input
+        className="w-14 rounded-l-md bg-transparent px-1.5 py-0.5 text-center text-xs tabular-nums text-stone-100 outline-none placeholder:text-stone-600"
+        inputMode="numeric"
+        placeholder="I rolled"
+        value={typed[t.id] ?? ''}
+        onChange={(e) => setTyped((x) => ({ ...x, [t.id]: e.target.value.replace(/[^\d-]/g, '').slice(0, 3) }))}
+        onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), saveTyped(t))}
+        aria-label={`Initiative you rolled for ${t.name}`}
+      />
+      <button type="button" className="px-1 text-stone-500 hover:text-amber-300 disabled:opacity-40" disabled={busy || !typed[t.id]} onClick={() => saveTyped(t)} aria-label={`Use ${typed[t.id] ?? ''} for ${t.name}`}>
+        <Check size={13} />
+      </button>
+    </span>
+  );
   const rollAll = async () => {
     const picks = dmList.filter(ticked);
     if (!picks.length) return;
@@ -94,7 +121,7 @@ export default function InitiativePanel({
       {open && (
         <div className="scrollbar-thin max-h-60 space-y-1 overflow-y-auto px-3 pb-2">
           {list.map((t) => (
-            <div key={t.id} className="flex items-center gap-1.5">
+            <div key={t.id} className="flex flex-wrap items-center gap-1.5">
               {ctx.asDM && <input type="checkbox" className="size-4 shrink-0 accent-amber-500" checked={ticked(t)} onChange={() => toggle(t)} aria-label={`${t.name} takes part`} title={t.player ? 'Roll for this player too' : 'Takes part in this fight'} />}
               <span className={clsx('min-w-0 flex-1 truncate text-sm', t.hidden ? 'text-stone-500 italic' : 'text-stone-200', ctx.asDM && !ticked(t) && (t.player ? 'opacity-60' : 'line-through opacity-50'))}>
                 {t.name}
@@ -125,11 +152,13 @@ export default function InitiativePanel({
                   ))}
               {!ctx.asDM && (
                 <>
-                  <button type="button" className="btn btn-primary btn-sm px-2" onClick={() => rollOne(t)} disabled={busy}>
+                  {typedBox(t)}
+                  <button type="button" className="btn btn-secondary btn-sm px-2" onClick={() => rollOne(t)} disabled={busy} title="Roll it here">
                     <Dices size={14} /> Roll
                   </button>
                 </>
               )}
+              {ctx.asDM && typedBox(t)}
               {ctx.asDM && (
                 <button type="button" className="btn-icon-sm size-7" onClick={() => rollOne(t)} disabled={busy} aria-label={`Roll initiative for ${t.name}`} title="Roll just this one">
                   <Dices size={14} />
@@ -144,7 +173,8 @@ export default function InitiativePanel({
               </button>
             </div>
           )}
-          {ctx.asDM && <p className="text-[10px] text-stone-500">Untick creatures that aren’t in this fight: they stay out of the order. Players roll their own unless you tick them.</p>}
+          {ctx.asDM && <p className="text-[10px] text-stone-500">Untick creatures that aren’t in this fight: they stay out of the order. Players roll their own unless you tick them. Rolled at the table? Type it in.</p>}
+          {!ctx.asDM && <p className="text-[10px] text-stone-500">Rolled real dice? Type the total (or /init 17 in the chat). Or roll it here.</p>}
         </div>
       )}
     </div>

@@ -6,6 +6,7 @@ import {
   Circle,
   Triangle,
   Undo2,
+  BookOpen,
   Dices,
   Zap,
   EyeOff,
@@ -38,6 +39,7 @@ import MapViewer, { type ToolPhase, type ViewerApi } from '../components/map/Map
 import BattleBoard, { cellAt, tokenHold, type DraftShape, type Ruler, type Tool } from '../components/battle/BattleBoard';
 import InitiativeTracker from '../components/battle/InitiativeTracker';
 import { openTableChat } from '../components/chat/ChatDock';
+import { openQuickBook } from '../components/play/QuickBook';
 import TokenCard, { AURA_TIMER } from '../components/battle/TokenCard';
 import AddTokens, { specForEntity, type TokenSpec } from '../components/battle/AddTokens';
 import ScenePanel, { type PanelTab } from '../components/battle/ScenePanel';
@@ -85,11 +87,13 @@ import {
   setDoorOpen,
   patchToken,
   updateScene,
+  updateToken,
   type NewToken,
 } from '../lib/battle/sceneService';
 import { INK_COLORS, spreadAround } from '../lib/battle/table';
 import { readHp } from '../lib/hitPoints';
 import { snapTemplate, templateLabel, type TemplateKind } from '../lib/battle/templates';
+import { mapListens, setPickedToken, type CastArea } from '../lib/play/ui';
 import type { Drawing, Entity, FogMode, LiveMark, Scene, SceneGrid, SceneSecret, Token } from '../types';
 import { arrayRemove, deleteField } from 'firebase/firestore';
 
@@ -341,6 +345,12 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
   const [fogReveal, setFogReveal] = useState(true);
   const [fogSize, setFogSize] = useState(1);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The spellbook knows which token is picked (a creature the DM casts for starts its area there).
+  useEffect(() => {
+    const t = selectedId ? allTokens.find((x) => x.id === selectedId) : null;
+    setPickedToken(t ? { id: t.id, name: t.name } : null);
+    return () => setPickedToken(null);
+  }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [drawingId, setDrawingId] = useState<string | null>(null);
   // DM: whether new drawings are shown to the players straight away (off: private notes on the map).
   const [drawShared, setDrawShared] = useState(false);
@@ -387,6 +397,11 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
   const dwellTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const draftOrigin = useRef<Pt | null>(null);
   const [beamWidth, setBeamWidth] = useState(1);
+  // A spell's area to place (from a cast in the chat): its outline follows the pointer, a click
+  // or tap puts it down, Escape cancels.
+  const [casting, setCasting] = useState<CastArea | null>(null);
+  const castingRef = useRef<CastArea | null>(null);
+  castingRef.current = casting;
 
   // --- undo: each person's own recent changes, newest first (this device, this visit) ---
   type UndoEntry = { label: string; run: () => Promise<unknown> };
@@ -784,6 +799,86 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
     }
   };
 
+  useEffect(() => {
+    if (isDraft) return;
+    const stop = mapListens();
+    const on = (e: Event) => {
+      setTool('select');
+      setArmed(null);
+      setCasting((e as CustomEvent<CastArea>).detail);
+    };
+    window.addEventListener('dndocs:cast-area', on);
+    return () => {
+      stop();
+      window.removeEventListener('dndocs:cast-area', on);
+    };
+  }, [isDraft]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** The area's outline for the pointer at `p` (squares): from the caster when the spell starts there. */
+  const castShape = (c: CastArea, p: Pt): DraftShape => {
+    const feet = grid.feet || 5;
+    const n = c.area.f / feet;
+    const kind: TemplateKind = c.area.k === 'cone' ? 'cone' : c.area.k === 'line' ? 'beam' : c.area.k === 'cube' ? 'cube' : 'circle';
+    const caster = c.fromEntity ? allTokens.find((t) => t.entityId === c.fromEntity) : c.fromSelected && selectedId ? allTokens.find((t) => t.id === selectedId) : undefined;
+    const color = c.color ?? INK_COLORS[3];
+    const shape = (a: Pt, b: Pt, width?: number): DraftShape => ({ kind, color, points: [a, b], width, label: `${c.spell} · ${templateLabel(kind, a, b, feet)}` });
+    if (caster) {
+      const h = caster.size / 2;
+      const o = { x: caster.x + h, y: caster.y + h };
+      const dx = p.x - o.x;
+      const dy = p.y - o.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len;
+      const uy = dy / len;
+      if (kind === 'circle') return shape(o, { x: o.x + n + h, y: o.y });
+      if (kind === 'cube') {
+        // A cube with one face against the caster, on the side the pointer is.
+        if (Math.abs(dx) >= Math.abs(dy)) {
+          const sx = Math.sign(dx) || 1;
+          const a = { x: o.x + sx * h, y: o.y - n / 2 };
+          return shape(a, { x: a.x + sx * n, y: a.y + n });
+        }
+        const sy = Math.sign(dy) || 1;
+        const a = { x: o.x - n / 2, y: o.y + sy * h };
+        return shape(a, { x: a.x + n, y: a.y + sy * n });
+      }
+      // Cones and lines leave from the edge of the caster's space, towards the pointer.
+      const a = { x: o.x + ux * h, y: o.y + uy * h };
+      return shape(a, { x: a.x + ux * n, y: a.y + uy * n }, kind === 'beam' ? (c.area.w ?? 5) / feet : undefined);
+    }
+    if (kind === 'circle') {
+      const a = grid.snap ? { x: Math.round(p.x), y: Math.round(p.y) } : p;
+      return shape(a, { x: a.x + n, y: a.y });
+    }
+    if (kind === 'cube') {
+      const a = grid.snap ? { x: Math.round(p.x - n / 2), y: Math.round(p.y - n / 2) } : { x: p.x - n / 2, y: p.y - n / 2 };
+      return shape(a, { x: a.x + n, y: a.y + n });
+    }
+    return shape(p, { x: p.x + n, y: p.y }, kind === 'beam' ? (c.area.w ?? 5) / feet : undefined);
+  };
+  const onCastHover = (cx: number, cy: number) => {
+    const api = apiRef.current;
+    const board = boardRef.current;
+    const c = castingRef.current;
+    if (!api || !board || !c) return;
+    setDraft(castShape(c, cellAt(api, board, cx, cy)));
+  };
+  const onCastTool = (phase: ToolPhase, cx: number, cy: number) => {
+    const api = apiRef.current;
+    const board = boardRef.current;
+    const c = castingRef.current;
+    if (!api || !board || !c) return;
+    const d = castShape(c, cellAt(api, board, cx, cy));
+    if (phase === 'down' || phase === 'move') setDraft(d);
+    else if (phase === 'up') {
+      const { drawing, saved } = addDrawing(scene.id, { campaignId: scene.campaignId, by: uid, kind: d.kind, color: d.color, points: encodePoints(d.points), width: d.width, shared: true });
+      pushUndo(`${c.spell} area`, () => deleteDrawing(scene.id, drawing.id));
+      saved.catch((err) => toast.error(err, 'Save spell area'));
+      setDraft(null);
+      setCasting(null);
+    }
+  };
+
   const placeArmed = (xPct: number, yPct: number) => {
     const board = boardRef.current;
     if (!armed || !board) return;
@@ -826,6 +921,8 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
     }, 'Add tokens');
   };
 
+  // Whether you play a character here at all (the spellbook button).
+  const myCharacterAny = useMemo(() => [...entityMap.values()].some((e) => e.type === 'character' && e.playerId === uid), [entityMap, uid]);
   // A player's own character, if it isn't on the map yet.
   const myCharacter = useMemo(() => {
     if (isDM) return null;
@@ -868,6 +965,7 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
       }
       const keys: Record<string, Tool> = { v: 'select', m: 'measure', d: 'draw', p: 'ping', e: 'erase', f: 'fog' };
       if (e.key === 'Escape') {
+        setCasting(null);
         setArmed(null);
         setSelectedId(null);
         stopGestures();
@@ -1015,6 +1113,11 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
         <ToolButton label="Dice and table chat (R)" onClick={() => openTableChat({ dice: true })}>
           <Dices size={17} />
         </ToolButton>
+        {(myCharacterAny || asDM) && (
+          <ToolButton label="Spells and abilities (B)" onClick={() => openQuickBook({ toggle: true })}>
+            <BookOpen size={17} />
+          </ToolButton>
+        )}
         {(asDM || myCharacter) && <span className="mx-0.5 h-6 w-px bg-stone-700" />}
         {asDM ? (
           <>
@@ -1069,7 +1172,16 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
               <span className="mx-0.5 h-6 w-px bg-stone-700" />
               {PEN_SIZES.map((p, i) => (
                 <ToolButton key={p.v} label={p.label} active={pen === p.v} onClick={() => setPen(p.v)}>
-                  <span className="block rounded-full" style={{ width: `${0.3 + i * 0.2}rem`, height: `${0.3 + i * 0.2}rem`, background: ink === '#111111' ? '#e8dcc0' : ink }} />
+                  {/* The dot in the pen's own colour, with a thin ring so black and white inks show on any button. */}
+                  <span
+                    className="block rounded-full"
+                    style={{
+                      width: `${0.3 + i * 0.2}rem`,
+                      height: `${0.3 + i * 0.2}rem`,
+                      background: ink,
+                      boxShadow: pen === p.v ? '0 0 0 1.5px rgba(245,236,217,.9)' : '0 0 0 1px rgba(28,20,13,.45)',
+                    }}
+                  />
                 </ToolButton>
               ))}
             </>
@@ -1194,6 +1306,9 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
             onUndoable={pushUndo}
             combat={scene.combat}
             feetPerSquare={grid.feet}
+            onFramed={(entityId, img) =>
+              Promise.all(allTokens.filter((x) => x.entityId === entityId && x.img !== img).map((x) => updateToken(scene.id, x.id, { img }))).catch((err) => toast.error(err, 'Token picture'))
+            }
           />
         </div>
       )}
@@ -1210,8 +1325,31 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
                 return `${squares} square${squares === 1 ? '' : 's'}${legs.length > 1 ? ` · ${legs.join(' + ')} ft` : ''}`;
               })()}
             </div>
-            {clickRuler.current && measuring.current && <div className="mt-0.5 text-xs text-stone-500">Click to turn · right-click: undo a turn · double-click: done</div>}
+            {clickRuler.current && measuring.current && <div className="mt-0.5 text-xs text-stone-500">Click to turn · right-click: undo a turn · double-click: done · Esc: stop</div>}
           </div>
+        </div>
+      )}
+      {/* Any tool but "select": how to stop using it (Escape, or this button on a touch screen). */}
+      {tool !== 'select' && !casting && !armed && !isDraft && (
+        <div className="absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full border border-stone-600/70 bg-stone-950/92 py-1 pr-1 pl-3 text-xs text-stone-300 shadow-lg backdrop-blur">
+          <span>
+            {{ measure: 'Measuring', draw: 'Drawing', ping: 'Pinging', erase: 'Erasing', fog: 'Painting fog' }[tool as string] ?? 'Tool on'}
+            <span className="hidden text-stone-500 sm:inline"> · Esc to stop</span>
+          </span>
+          <button type="button" className="btn btn-secondary btn-sm min-h-7 rounded-full px-2.5" onClick={() => (stopGestures(), setTool('select'))}>
+            <X size={13} /> Done
+          </button>
+        </div>
+      )}
+      {casting && (
+        <div className="absolute inset-x-2 bottom-2 mr-14 flex items-center gap-2 rounded-lg border border-violet-400/60 bg-stone-950/92 px-3 py-2 text-sm text-violet-100 backdrop-blur sm:right-auto sm:left-1/2 sm:mr-0 sm:-translate-x-1/2">
+          <MapPin size={16} className="shrink-0 text-violet-300" />
+          <span className="flex-1">
+            {casting.fromEntity || casting.fromSelected ? 'Point where it goes' : 'Move to aim'}, then click or tap to place <strong>{casting.spell}</strong> ({casting.area.f}-ft {casting.area.k})
+          </span>
+          <button type="button" className="btn-icon-sm" aria-label="Cancel" onClick={() => (setCasting(null), setDraft(null))}>
+            <X size={15} />
+          </button>
         </div>
       )}
       {armed && (
@@ -1269,8 +1407,8 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
           onFullscreenChange={setFullscreen}
           crosshair={!!armed}
           onMapClick={(x, y) => (armed ? placeArmed(x, y) : tokenHold.active ? undefined : (setSelectedId(null), setDrawingId(null)))}
-          onTool={gridDragOn ? onGridDrag : !isDraft && tool !== 'select' ? onTool : null}
-          onHover={tool === 'measure' ? onRulerHover : null}
+          onTool={gridDragOn ? onGridDrag : casting ? onCastTool : !isDraft && tool !== 'select' ? onTool : null}
+          onHover={casting ? onCastHover : tool === 'measure' ? onRulerHover : null}
           toolbar={toolbar}
           overlay={overlay}
           layers={(api) => (

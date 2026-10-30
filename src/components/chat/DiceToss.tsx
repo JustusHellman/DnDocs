@@ -203,7 +203,7 @@ export default function DiceToss({
     },
   };
   return (
-    <div className={clsx('pointer-events-none fixed inset-0 z-[60] transition-opacity', phase === 'out' && 'opacity-0')} style={{ transitionDuration: `${FADE}ms` }} aria-hidden>
+    <div className={clsx('pointer-events-none fixed inset-0 z-[130] transition-opacity', phase === 'out' && 'opacity-0')} style={{ transitionDuration: `${FADE}ms` }} aria-hidden>
       {dice.map((d, i) => {
         const slot = layout.slots[i];
         const tone = d.dropped ? 'dropped' : settled && d.sides === 20 && nat === 20 ? 'crit' : settled && d.sides === 20 && nat === 1 ? 'fumble' : 'normal';

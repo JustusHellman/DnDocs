@@ -7,6 +7,8 @@ import { updateCharacterHp } from '../../lib/entityService';
 import { applyHp, deathSavesAfter, deathState, hpToAttributes, readDeathSaves, readHp, rollDeathSave, writeDeathSaves, type HpChange } from '../../lib/hitPoints';
 import { rollD20 } from '../../lib/battle/table';
 import type { Entity } from '../../types';
+import { usePlayer } from '../../lib/play/usePlayer';
+import { concentrationDC } from '../../lib/play/model';
 
 interface Props {
   entity: Entity;
@@ -22,6 +24,7 @@ export function HitPoints({ entity, maxText, editable }: Props) {
   const [amount, setAmount] = useState('');
   const [saving, setSaving] = useState(false);
   const hp = readHp(entity.attributes, maxText);
+  const player = usePlayer(entity);
 
   const change = async (kind: HpChange, value: number) => {
     if (saving) return;
@@ -32,8 +35,12 @@ export function HitPoints({ entity, maxText, editable }: Props) {
       // Same rules as on the battle map (hit at 0 HP, massive damage, back above 0).
       const { deathSaves, massive } = deathSavesAfter(hp, next, kind, value, saves, currentCampaign?.houseRules?.massiveDamage !== false);
       if (massive) toast.show(`Massive damage: ${entity.name} dies outright (massive damage rule; the DM can switch it off under Members).`);
-      if (kind === 'damage' && value > 0 && /concentrat/i.test(String(entity.attributes?.conditions ?? ''))) {
-        toast.show(`Concentrating: Constitution save DC ${Math.max(10, Math.floor(value / 2))} to keep the spell.`);
+      if (kind === 'damage' && value > 0 && player?.live.conc) {
+        // The save is asked for in the chat (roll it there, or type what you rolled).
+        if ((next.current ?? 1) > 0) player.damaged(value).catch(() => undefined);
+        else player.setConc(false).catch(() => undefined);
+      } else if (kind === 'damage' && value > 0 && /concentrat/i.test(String(entity.attributes?.conditions ?? ''))) {
+        toast.show(`Concentrating: Constitution save DC ${concentrationDC(value, player?.edition)} to keep the spell.`);
       }
       await updateCharacterHp(entity.id, { ...hpToAttributes(next), deathSaves });
       setAmount('');
