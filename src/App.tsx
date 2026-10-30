@@ -1,4 +1,5 @@
-import { lazy, Suspense } from 'react';
+import { Suspense } from 'react';
+import { lazyPage } from './lib/lazyPage';
 import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -15,16 +16,16 @@ import EntityPage from './pages/EntityPage';
 import EntityList from './pages/EntityList';
 
 // Heavier / less used pages are split into their own chunks.
-const EntityEdit = lazy(() => import('./pages/EntityEdit'));
-const WorldMap = lazy(() => import('./pages/WorldMap'));
-const Members = lazy(() => import('./pages/Members'));
-const DMTools = lazy(() => import('./pages/DMTools'));
-const Chronicle = lazy(() => import('./pages/Chronicle'));
-const EntryTypes = lazy(() => import('./pages/EntryTypes'));
-const JoinCampaign = lazy(() => import('./pages/JoinCampaign'));
-const BattleMap = lazy(() => import('./pages/BattleMap'));
-const Jukebox = lazy(() => import('./pages/Jukebox'));
-const CodexPage = lazy(() => import('./pages/Codex'));
+const EntityEdit = lazyPage(() => import('./pages/EntityEdit'));
+const WorldMap = lazyPage(() => import('./pages/WorldMap'));
+const Members = lazyPage(() => import('./pages/Members'));
+const DMTools = lazyPage(() => import('./pages/DMTools'));
+const Chronicle = lazyPage(() => import('./pages/Chronicle'));
+const EntryTypes = lazyPage(() => import('./pages/EntryTypes'));
+const JoinCampaign = lazyPage(() => import('./pages/JoinCampaign'));
+const BattleMap = lazyPage(() => import('./pages/BattleMap'));
+const Jukebox = lazyPage(() => import('./pages/Jukebox'));
+const CodexPage = lazyPage(() => import('./pages/Codex'));
 
 /** Remount the editor whenever the edited entry (or "new" type) changes. */
 function EditRoute() {

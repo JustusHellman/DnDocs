@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { PageLoadError } from '../lib/lazyPage';
 
 interface State {
   error: Error | null;
@@ -17,14 +18,20 @@ export class ErrorBoundary extends Component<{ children?: ReactNode }, State> {
 
   render() {
     if (!this.state.error) return this.props.children;
-    // A new deploy can make old lazy chunks disappear – a reload fixes that.
-    const isChunkError = /Failed to fetch dynamically imported module|Importing a module script failed/i.test(this.state.error.message);
+    const err = this.state.error;
+    // Only a real deploy says "new version"; a dropped connection says so instead.
+    const load = err instanceof PageLoadError ? err.reason : /Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i.test(err.message) ? 'offline' : null;
+    const isChunkError = load !== null;
     return (
       <div className="flex min-h-dvh items-center justify-center p-6">
         <div className="card w-full max-w-md p-6">
-          <h2 className="mb-2 font-display text-xl font-semibold text-rose-300">Something went wrong</h2>
+          <h2 className="mb-2 font-display text-xl font-semibold text-rose-300">{load === 'new-version' ? 'DnDocs has been updated' : load === 'offline' ? 'Lost the connection' : 'Something went wrong'}</h2>
           <p className="mb-4 text-sm text-stone-300">
-            {isChunkError ? 'A new version of DnDocs is available.' : 'The page hit an unexpected error. Your data is safe.'}
+            {load === 'new-version'
+              ? 'A new version of DnDocs is available. Reload to get it.'
+              : load === 'offline'
+                ? "This page couldn't be loaded. Check the internet connection, then reload."
+                : 'The page hit an unexpected error. Your data is safe.'}
           </p>
           {!isChunkError && (
             <pre className="mb-5 max-h-40 overflow-auto rounded-lg bg-black/40 p-3 text-xs whitespace-pre-wrap text-rose-300">{this.state.error.message}</pre>
