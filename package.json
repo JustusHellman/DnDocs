@@ -8,10 +8,13 @@
     "dev:emulator": "vite --mode emulator",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "tsc --noEmit",
+    "lint": "tsc --noEmit && eslint src",
     "test": "vitest run",
     "test:rules": "npm --prefix rules-tests install && npm --prefix rules-tests test",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write src",
+    "e2e": "node e2e/smoke.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
@@ -31,8 +34,13 @@
     "@tailwindcss/vite": "^4.1.14",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.4",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "globals": "^15.15.0",
+    "prettier": "^3.9.10",
     "tailwindcss": "^4.1.14",
     "typescript": "~5.8.2",
+    "typescript-eslint": "^8.72.1",
     "vite": "^6.2.0",
     "vitest": "^3.2.7"
   }

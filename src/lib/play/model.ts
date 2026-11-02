@@ -75,6 +75,8 @@ export interface PlayDef {
   /** Spellcasting ability, when it isn't the class's. */
   ability?: Ability;
   spells?: { known?: string[]; prepared?: string[]; always?: string[] };
+  /** Weapons and other attacks (see attacks.ts). */
+  attacks?: import('./attacks').Attack[];
 }
 
 /** What's used right now (Realtime Database: rooms/{campaign}/play/{key}). */
@@ -105,6 +107,12 @@ export interface PlayLive {
   ba?: 1;
   /** Feet moved. */
   mv?: number;
+  /** Attacks made with the Attack action (Extra Attack: several). */
+  aa?: number;
+  /** A monster's abilities waiting to recharge: ability → the d6 roll it needs (5 for "Recharge 5–6"). */
+  rc?: Record<string, number>;
+  /** Legendary actions used since the monster's last turn. */
+  la?: number;
   /** Dashes (each adds the speed again). */
   dx?: number;
   /** Spells cast this turn (for the spell-per-turn rules): 1 = with a slot, 2 = as a bonus action, 4 = not an action cantrip, 8 = levelled. */
@@ -376,3 +384,6 @@ function clean<T extends Record<string, number>>(o: T): T {
 export const playKey = (entityId: string | null | undefined, tokenId?: string) => (entityId ? `c_${entityId}` : `t_${tokenId}`);
 
 export const ordinal = (n: number) => (n === 1 ? '1st' : n === 2 ? '2nd' : n === 3 ? '3rd' : `${n}th`);
+
+/** A class's hit die (d8 → 8). */
+export const hitDieOf = (cls: string, ed: Edition = '2014') => TABLES[ed][cls]?.hd ?? 8;

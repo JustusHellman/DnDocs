@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import type { ChatRoll } from '../../lib/chat/rolls';
 import { FALLBACK, textOn } from '../../lib/chat/colors';
-import { layoutDice, startBodies, stepBodies, throwSize, type TossDie } from '../../lib/chat/tossPhysics';
+import { freeSpan, layoutDice, startBodies, stepBodies, throwSize, type TossDie } from '../../lib/chat/tossPhysics';
 
 /** The outline of each kind of die, in a 100 × 100 box. */
 const SHAPES: Record<number, string> = {
@@ -69,7 +69,7 @@ export default function DiceToss({
 }: {
   roll: ChatRoll;
   color?: string;
-  /** A panel to keep clear of (the open chat): the dice settle in the larger space beside it. */
+  /** A panel to keep clear of (the open chat): the dice settle in the larger space beside it (and beside any open dialog). */
   avoid?: { left: number; right: number } | null;
   onLand?: () => void;
   onDone: () => void;
@@ -84,8 +84,10 @@ export default function DiceToss({
   }, [roll]);
   const [view] = useState(() => {
     const w = window.innerWidth;
-    let area = { x0: 0, x1: w };
-    if (avoid) area = avoid.left >= w - avoid.right ? { x0: 0, x1: avoid.left } : { x0: avoid.right, x1: w };
+    // They still fly over everything, but settle where they don't cover the chat or a dialog you're
+    // typing in (when there's room beside them; on a phone there isn't).
+    const blocks = [...(avoid ? [avoid] : []), ...[...document.querySelectorAll('[role="dialog"][aria-modal="true"]')].map((d) => d.getBoundingClientRect())];
+    let area = freeSpan(w, blocks);
     if (area.x1 - area.x0 < 320) area = { x0: 0, x1: w };
     return { w, h: window.innerHeight, area };
   });

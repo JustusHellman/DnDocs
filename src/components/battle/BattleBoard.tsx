@@ -51,6 +51,8 @@ interface Props {
   tool: Tool;
   selectedId: string | null;
   turnId: string | null;
+  /** The acting creature's target (picked on purpose): crosshairs on it. */
+  targetId?: string | null;
   /** Fog to draw: hidden squares (manual reveals) and areas the party can see (line of sight). */
   fog: { on: boolean; mask: FogMask | null; visible: Pt[][] };
   showWalls: boolean;
@@ -363,6 +365,15 @@ export default function BattleBoard(props: Props) {
         <circle cx={r} cy={r} r={r - 0.02} fill="none" stroke="rgba(20,14,9,.75)" strokeWidth={Math.max(0.05, px(1.5))} />
         <circle cx={r} cy={r} r={r - 0.04} fill="none" stroke={ring} strokeWidth={Math.max(0.08, px(3))} />
         {t.id === selectedId && <circle cx={r} cy={r} r={r + 0.04} fill="none" stroke="#f2b632" strokeWidth={0.06} strokeDasharray="0.15 0.1" />}
+        {t.id === props.targetId && (
+          <g stroke="#f43f5e" strokeWidth={0.07} strokeLinecap="round" fill="none">
+            <title>Target</title>
+            <circle cx={r} cy={r} r={r + 0.12} />
+            {[0, 90, 180, 270].map((deg) => (
+              <line key={deg} x1={r} y1={-0.2} x2={r} y2={0.12} transform={`rotate(${deg} ${r} ${r})`} />
+            ))}
+          </g>
+        )}
         {down && (
           <g>
             <circle cx={r} cy={r} r={r - 0.05} fill="rgba(20,14,9,.55)" />

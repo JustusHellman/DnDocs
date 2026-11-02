@@ -339,7 +339,7 @@ export function parseUvtt(text: string): UvttImport {
 }
 
 /** The same, from the parsed object (Battlemap Forge sends it straight over). */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+ 
 export function parseUvttData(data: any): UvttImport {
   const size = data?.resolution?.map_size;
   const origin: UPt = data?.resolution?.map_origin ?? { x: 0, y: 0 };

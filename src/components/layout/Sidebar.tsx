@@ -8,15 +8,12 @@ import { Avatar } from '../ui/bits';
 import { MenuItem, Popover } from '../ui/Popover';
 import InviteModal from '../InviteModal';
 import { navGroups } from './nav';
+import { readDeviceJson, writeDeviceJson } from '../../lib/device';
 
 const COLLAPSED_KEY = 'sidebar:collapsed';
 function readCollapsed(): Set<string> {
-  try {
-    const v = JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]');
-    return new Set(Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []);
-  } catch {
-    return new Set();
-  }
+  const v = readDeviceJson<unknown>(COLLAPSED_KEY, []);
+  return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
 }
 
 interface SidebarProps {
@@ -38,11 +35,7 @@ export default function Sidebar({ compact, onToggleCompact, onNavigate }: Sideba
   // Folded headings (remembered on this device). Going to a page in a folded group unfolds it.
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const saveCollapsed = (next: Set<string>) => {
-    try {
-      localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
-    } catch {
-      /* ignore */
-    }
+    writeDeviceJson(COLLAPSED_KEY, [...next]);
     return next;
   };
   const toggleGroup = (label: string) =>

@@ -13,10 +13,10 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import type { Campaign, HouseRules, DndStats, Entity, EntityType, MapPin, MediaDoc, Relationship, RevealEvent, TypeConfig, User } from '../types';
+import type { Campaign, HouseRules, DndStats, Entity, EntityType, MapPin, MediaDoc, Relationship, TypeConfig, User } from '../types';
 import { canEditEntity } from './permissions';
-import { derivedPlayers, explicitShare, planReveal, toV3, type RevealAudience } from './sharing';
-import { baseType, fieldsFor, isEntityType, normalizeEntity, permissionKeys, playerCanCreate, storageType } from './entityTypes';
+import { derivedPlayers, planReveal, toV3, type RevealAudience } from './sharing';
+import { baseType, fieldsFor, isEntityType, normalizeEntity, playerCanCreate, storageType } from './entityTypes';
 import { deleteScene } from './battle/sceneService';
 import { addLinkWritesToBatch, fetchLinks, newLinkId, usesBundles, writeLinks } from './links';
 import { addHint, lostAccess, syncStamp } from './sync';
@@ -493,6 +493,18 @@ export function updateCharacterHp(entityId: string, hp: { currentHp: string; tem
     'attributes.currentHp': hp.currentHp,
     'attributes.tempHp': hp.tempHp,
     ...(hp.deathSaves !== undefined ? { 'attributes.deathSaves': hp.deathSaves } : {}),
+    updatedAt: nowIso(),
+    ...syncStamp(),
+  });
+}
+
+/** Level up: the class text, the hit point maximum (and current HP, which grow by the same), the tracker setup. */
+export function levelUpCharacter(entityId: string, next: { classLevel: string; maxHp: string; currentHp: string; play?: Record<string, unknown> }) {
+  return updateDoc(doc(db, 'entities', entityId), {
+    'attributes.classLevel': next.classLevel,
+    'dndStats.hitPoints': next.maxHp,
+    'attributes.currentHp': next.currentHp,
+    ...(next.play ? { 'attributes.play': JSON.parse(JSON.stringify(next.play)) } : {}),
     updatedAt: nowIso(),
     ...syncStamp(),
   });

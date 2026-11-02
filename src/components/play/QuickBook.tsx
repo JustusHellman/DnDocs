@@ -3,24 +3,26 @@ import clsx from 'clsx';
 import { BookOpen, Coffee, GripHorizontal, Moon, Search, Settings2, Sparkles, X } from 'lucide-react';
 import { useDragPosition } from '../../hooks/useDragPosition';
 import { useSpellRule } from '../../lib/play/useSpellRule';
+import AttackList from './AttackList';
 import { useAuth } from '../../contexts/AuthContext';
 import { CLASS_IDS, className } from '../../lib/play/model';
 import { spellTone, useColoring } from '../../lib/play/coloring';
 import SpellGlyph from './SpellGlyph';
 import { useIsPhone } from '../../hooks/useMediaQuery';
-import { usePlayer, type PlayerApi } from '../../lib/play/usePlayer';
+import { freeLabel, usePlayer, type PlayerApi } from '../../lib/play/usePlayer';
 import { hitDiceLeft, hitDieLeft, ordinal, pactLeft, slotsLeft } from '../../lib/play/model';
-import { openCreatureCast, openPlay, readySpells, useSpellIndex } from '../../lib/play/ui';
+import { openCreatureCast, openPlay, readySpells, useMapOpen, useSpellIndex } from '../../lib/play/ui';
 import { dmgAt, healAt, LEVEL_TONE, type Spell } from '../../lib/play/spells';
 import { openTableChat, useChatOpen } from '../chat/ChatDock';
 import { useActingCharacter } from './useActingCharacter';
 import { Pips, ResourceRow, TurnChips } from './PlayTracker';
 import SpellCard, { SpellTags } from './SpellCard';
-import { freeLabel } from './SpellBook';
+import { editionOf } from '../../lib/play/rules';
+import { emit, useTableEvent } from '../../lib/play/tableEvents';
 
 /** Open (or close) the spellbook panel, optionally for one character. */
 export function openQuickBook(opts: { entityId?: string; toggle?: boolean; close?: boolean } = {}) {
-  window.dispatchEvent(new CustomEvent('dndocs:book', { detail: opts }));
+  emit('book', opts);
 }
 
 /**
@@ -33,22 +35,13 @@ export function QuickBookButton() {
   const { entity, choices, setId } = useActingCharacter();
   const [open, setOpen] = useState(false);
   const phone = useIsPhone();
-  useEffect(() => {
-    const on = (e: Event) => {
-      const d = (e as CustomEvent<{ entityId?: string; toggle?: boolean; close?: boolean }>).detail ?? {};
-      if (d.close) return setOpen(false);
-      if (d.entityId && choices.some((c) => c.id === d.entityId)) setId(d.entityId);
-      setOpen((o) => (d.toggle ? !o : true));
-    };
-    // Out of the way while a spell's area is placed on the map.
-    const away = () => setOpen(false);
-    window.addEventListener('dndocs:book', on);
-    window.addEventListener('dndocs:cast-area', away);
-    return () => {
-      window.removeEventListener('dndocs:book', on);
-      window.removeEventListener('dndocs:cast-area', away);
-    };
-  }, [choices, setId]);
+  useTableEvent('book', (d) => {
+    if (d.close) return setOpen(false);
+    if (d.entityId && choices.some((c) => c.id === d.entityId)) setId(d.entityId);
+    setOpen((o) => (d.toggle ? !o : true));
+  });
+  // Out of the way while a spell's area is placed on the map.
+  useTableEvent('cast-area', () => setOpen(false));
   // B opens and closes it (not while typing).
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
@@ -82,6 +75,8 @@ export function QuickBookButton() {
 
 function Panel({ p, choices, setId, onClose, phone }: { p: PlayerApi | null; choices: { id: string; name: string }[]; setId: (id: string) => void; onClose: () => void; phone: boolean }) {
   const chatOpen = useChatOpen();
+  // On the battle map the right side is the initiative and the side panel: open on the left (beside the chat when it's open there too).
+  const onMap = useMapOpen();
   // Everyone can browse every spell ("All spells"): the DM to help a player, read up, or cast for
   // a creature. The DM starts there until picking a character.
   const [lib, setLib] = useState(!p);
@@ -100,7 +95,13 @@ function Panel({ p, choices, setId, onClose, phone }: { p: PlayerApi | null; cho
         'fixed z-[110] flex flex-col overflow-hidden rounded-xl border border-stone-700/80 bg-stone-950/97 shadow-2xl backdrop-blur',
         phone ? 'inset-x-2 top-16 bottom-[calc(env(safe-area-inset-bottom)+4.75rem)]' : 'max-h-[min(80vh,46rem)] w-[min(22rem,calc(100vw-1rem))]',
         // Next to the chat when both are open (until it's been dragged somewhere).
-        !phone && !moved && (chatOpen ? 'top-[4.5rem] right-[calc(min(26rem,100vw-1rem)+1rem)]' : 'top-[4.5rem] right-2'),
+        !phone &&
+          !moved &&
+          (onMap
+            ? clsx('top-[10rem] max-h-[calc(100vh-11rem)]', chatOpen ? 'left-[calc(min(24rem,100vw-1rem)+2.5rem)]' : 'left-8')
+            : chatOpen
+              ? 'top-[4.5rem] right-[calc(min(26rem,100vw-1rem)+1rem)]'
+              : 'top-[4.5rem] right-2'),
       )}
       role="complementary"
       aria-label="Spells and abilities"
@@ -150,6 +151,7 @@ function Body({ p }: { p: PlayerApi }) {
     <>
       <div className="scrollbar-thin min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-2">
         <TurnChips p={p} />
+        {!q && <AttackList p={p} hint />}
         {allReady.length > 6 && <SearchBox value={q} onChange={setQ} placeholder="Search your spells" />}
         {d.pact && (
           <div className="flex items-center gap-2">
@@ -268,7 +270,7 @@ function SearchBox({ value, onChange, placeholder }: { value: string; onChange: 
  */
 function Library() {
   const { isDM, currentCampaign } = useAuth();
-  const edition = currentCampaign?.houseRules?.edition === '2024' ? '2024' : '2014';
+  const edition = editionOf(currentCampaign);
   const index = useSpellIndex(edition);
   const coloring = useColoring();
   const [q, setQ] = useState('');

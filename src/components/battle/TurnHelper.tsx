@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useDragPosition } from '../../hooks/useDragPosition';
+import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import clsx from 'clsx';
 import { arrayRemove, arrayUnion, deleteField } from 'firebase/firestore';
-import { ChevronDown, ChevronUp, Dices, Footprints, GripHorizontal, Minus, Plus, Swords, X } from 'lucide-react';
+import { ChevronDown, ChevronUp, Dices, Footprints, Minus, Plus, Swords, X } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { useCodexStat } from '../../hooks/useCodexStat';
@@ -18,23 +18,40 @@ import { resourceLeft, type PlayLive } from '../../lib/play/model';
 import { openPlay, readySpells, useSpellIndex } from '../../lib/play/ui';
 import { usePlayer } from '../../lib/play/usePlayer';
 import { useSpellRule } from '../../lib/play/useSpellRule';
-import { attacksPerAction, basicOptions, classOptions, counterOptions, COST_LABEL, statBlockOptions, turnState, walkSpeed, type Cost, type TurnOption } from '../../lib/play/turn';
-import type { Spell } from '../../lib/play/spells';
+import {
+  legendaryCost,
+  rechargeMin,
+  attacksPerAction,
+  basicOptions,
+  classOptions,
+  counterOptions,
+  COST_LABEL,
+  statBlockOptions,
+  turnState,
+  walkSpeed,
+  type Cost,
+  type TurnOption,
+} from '../../lib/play/turn';
 import type { Entity, Scene, Token } from '../../types';
-import SpellGlyph from '../play/SpellGlyph';
+import { toHitLabel } from '../../lib/play/attacks';
+import { rangeIn, type Range } from '../../lib/battle/targeting';
+import { applyPending, setPending, usePending } from '../../lib/battle/aimStore';
+import { AttackChips, Row, SpellChips, TargetRow } from './TurnHelperParts';
+import type { MapAttacks } from '../../pages/battle/useMapAttacks';
+import { useConfirm } from '../../contexts/ConfirmContext';
+import { attack, attacksLeft } from '../../lib/play/attacks';
 import { openQuickBook } from '../play/QuickBook';
 import { openTableChat } from '../chat/ChatDock';
+import { critRuleOf, CRIT_LABEL, editionOf, spellsPerTurnOf } from '../../lib/play/rules';
+import { readDevice, writeDevice } from '../../lib/device';
 
-type Mode = 'open' | 'bar' | 'mini';
+type Mode = 'bar' | 'mini';
 const MODE_KEY = 'dndocs-turn-helper';
-const readMode = (): Mode => {
-  try {
-    const v = localStorage.getItem(MODE_KEY);
-    return v === 'open' || v === 'mini' ? v : 'bar';
-  } catch {
-    return 'bar';
-  }
-};
+const readMode = (): Mode => (readDevice(MODE_KEY) === 'mini' ? 'mini' : 'bar');
+/** The list's tabs: what each option costs, and a monster's legendary actions. */
+type Tab = Cost | 'legendary';
+/** Basic actions hardly anyone takes in a fight: folded under "More" so the list stays short. */
+const RARE = new Set(['help', 'search', 'study', 'influence', 'object']);
 
 interface Props {
   scene: Scene;
@@ -49,9 +66,18 @@ interface Props {
   asDM: boolean;
   /** Its walking speed (null: not known). */
   speed: number | null;
-  /** Where the dots go, and where the list opens (positions on the map). */
+  /** Where the dots go (a position on the map). */
   barClass: string;
-  panelClass: string;
+  /** Where the list goes (the battle map's side panel), and whether it's showing. */
+  listSlot: HTMLElement | null;
+  listOpen: boolean;
+  onList: (open: boolean) => void;
+  /** Attacking on the map: the target picked on purpose, the reach check, the damage offered after. */
+  attacks: MapAttacks;
+  onPickTarget: () => void;
+  onClearTarget: () => void;
+  /** Picking a target on the map right now. */
+  picking: boolean;
 }
 
 /**
@@ -60,7 +86,7 @@ interface Props {
  * that, and a cheat-sheet underneath for everyone still learning: every option, by what it costs,
  * where it comes from, and a tap to do it (cast, Dash, Dodge, an opportunity attack…).
  */
-export default function TurnHelper({ scene, tokens, subject, entity, liveKey, owner, asDM, speed, barClass, panelClass }: Props) {
+export default function TurnHelper({ scene, tokens, subject, entity, liveKey, owner, asDM, speed, barClass, listSlot, listOpen, onList, attacks, onPickTarget, onClearTarget, picking }: Props) {
   const { currentCampaign } = useAuth();
   const toast = useToast();
   const table = useTableLive();
@@ -68,18 +94,14 @@ export default function TurnHelper({ scene, tokens, subject, entity, liveKey, ow
   const [mode, setModeState] = useState<Mode>(readMode);
   const setMode = (m: Mode) => {
     setModeState(m);
-    try {
-      localStorage.setItem(MODE_KEY, m);
-    } catch {
-      /* ignore */
-    }
+    writeDevice(MODE_KEY, m);
   };
-  const [tab, setTab] = useState<Cost>('action');
-  // The list can be dragged anywhere on bigger screens (remembered on this device).
-  const listBox = useRef<HTMLDivElement | null>(null);
-  const drag = useDragPosition('dndocs-turn-list-pos', listBox, 352);
-  const phone = typeof window !== 'undefined' && window.innerWidth < 640;
-  const moved = !phone && drag.pos;
+  const [tab, setTab] = useState<Tab>('action');
+  const [moreOpen, setMoreOpen] = useState(false);
+  const target = attacks.targetOf(subject);
+  const offered = usePending();
+  const pending = offered && offered.by === subject.id && target && offered.target.id === target.id ? offered : null;
+  const confirm = useConfirm();
   const [moveOpen, setMoveOpen] = useState(false);
   const [openRow, setOpenRow] = useState<string | null>(null);
   useEffect(() => setOpenRow(null), [subject.id]);
@@ -88,11 +110,11 @@ export default function TurnHelper({ scene, tokens, subject, entity, liveKey, ow
   const liveNow = table.play[liveKey];
   // On your turn: the first of action, bonus action, reaction that's still there.
   const firstFree: Cost = !myTurnNow ? 'reaction' : (liveNow?.ac ?? 0) < 1 + (liveNow?.ax ?? 0) ? 'action' : !liveNow?.ba ? 'bonus' : 'reaction';
-  useEffect(() => setTab(firstFree), [subject.id, myTurnNow, mode]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => setTab(firstFree), [subject.id, myTurnNow, listOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const combat = scene.combat!;
   const isTurn = combat.turn === subject.id;
-  const edition = currentCampaign?.houseRules?.edition === '2024' ? '2024' : '2014';
+  const edition = editionOf(currentCampaign);
   const character = entity?.type === 'character' ? entity : null;
   const p = usePlayer(character);
   const live: PlayLive = table.play[liveKey] ?? {};
@@ -103,7 +125,7 @@ export default function TurnHelper({ scene, tokens, subject, entity, liveKey, ow
     speed: walk,
     conditions: subject.conditions,
     edition,
-    spells: currentCampaign?.houseRules?.spellsPerTurn,
+    spells: spellsPerTurnOf(currentCampaign),
   });
   const canWrite = asDM || (p?.canEdit ?? subject.controlledBy.length > 0);
   const who = subject.name.length <= 14 ? subject.name : subject.name.split(' ')[0];
@@ -133,7 +155,7 @@ export default function TurnHelper({ scene, tokens, subject, entity, liveKey, ow
     const keep = new Set(['dash', 'disengage', 'dodge', 'help', 'hide', 'ready', 'search', 'oa', 'readied', ...(block.options.some((o) => o.hit !== undefined) ? [] : ['attack'])]);
     if (/spellcasting/i.test(statText ?? '')) keep.add('cast');
     return [...block.options, ...basicOptions(edition).filter((o) => keep.has(o.id))];
-  }, [p, spells.length, edition, block, statText]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [p, spells.length, edition, block, statText]);
 
   if (!currentCampaign) return null;
   const cid = currentCampaign.id;
@@ -196,7 +218,25 @@ export default function TurnHelper({ scene, tokens, subject, entity, liveKey, ow
     const parsed = parseFormula(f);
     if (parsed) tableChat.roll(toChatRoll(rollFormula(parsed), label));
   };
-
+  /** A stat-block attack: to hit (against the picked target, when there is one) and its damage. */
+  const strike = (o: TurnOption, dis = false) => {
+    const parsed = parseFormula(`1d20${o.hit! >= 0 ? '+' : ''}${o.hit}`);
+    if (!parsed) return;
+    const r = rollFormula(parsed, { disadvantage: dis });
+    tableChat.roll(toChatRoll(r, toHitLabel(o.name, r.total, r.natural, target)));
+    const rule = critRuleOf(currentCampaign);
+    let sum = 0;
+    for (const d of o.dmg ?? []) {
+      const f = parseFormula(d.f);
+      if (!f) continue;
+      const dr = rollFormula(f, r.natural === 20 ? { crit: rule } : {});
+      sum += dr.total;
+      tableChat.roll(toChatRoll(dr, `${o.name} ${d.ty}${r.natural === 20 ? ` (${CRIT_LABEL[rule]})` : ''}`));
+    }
+    if (o.dmg?.length) attacks.offer(subject, o.name, r.total, r.natural, sum, o.dmg.map((d) => d.f).join(' + '), o.dmg.map((d) => d.ty).join(' + '), 'turn');
+  };
+  const aimOk = (name: string, range: Range) => attacks.check(subject, name, range);
+  const unhide = () => attacks.unhide(subject);
   /** What the chat says someone did. */
   const phrase = (o: TurnOption) =>
     (
@@ -218,12 +258,48 @@ export default function TurnHelper({ scene, tokens, subject, entity, liveKey, ow
       // A creature's attack from its stat block: roll to hit and damage. The first one on its turn
       // takes the action; the others are part of it (Multiattack). Off its turn (an opportunity
       // attack, a readied one) it just rolls.
+      // A legendary action: one of the monster's few between its turns.
+      if (block.legendary.includes(o)) {
+        const used = live.la ?? 0;
+        const cost = legendaryCost(o.name);
+        if (used + cost > block.legendaryPer)
+          return toast.show(
+            used >= block.legendaryPer
+              ? `No legendary actions left (${block.legendaryPer} a round; they come back on its turn).`
+              : `${o.name.replace(/\s*\(costs?[^)]*\)/i, '')} costs ${cost} legendary actions; only ${block.legendaryPer - used} left.`,
+          );
+        await patch({ la: used + cost });
+        if (o.hit !== undefined) {
+          const a = await aimOk(o.name, rangeIn(o.text));
+          if (a.go) strike(o, a.dis);
+        }
+        return;
+      }
+      // A recharge ability: used up until a d6 at the start of the monster's turn brings it back.
+      if (o.recharge) {
+        // Not possible right now (its action already taken): nothing gets marked.
+        const no = o.hit === undefined ? why(o.cost) : state.cantAct ? `${state.cantAct}: no attacks` : null;
+        if (no) return toast.show(no);
+        // Used up and not back yet: ask (the DM may have rolled the recharge at the table).
+        if (
+          live.rc?.[o.id] &&
+          !(await confirm({ title: `${o.name} is recharging`, message: `It comes back on a ${o.recharge} rolled at the start of the turn. Use it anyway (it recharged)?`, confirmLabel: 'Use it' }))
+        )
+          return;
+        await patch({ [`rc/${o.id}`]: rechargeMin(o.recharge) });
+      }
       if (o.hit !== undefined) {
         if (state.cantAct) return toast.show(`${state.cantAct}: no attacks`);
+        const a = await aimOk(o.name, rangeIn(o.text));
+        if (!a.go) return;
         if (isTurn && o.cost !== 'free' && left(o.cost) > 0 && !(o.cost === 'action' && state.actionsTaken > 0)) await mark(o.cost);
-        await dropCondition('Hidden');
-        roll(`1d20${o.hit >= 0 ? '+' : ''}${o.hit}`, `${o.name} to hit`);
-        for (const d of o.dmg ?? []) roll(d.f, `${o.name} ${d.ty}`);
+        await unhide();
+        strike(o, a.dis);
+        return;
+      }
+      // A character with attacks set up: the attack chips under the row do the rolling.
+      if (p && (o.does === 'attack' || o.does === 'oa' || o.id === 'offhand') && (p.def.attacks ?? []).some((x) => (o.id === 'offhand' ? x.cost === 'bonus' : x.cost !== 'bonus'))) {
+        setOpenRow(openRow === o.id ? null : o.id);
         return;
       }
       const blocked = why(o.cost);
@@ -269,8 +345,12 @@ export default function TurnHelper({ scene, tokens, subject, entity, liveKey, ow
           break;
         case 'attack':
         case 'oa':
-          await dropCondition('Hidden');
-          if (p) openTableChat({ dice: true });
+          await unhide();
+          // No attacks set up yet: the dice tray (and where to add them).
+          if (p) {
+            if (!(p.def.attacks ?? []).length) toast.show('Add your weapons under the gear (set up) to roll them from here.');
+            openTableChat({ dice: true });
+          }
           break;
       }
       if (o.id === 'readied') await dropCondition('Readied');
@@ -282,6 +362,8 @@ export default function TurnHelper({ scene, tokens, subject, entity, liveKey, ow
       await mark(o.cost, extra);
       // The table hears about it (spending a counter already put a line in the chat).
       if (!r && o.cost !== 'free') await say(phrase(o), o.cost);
+      // A monster ability with damage but no attack roll (a breath weapon): its damage, rolled.
+      for (const d of o.dmg ?? []) roll(d.f, `${o.name} ${d.ty}`);
     } catch (err) {
       toast.error(err, o.name);
     }
@@ -291,11 +373,12 @@ export default function TurnHelper({ scene, tokens, subject, entity, liveKey, ow
   const opportunity = async (o: TurnOption) => {
     const blocked = why('reaction');
     if (blocked) return toast.show(blocked);
+    const a = await aimOk(o.name, rangeIn(o.text));
+    if (!a.go) return;
     await mark('reaction');
-    await dropCondition('Hidden');
+    await unhide();
     await say('makes an opportunity attack', 'reaction', o.name);
-    roll(`1d20${o.hit! >= 0 ? '+' : ''}${o.hit}`, `${o.name} to hit`);
-    for (const d of o.dmg ?? []) roll(d.f, `${o.name} ${d.ty}`);
+    strike(o, a.dis);
   };
 
   // ---- movement --------------------------------------------------------------------------------
@@ -366,10 +449,7 @@ export default function TurnHelper({ scene, tokens, subject, entity, liveKey, ow
           <Swords size={13} /> {isTurn ? `${who}’s turn` : who}
           <span className="flex gap-0.5">
             {(['action', 'bonus', 'reaction'] as const).map((c) => (
-              <span
-                key={c}
-                className={clsx('size-2 rounded-full', left(c) > 0 && !why(c) ? (c === 'reaction' ? 'bg-rose-400' : c === 'bonus' ? 'bg-sky-400' : 'bg-amber-400') : 'bg-stone-700')}
-              />
+              <span key={c} className={clsx('size-2 rounded-full', left(c) > 0 && !why(c) ? (c === 'reaction' ? 'bg-rose-400' : c === 'bonus' ? 'bg-sky-400' : 'bg-amber-400') : 'bg-stone-700')} />
             ))}
           </span>
         </button>
@@ -378,7 +458,9 @@ export default function TurnHelper({ scene, tokens, subject, entity, liveKey, ow
   }
 
   const column = (c: Cost) => {
-    const list = options.filter((o) => o.cost === c);
+    const all = options.filter((o) => o.cost === c);
+    const rare = all.filter((o) => RARE.has(o.id));
+    const list = moreOpen ? all : all.filter((o) => !RARE.has(o.id));
     const casts = p ? spellsBy(c) : [];
     const blocked = why(c);
     return (
@@ -412,10 +494,25 @@ export default function TurnHelper({ scene, tokens, subject, entity, liveKey, ow
               o={o}
               onRun={() => run(o)}
               dim={o.hit !== undefined ? !!state.cantAct : !!blocked}
-              empty={noUses(o)}
+              empty={noUses(o) || !!(o.recharge && live.rc?.[o.id])}
+              waiting={!!(o.recharge && live.rc?.[o.id])}
               open={openRow === o.id}
               onInfo={() => setOpenRow(openRow === o.id ? null : o.id)}
             />
+            {/* A character's own attacks: under Attack (and the off-hand ones under bonus actions), and for opportunity attacks. */}
+            {p && (o.does === 'attack' || o.does === 'oa' || o.id === 'offhand') && (
+              <AttackChips
+                p={p}
+                list={(p.def.attacks ?? []).filter((a) => (o.id === 'offhand' ? a.cost === 'bonus' : a.cost !== 'bonus'))}
+                dim={!!blocked && !(o.does === 'attack' && isTurn && (live.aa ?? 0) > 0)}
+                progress={o.does === 'attack' ? attacksLeft(live, p.d) : null}
+                onAttack={async (a) => {
+                  // The same attack as from anywhere else (the map aims it and offers the damage).
+                  const warn = await attack(p, a, { from: 'turn' });
+                  if (warn) toast.show(warn);
+                }}
+              />
+            )}
             {o.does === 'cast' && casts.length > 0 && !o.res && (
               <SpellChips
                 spells={casts}
@@ -434,6 +531,11 @@ export default function TurnHelper({ scene, tokens, subject, entity, liveKey, ow
             )}
           </div>
         ))}
+        {rare.length > 0 && (
+          <button type="button" className="w-full px-1 py-1 text-left text-[11px] text-stone-500 hover:text-stone-300" onClick={() => setMoreOpen((o) => !o)} aria-expanded={moreOpen}>
+            {moreOpen ? 'Fewer' : `More: ${rare.map((o) => o.name).join(', ')}`}
+          </button>
+        )}
         {/* Bonus-action and reaction spells sit in their own columns. */}
         {c !== 'action' && c !== 'free' && casts.length > 0 && (
           <div>
@@ -448,7 +550,13 @@ export default function TurnHelper({ scene, tokens, subject, entity, liveKey, ow
               {block.options
                 .filter((o) => o.hit !== undefined && o.cost === 'action')
                 .map((o) => (
-                  <button key={o.id} type="button" disabled={!canWrite || !!blocked} onClick={() => opportunity(o)} className="flex items-center gap-1 rounded-full bg-stone-900 px-2 py-0.5 text-xs text-stone-200 ring-1 ring-stone-700 hover:ring-stone-500 disabled:opacity-45">
+                  <button
+                    key={o.id}
+                    type="button"
+                    disabled={!canWrite || !!blocked}
+                    onClick={() => opportunity(o)}
+                    className="flex items-center gap-1 rounded-full bg-stone-900 px-2 py-0.5 text-xs text-stone-200 ring-1 ring-stone-700 hover:ring-stone-500 disabled:opacity-45"
+                  >
                     <Dices size={11} className="text-amber-300" /> {o.name} {o.hit! >= 0 ? '+' : ''}
                     {o.hit}
                   </button>
@@ -456,85 +564,106 @@ export default function TurnHelper({ scene, tokens, subject, entity, liveKey, ow
             </div>
           </div>
         )}
-        {c === 'reaction' && block.legendary.length > 0 && (
-          <div>
-            <div className="px-1 pt-1 text-[11px] text-stone-500">Legendary actions (at the end of another creature’s turn)</div>
-            {block.legendary.map((o) => (
-              <Row key={o.id} o={o} onRun={() => run(o)} open={openRow === o.id} onInfo={() => setOpenRow(openRow === o.id ? null : o.id)} />
-            ))}
-          </div>
-        )}
         {!list.length && !casts.length && !(c === 'free' && prone) && <p className="px-1 text-xs text-stone-500 italic">Nothing here.</p>}
       </div>
     );
   };
 
+  const legendaryColumn = () => (
+    <div className={clsx('min-w-0 space-y-1', tab !== 'legendary' && 'hidden')}>
+      <div>
+        <div className="flex items-center gap-2 text-[11px]">
+          <span className="font-semibold tracking-wide text-violet-300 uppercase">Legendary</span>
+          <span className="flex-1 text-stone-500">at the end of another creature’s turn</span>
+          <span className="flex gap-0.5" aria-label={`${Math.max(0, block.legendaryPer - (live.la ?? 0))} of ${block.legendaryPer} left`}>
+            {Array.from({ length: block.legendaryPer }, (_, i) => (
+              <span key={i} className={clsx('size-2 rounded-full', i < block.legendaryPer - (live.la ?? 0) ? 'bg-violet-400' : 'bg-stone-700')} />
+            ))}
+          </span>
+        </div>
+        {block.legendary.map((o) => (
+          <Row
+            key={o.id}
+            o={o}
+            onRun={() => run(o)}
+            dim={(live.la ?? 0) + legendaryCost(o.name) > block.legendaryPer}
+            open={openRow === o.id}
+            onInfo={() => setOpenRow(openRow === o.id ? null : o.id)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+
   return (
     <>
-      {mode === 'open' && (
-        <div
-          ref={listBox}
-          style={moved ? { left: drag.pos!.x, top: drag.pos!.y, maxHeight: `min(70vh, calc(100vh - ${drag.pos!.y + 12}px))` } : undefined}
-          className={clsx(
-            'z-10 flex w-[min(22rem,calc(100%-1rem))] flex-col overflow-hidden rounded-xl border border-stone-700/80 bg-stone-950/95 shadow-2xl backdrop-blur',
-            moved ? 'fixed' : clsx('absolute', panelClass),
-          )}
-          role="region"
-          aria-label={`What ${who} can do`}
-        >
-          <div className={clsx('flex items-center gap-2 border-b border-stone-800 px-3 py-2', !phone && 'cursor-grab touch-none select-none active:cursor-grabbing')} {...drag.handle(!phone)}>
-            {!phone && <GripHorizontal size={15} className="shrink-0 text-stone-500" />}
-            <span className="min-w-0 flex-1 truncate text-sm text-stone-300">
+      {listOpen &&
+        listSlot &&
+        createPortal(
+          <div className="flex min-h-0 flex-1 flex-col" role="region" aria-label={`What ${who} can do`}>
+            <div className="px-3 pt-2 text-xs text-stone-400">
               <b className="text-stone-100">{subject.name}</b> {isTurn ? '· it’s their turn' : '· waiting (reactions only)'}
-            </span>
-            <button type="button" className="btn-icon-sm" aria-label="Fold the list away" title="Just the dots" onClick={() => setMode('bar')}>
-              <ChevronDown size={16} />
-            </button>
-          </div>
-          {/* One kind at a time (the map stays visible). */}
-          <div className="flex gap-1 border-b border-stone-800 px-2 py-1.5" role="tablist">
-            {(['action', 'bonus', 'reaction', 'free'] as const).map((c) => (
-              <button
-                key={c}
-                type="button"
-                role="tab"
-                aria-selected={tab === c}
-                onClick={() => setTab(c)}
-                className={clsx(
-                  'flex flex-1 items-center justify-center gap-1 rounded-md px-1.5 py-1 text-xs font-semibold',
-                  tab === c ? 'bg-stone-800 text-stone-100' : 'text-stone-400 hover:text-stone-200',
-                )}
-              >
-                {c !== 'free' && (
-                  <span className={clsx('size-2 rounded-full', left(c) > 0 && !why(c) ? (c === 'reaction' ? 'bg-rose-400' : c === 'bonus' ? 'bg-sky-400' : 'bg-amber-400') : 'bg-stone-600')} />
-                )}
-                {c === 'bonus' ? 'Bonus' : c === 'free' ? 'Free' : COST_LABEL[c]}
-              </button>
-            ))}
-          </div>
-          {(state.cantAct || state.spellNote || state.stuck) && (
-            <div className="space-y-0.5 border-b border-stone-800 px-3 py-1.5 text-xs text-amber-200">
-              {state.cantAct && <p>{state.cantAct}: can’t take actions or reactions.</p>}
-              {state.stuck && !state.cantAct && <p>{state.stuck}: speed 0.</p>}
-              {state.spellNote && <p>{state.spellNote}</p>}
             </div>
-          )}
-          <div className="min-h-0 flex-1 overflow-y-auto p-2.5">
-            {column('action')}
-            {column('bonus')}
-            {column('reaction')}
-            {column('free')}
-          </div>
-        </div>
-      )}
+            {/* One kind at a time. */}
+            <div className="flex gap-1 border-b border-stone-800 px-2 py-1.5" role="tablist">
+              {([...(['action', 'bonus', 'reaction', 'free'] as const), ...(block.legendary.length ? (['legendary'] as const) : [])] as Tab[]).map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === c}
+                  onClick={() => setTab(c)}
+                  className={clsx(
+                    'flex flex-1 items-center justify-center gap-1 rounded-md px-1 py-1 text-xs font-semibold',
+                    tab === c ? 'bg-stone-800 text-stone-100' : 'text-stone-400 hover:text-stone-200',
+                  )}
+                >
+                  {c === 'legendary' ? (
+                    <span className={clsx('size-2 rounded-full', (live.la ?? 0) < block.legendaryPer ? 'bg-violet-400' : 'bg-stone-600')} />
+                  ) : (
+                    c !== 'free' && (
+                      <span className={clsx('size-2 rounded-full', left(c) > 0 && !why(c) ? (c === 'reaction' ? 'bg-rose-400' : c === 'bonus' ? 'bg-sky-400' : 'bg-amber-400') : 'bg-stone-600')} />
+                    )
+                  )}
+                  {c === 'bonus' ? 'Bonus' : c === 'free' ? 'Free' : c === 'legendary' ? 'Legend.' : COST_LABEL[c]}
+                </button>
+              ))}
+            </div>
+            {(state.cantAct || state.spellNote || state.stuck) && (
+              <div className="space-y-0.5 border-b border-stone-800 px-3 py-1.5 text-xs text-amber-200">
+                {state.cantAct && <p>{state.cantAct}: can’t take actions or reactions.</p>}
+                {state.stuck && !state.cantAct && <p>{state.stuck}: speed 0.</p>}
+                {state.spellNote && <p>{state.spellNote}</p>}
+              </div>
+            )}
+            <TargetRow
+              target={target}
+              picking={picking}
+              canWrite={canWrite}
+              onPick={onPickTarget}
+              onClear={onClearTarget}
+              pending={pending}
+              onApply={() => pending && applyPending(pending)}
+              onDismiss={() => setPending(null)}
+            />
+            <div className="min-h-0 flex-1 overflow-y-auto p-2.5">
+              {column('action')}
+              {column('bonus')}
+              {column('reaction')}
+              {column('free')}
+              {block.legendary.length > 0 && legendaryColumn()}
+            </div>
+          </div>,
+          listSlot,
+        )}
       <div className={clsx('pointer-events-none absolute flex justify-center', barClass)}>
         <div
           className={clsx(
-            'pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-1 rounded-2xl border bg-stone-950/92 py-1 pr-1 pl-2.5 shadow-lg backdrop-blur sm:gap-1.5 sm:rounded-full sm:pl-3',
+            'pointer-events-auto flex max-w-full items-center justify-center gap-1 rounded-full border bg-stone-950/92 py-1 pr-1 pl-2.5 shadow-lg backdrop-blur sm:gap-1.5 sm:pl-3',
             isTurn ? 'border-amber-500/70' : 'border-stone-600/70',
           )}
         >
-          <span className={clsx('max-w-20 sm:max-w-28 truncate text-xs font-semibold', isTurn ? 'text-amber-200' : 'text-stone-300')} title={subject.name}>
+          <span className={clsx('max-w-16 truncate text-xs font-semibold sm:max-w-28', isTurn ? 'text-amber-200' : 'text-stone-300')} title={subject.name}>
             {isTurn ? `${who}’s turn` : who}
           </span>
           <Dot c="action" short="Action" />
@@ -549,9 +678,10 @@ export default function TurnHelper({ scene, tokens, subject, entity, liveKey, ow
                   'flex items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold ring-1 tabular-nums',
                   state.speed !== null && state.moved > state.speed ? 'text-amber-300 ring-amber-500/60' : 'text-stone-200 ring-stone-700',
                 )}
-                title="Movement this turn (counted as the token moves on its turn)"
+                title="Movement this turn: mark the feet you move (dragging a token doesn’t count by itself)"
               >
-                <Footprints size={12} /> {moveLabel}
+                <Footprints size={12} /> <span className="sm:hidden">{state.speed === null ? `${state.moved}` : Math.max(0, state.speed - state.moved)} ft</span>
+                <span className="hidden sm:inline">{moveLabel}</span>
               </button>
               {moveOpen && (
                 <div className="absolute bottom-full left-1/2 mb-2 w-56 -translate-x-1/2 rounded-lg border border-stone-700 bg-stone-950/95 p-2 text-xs text-stone-300 shadow-xl">
@@ -577,75 +707,33 @@ export default function TurnHelper({ scene, tokens, subject, entity, liveKey, ow
                       Reset
                     </button>
                   </div>
-                  <p className="mt-1.5 text-[11px] text-stone-500">Moving the token on its turn counts by itself. These are for moves made off the map.</p>
+                  <p className="mt-1.5 text-[11px] text-stone-500">
+                    Mark what you move with + and −. Dragging the token on the map doesn’t count by itself (so fixing where it stands never uses up movement).
+                  </p>
                 </div>
               )}
             </span>
           )}
           <button
             type="button"
-            onClick={() => setMode(mode === 'open' ? 'bar' : 'open')}
-            className={clsx('flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold', mode === 'open' ? 'bg-stone-800 text-stone-100' : 'bg-amber-500 text-stone-950')}
-            aria-expanded={mode === 'open'}
+            onClick={() => onList(!listOpen)}
+            className={clsx('flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold', listOpen ? 'bg-stone-800 text-stone-100' : 'bg-amber-500 text-stone-950')}
+            aria-expanded={listOpen}
           >
-            {mode === 'open' ? <ChevronDown size={13} /> : <ChevronUp size={13} />} <span className="hidden sm:inline">{mode === 'open' ? 'Less' : 'What can I do?'}</span>
-          <span className="sm:hidden">{mode === 'open' ? 'Less' : 'More'}</span>
+            {listOpen ? <ChevronDown size={13} /> : <ChevronUp size={13} />} <span className="hidden sm:inline">{listOpen ? 'Less' : 'What can I do?'}</span>
+            <span className="sr-only sm:hidden">{listOpen ? 'Less' : 'What can I do?'}</span>
           </button>
-          <button type="button" className="btn-icon-sm size-7" aria-label="Make the turn helper small" title="Make it small (tap it to bring it back)" onClick={() => setMode('mini')}>
+          <button
+            type="button"
+            className="btn-icon-sm hidden size-7 sm:inline-flex"
+            aria-label="Make the turn helper small"
+            title="Make it small (tap it to bring it back)"
+            onClick={() => setMode('mini')}
+          >
             <Minus size={14} />
           </button>
         </div>
       </div>
     </>
-  );
-}
-
-function Row({ o, onRun, dim, empty, open, onInfo }: { o: TurnOption; onRun: () => void; dim?: boolean; empty?: boolean; open?: boolean; onInfo?: () => void }) {
-  const attack = o.hit !== undefined;
-  return (
-    <div className={clsx('rounded-md ring-1 ring-transparent', open && 'bg-stone-900 ring-stone-800')}>
-      <div className="flex items-start gap-1">
-        <button type="button" onClick={onRun} className={clsx('min-w-0 flex-1 rounded-md px-1.5 py-1 text-left hover:bg-stone-900', (dim || empty) && 'opacity-45')} title={o.text}>
-          <span className="flex items-center gap-1.5 text-sm font-semibold text-stone-100">
-            {attack && <Dices size={12} className="shrink-0 text-amber-300" />}
-            <span className="truncate">{o.name}</span>
-            {o.recharge && <span className="shrink-0 text-[10px] font-normal text-stone-500">recharge {o.recharge}</span>}
-          </span>
-          {o.from && <span className="block truncate text-[10px] tracking-wide text-stone-500 uppercase">{o.from}</span>}
-          {attack && (
-            <span className="block text-[11px] text-stone-400">{`${o.hit! >= 0 ? '+' : ''}${o.hit} to hit${o.dmg?.length ? ` · ${o.dmg.map((d) => `${d.f} ${d.ty}`).join(' + ')}` : ''}`}</span>
-          )}
-        </button>
-        {onInfo && (
-          <button type="button" className="mt-1 shrink-0 rounded px-1 text-[11px] text-stone-500 hover:text-stone-200" aria-expanded={open} onClick={onInfo}>
-            {open ? 'less' : 'what?'}
-          </button>
-        )}
-      </div>
-      {open && <p className="px-1.5 pb-1.5 text-xs leading-snug text-stone-300">{o.text}</p>}
-    </div>
-  );
-}
-
-function SpellChips({ spells, tone, onCast, dim, rule }: { spells: Spell[]; tone: (s: Spell) => string; onCast: (s: Spell) => void; dim?: boolean; rule: (s: Spell) => string | null }) {
-  return (
-    <div className={clsx('flex flex-wrap gap-1 px-1 pb-1', dim && 'opacity-45')}>
-      {spells.map((s) => {
-        // Ruled out by the spells-per-turn rule: greyed, with the reason (still castable: the DM decides).
-        const no = rule(s);
-        return (
-        <button
-          key={s.i}
-          type="button"
-          onClick={() => onCast(s)}
-          className={clsx('flex items-center gap-1 rounded-full bg-stone-900 py-0.5 pr-2 pl-0.5 text-xs ring-1 ring-stone-700 hover:ring-stone-500', no ? 'text-stone-500 line-through opacity-60' : 'text-stone-200')}
-          title={no ?? `Cast ${s.n}`}
-        >
-          <SpellGlyph sp={s} tone={tone(s)} size={20} />
-          {s.n}
-        </button>
-        );
-      })}
-    </div>
   );
 }

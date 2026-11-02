@@ -160,6 +160,17 @@
             "ba": {
               ".validate": "newData.val() === 1"
             },
+            "rc": {
+              "$k": {
+                ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 6"
+              }
+            },
+            "la": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9"
+            },
+            "aa": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 20"
+            },
             "mv": {
               ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9999"
             },

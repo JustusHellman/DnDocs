@@ -9,6 +9,7 @@ import { rollD20 } from '../../lib/battle/table';
 import type { Entity } from '../../types';
 import { usePlayer } from '../../lib/play/usePlayer';
 import { concentrationDC } from '../../lib/play/model';
+import { massiveDamageOf } from '../../lib/play/rules';
 
 interface Props {
   entity: Entity;
@@ -33,7 +34,7 @@ export function HitPoints({ entity, maxText, editable }: Props) {
       const next = applyHp(hp, kind, value);
       const saves = readDeathSaves(entity.attributes);
       // Same rules as on the battle map (hit at 0 HP, massive damage, back above 0).
-      const { deathSaves, massive } = deathSavesAfter(hp, next, kind, value, saves, currentCampaign?.houseRules?.massiveDamage !== false);
+      const { deathSaves, massive } = deathSavesAfter(hp, next, kind, value, saves, massiveDamageOf(currentCampaign));
       if (massive) toast.show(`Massive damage: ${entity.name} dies outright (massive damage rule; the DM can switch it off under Members).`);
       if (kind === 'damage' && value > 0 && player?.live.conc) {
         // The save is asked for in the chat (roll it there, or type what you rolled).

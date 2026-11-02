@@ -9,6 +9,7 @@ import { parseQuery, scoreEntity } from '../lib/search';
 import type { Entity } from '../types';
 import EntityCard from '../components/entity/EntityCard';
 import { EmptyState, Page, PageHeader, Segmented, Skeleton, TypeTile } from '../components/ui/bits';
+import { readDevice, writeDevice } from '../lib/device';
 
 type Sort = 'name' | 'updated' | 'created';
 type View = 'grid' | 'list';
@@ -16,22 +17,12 @@ type View = 'grid' | 'list';
 const QUEST_ORDER = ['Active', 'Rumored', 'On Hold', 'Completed', 'Failed', ''];
 
 function usePref<T extends string>(key: string, initial: T): [T, (v: T) => void] {
-  const [value, setValue] = useState<T>(() => {
-    try {
-      return (localStorage.getItem(key) as T) || initial;
-    } catch {
-      return initial;
-    }
-  });
+  const [value, setValue] = useState<T>(() => (readDevice(key) as T) || initial);
   return [
     value,
     (v) => {
       setValue(v);
-      try {
-        localStorage.setItem(key, v);
-      } catch {
-        /* ignore */
-      }
+      writeDevice(key, v);
     },
   ];
 }

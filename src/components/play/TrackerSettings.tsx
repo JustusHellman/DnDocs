@@ -4,6 +4,7 @@ import { Modal } from '../ui/Modal';
 import { CLASS_IDS, className as classLabel, derive, ordinal, type Ability, type ClassLevel, type Counter, type PlayDef, type Recharge } from '../../lib/play/model';
 import type { PlayerApi } from '../../lib/play/usePlayer';
 import { useSpellIndex } from '../../lib/play/ui';
+import { ATTACK_PRESETS, attackNumbers, type Attack } from '../../lib/play/attacks';
 
 const ABILITIES: Ability[] = ['int', 'wis', 'cha', 'str', 'dex', 'con'];
 const num = (v: string) => (v.trim() === '' ? undefined : Math.max(0, Math.min(99, parseInt(v, 10) || 0)));
@@ -29,6 +30,8 @@ export default function TrackerSettings({ p, onClose }: { p: PlayerApi; onClose:
       if (clean.slots && !Object.keys(clean.slots).length) delete clean.slots;
       if (clean.res && !Object.keys(clean.res).length) delete clean.res;
       if (!clean.counters?.length) delete clean.counters;
+      if (!clean.attacks?.length) delete clean.attacks;
+      else clean.attacks = clean.attacks.filter((a) => a.name.trim());
       if (clean.hd && !clean.hd.die && !clean.hd.max) delete clean.hd;
       await p.saveDef(JSON.parse(JSON.stringify(clean)) as PlayDef);
       onClose();
@@ -39,6 +42,9 @@ export default function TrackerSettings({ p, onClose }: { p: PlayerApi; onClose:
     }
   };
   const counters = def.counters ?? [];
+  const attacks = def.attacks ?? [];
+  const setAttack = (i: number, patch: Partial<Attack>) => set({ attacks: attacks.map((a, j) => (j === i ? { ...a, ...patch } : a)) });
+  const live = useMemo(() => derive({ classLevel: p.entity.attributes?.classLevel, stats: p.entity.dndStats ?? undefined, def, edition: p.edition }), [def, p]);
   const setCounter = (i: number, patch: Partial<Counter>) => set({ counters: counters.map((c, j) => (j === i ? { ...c, ...patch } : c)) });
 
   return (
@@ -187,6 +193,82 @@ export default function TrackerSettings({ p, onClose }: { p: PlayerApi; onClose:
             </div>
           </section>
         )}
+
+        <section>
+          <div className="label">Attacks</div>
+          <p className="hint mb-2 not-italic">
+            Your weapons (and anything else that rolls to hit). The numbers follow your stats and proficiency bonus, so they grow with the character. They’re rolled from the turn helper on the battle map, the spellbook panel, or <code>/attack name</code> in the chat.
+          </p>
+          <div className="space-y-2">
+            {attacks.map((a, i) => {
+              const n = attackNumbers(a, live);
+              return (
+                <div key={a.id} className="surface space-y-2 p-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input className="input min-w-36 flex-1" value={a.name} placeholder="Name (e.g. Longsword)" onChange={(e) => setAttack(i, { name: e.target.value.slice(0, 40) })} aria-label="Attack name" />
+                    <span className="text-sm whitespace-nowrap text-stone-300 tabular-nums">
+                      <b className="text-stone-100">{n.hit >= 0 ? '+' : ''}{n.hit}</b> to hit · <b className="text-stone-100">{n.dmg}</b> {a.ty}
+                    </span>
+                    <button type="button" className="btn-icon-sm" aria-label="Remove attack" onClick={() => set({ attacks: attacks.filter((_, j) => j !== i) })}>
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 text-sm text-stone-300">
+                    <select className="input w-auto py-1 text-sm" value={a.ab} onChange={(e) => setAttack(i, { ab: e.target.value as Attack['ab'] })} aria-label="Ability">
+                      <option value="str">Strength</option>
+                      <option value="dex">Dexterity</option>
+                      <option value="finesse">Finesse (STR or DEX)</option>
+                      <option value="spell">Spellcasting ability</option>
+                      {(['con', 'int', 'wis', 'cha'] as const).map((x) => (
+                        <option key={x} value={x}>
+                          {x.toUpperCase()}
+                        </option>
+                      ))}
+                      <option value="none">No ability</option>
+                    </select>
+                    <input className="input w-20 py-1 text-center" value={a.dice} placeholder="1d8" onChange={(e) => setAttack(i, { dice: e.target.value.replace(/[^\dd+\s-]/gi, '').slice(0, 20) })} aria-label="Damage dice" />
+                    <input className="input w-28 py-1" value={a.ty ?? ''} placeholder="slashing" onChange={(e) => setAttack(i, { ty: e.target.value.slice(0, 20) || undefined })} aria-label="Damage type" />
+                    <label className="flex items-center gap-1 text-xs">
+                      magic +
+                      <input className="input w-12 py-1 text-center" inputMode="numeric" value={a.plus ?? ''} placeholder="0" onChange={(e) => setAttack(i, { plus: num(e.target.value) || undefined })} aria-label="Magic bonus" />
+                    </label>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-stone-400">
+                    <label className="flex items-center gap-1.5">
+                      <input type="checkbox" className="accent-amber-500" checked={a.prof !== false} onChange={(e) => setAttack(i, { prof: e.target.checked ? undefined : false })} /> proficient
+                    </label>
+                    <label className="flex items-center gap-1.5">
+                      <input type="checkbox" className="accent-amber-500" checked={a.addMod !== false} onChange={(e) => setAttack(i, { addMod: e.target.checked ? undefined : false })} /> modifier to damage
+                    </label>
+                    <label className="flex items-center gap-1.5">
+                      <input type="checkbox" className="accent-amber-500" checked={a.cost === 'bonus'} onChange={(e) => setAttack(i, { cost: e.target.checked ? 'bonus' : undefined })} /> a bonus action (off-hand)
+                    </label>
+                    <input className="input min-w-28 flex-1 py-1 text-xs" value={a.note ?? ''} placeholder="Note (80/320 ft, versatile 1d10…)" onChange={(e) => setAttack(i, { note: e.target.value.slice(0, 50) || undefined })} aria-label="Note" />
+                  </div>
+                </div>
+              );
+            })}
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                className="input w-auto py-1 text-sm"
+                value=""
+                aria-label="Add an attack"
+                onChange={(e) => {
+                  const pre = ATTACK_PRESETS.find((x) => x.name === e.target.value);
+                  set({ attacks: [...attacks, { id: Date.now().toString(36), ...(pre ?? { name: '', ab: 'str', dice: '1d6' }) }] });
+                }}
+              >
+                <option value="">+ Add an attack…</option>
+                <option value="(own)">My own (empty)</option>
+                {ATTACK_PRESETS.map((x) => (
+                  <option key={x.name} value={x.name}>
+                    {x.name} ({x.dice} {x.ty})
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </section>
 
         <section>
           <div className="label">Your own counters</div>

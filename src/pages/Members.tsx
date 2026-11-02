@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Crown, Edit3, MoreVertical, QrCode, Shield, ShieldOff, UserMinus, Users } from 'lucide-react';
+import { Crown, Edit3, MoreVertical, QrCode, Shield, ShieldOff, UserMinus } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useCampaignData } from '../contexts/CampaignDataContext';
 import { useToast } from '../contexts/ToastContext';
@@ -16,6 +16,7 @@ import { MenuItem, Popover } from '../components/ui/Popover';
 import InviteModal from '../components/InviteModal';
 import DeleteCampaignCard from '../components/DeleteCampaignCard';
 import ColorPicker from '../components/chat/ColorPicker';
+import { autoRechargeOf, autoUnhideOf, critRuleOf, editionOf, massiveDamageOf, spellsPerTurnOf } from '../lib/play/rules';
 
 function MemberMenu({ member }: { member: User }) {
   const { currentCampaign } = useAuth();
@@ -224,7 +225,7 @@ export default function Members() {
             </div>
             <Toggle
               label="Massive damage kills outright"
-              checked={currentCampaign?.houseRules?.massiveDamage !== false}
+              checked={massiveDamageOf(currentCampaign)}
               onChange={(on) =>
                 currentCampaign &&
                 setHouseRules(currentCampaign.id, { ...(currentCampaign.houseRules ?? {}), massiveDamage: on }).catch((err) => toast.error(err, 'Table rules'))
@@ -240,7 +241,7 @@ export default function Members() {
             </div>
             <Segmented
               size="sm"
-              value={currentCampaign?.houseRules?.edition === '2024' ? '2024' : '2014'}
+              value={editionOf(currentCampaign)}
               onChange={(edition) => currentCampaign && setHouseRules(currentCampaign.id, { ...(currentCampaign.houseRules ?? {}), edition }).catch((err) => toast.error(err, 'Table rules'))}
               options={[
                 { value: '2014', label: '2014' },
@@ -257,7 +258,7 @@ export default function Members() {
             </div>
             <Segmented
               size="sm"
-              value={currentCampaign?.houseRules?.spellsPerTurn ?? 'rules'}
+              value={spellsPerTurnOf(currentCampaign)}
               onChange={(spellsPerTurn) => currentCampaign && setHouseRules(currentCampaign.id, { ...(currentCampaign.houseRules ?? {}), spellsPerTurn }).catch((err) => toast.error(err, 'Table rules'))}
               options={[
                 { value: 'rules', label: 'As written' },
@@ -265,6 +266,48 @@ export default function Members() {
                 { value: 'off', label: 'Off' },
               ]}
             />
+          </div>
+          <div className="mt-4 flex flex-wrap items-start gap-3 border-t border-stone-800 pt-4">
+            <div className="min-w-0 flex-1 basis-56">
+              <div className="text-stone-100">Critical hits</div>
+              <p className="text-xs text-stone-500">
+                How a critical hit's damage is rolled. Dice twice: the rules (2d6 becomes 4d6). Max + roll: one set at its maximum plus a roll (12 + 2d6). Doubled: roll once and double what the dice show.
+              </p>
+            </div>
+            <Segmented
+              size="sm"
+              value={critRuleOf(currentCampaign)}
+              onChange={(crits) => currentCampaign && setHouseRules(currentCampaign.id, { ...(currentCampaign.houseRules ?? {}), crits }).catch((err) => toast.error(err, 'Table rules'))}
+              options={[
+                { value: 'double-dice', label: 'Dice twice' },
+                { value: 'max-plus-roll', label: 'Max + roll' },
+                { value: 'double-total', label: 'Doubled' },
+              ]}
+            />
+          </div>
+          <div className="mt-4 border-t border-stone-800 pt-4">
+            <div className="text-stone-100">What the app does by itself</div>
+            <p className="mb-2 text-xs text-stone-500">
+              Each of these is said on screen when it happens, with an Undo. Damage and healing are never put on anyone without you seeing it first and pressing Apply.
+            </p>
+            {(
+              [
+                ['autoRecharge', 'Roll monsters’ recharges', 'At the start of a monster’s turn your screen rolls the d6 for its used-up abilities and says how it went. Off: you roll at the table (using it again asks whether it recharged).', autoRechargeOf(currentCampaign)],
+                ['autoUnhide', 'Attacking ends Hidden', 'A Hidden creature that attacks loses the Hidden tag on its token. Off: take it off by hand.', autoUnhideOf(currentCampaign)],
+              ] as const
+            ).map(([key, title, text, on]) => (
+              <div key={key} className="mt-2 flex items-start gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-stone-200">{title}</div>
+                  <p className="text-xs text-stone-500">{text}</p>
+                </div>
+                <Toggle
+                  label={title}
+                  checked={on}
+                  onChange={(v) => currentCampaign && setHouseRules(currentCampaign.id, { ...(currentCampaign.houseRules ?? {}), [key]: v }).catch((err) => toast.error(err, 'Table rules'))}
+                />
+              </div>
+            ))}
           </div>
           <PartyRest />
           <div className="mt-4 border-t border-stone-800 pt-4">
@@ -357,7 +400,7 @@ function PartyRest() {
     if (!ok) return;
     setBusy(true);
     try {
-      await partyRest(currentCampaign.id, currentCampaign.dmId, chars, currentCampaign.houseRules?.edition === '2024' ? '2024' : '2014', kind, tableLive().play);
+      await partyRest(currentCampaign.id, currentCampaign.dmId, chars, editionOf(currentCampaign), kind, tableLive().play);
       toast.success(kind === 'long' ? 'The party is rested' : 'Short rest done');
     } catch (err) {
       toast.error(err, 'Party rest');

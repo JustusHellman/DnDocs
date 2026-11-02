@@ -8,8 +8,12 @@ import { setCombat, setInitiativeOrder, setInitiatives, setTurn, updateScene, up
 import { rollD20 } from '../../lib/battle/table';
 import type { Entity, Scene, Token } from '../../types';
 import EncounterMeter from './EncounterMeter';
+import { useAuth } from '../../contexts/AuthContext';
+import { autoRechargeOf } from '../../lib/play/rules';
 import { patchPlay, tableLive } from '../../lib/play/live';
-import { TURN_RESET, turnFieldsUsed } from '../../lib/play/turn';
+import { rollRecharges, statBlockOptions, TURN_RESET, turnFieldsUsed } from '../../lib/play/turn';
+import { tableChat } from '../../lib/chat/bus';
+import { rollDie } from '../../lib/dice';
 import { colorOf, useTableColors } from '../../lib/chat/colorStore';
 import { setInitiativeContext, useSittingOut } from '../../lib/battle/initiativeStore';
 import { openTableChat } from '../chat/ChatDock';
@@ -27,6 +31,8 @@ interface Props {
   onHover?: (id: string | null) => void;
   /** The token pointed at on the map: its row lights up. */
   highlightId?: string | null;
+  /** Its width (by default a fixed card). */
+  className?: string;
 }
 
 /** Conditions the turn helper puts on that end with the fight. */
@@ -36,7 +42,7 @@ const FIGHT_ONLY = ['Dodging', 'Disengaged', 'Readied'];
 const narrow = () => typeof window !== 'undefined' && window.innerWidth < 640;
 
 /** Initiative order and turns. The DM runs it; players roll for and pass their own tokens' turns. */
-export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asDM, entityMap, onSelect, onHover, highlightId }: Props) {
+export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asDM, entityMap, onSelect, onHover, highlightId, className = 'w-72 max-w-[calc(100vw-1.5rem)]' }: Props) {
   const toast = useToast();
   const confirm = useConfirm();
   const currentRow = useRef<HTMLLIElement | null>(null);
@@ -47,6 +53,7 @@ export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asD
   const order = useMemo(() => initiativeOrder(tokens), [tokens]);
   const orderIds = order.map((t) => t.id);
   // Players only see (and roll for) their own tokens among those still to roll.
+  const { currentCampaign } = useAuth();
   const unrolled = tokens.filter((t) => (t.initiative === null || t.initiative === undefined) && (asDM || t.controlledBy.includes(uid)));
   const mine = (t: Token) => t.controlledBy.includes(uid);
   const tableColors = useTableColors();
@@ -64,8 +71,29 @@ export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asD
     const play = tableLive().play;
     const key = turnToken.entityId && play[`c_${turnToken.entityId}`] ? `c_${turnToken.entityId}` : `t_${turnToken.id}`;
     const live = play[key];
-    if (turnFieldsUsed(live) && live?.uid) patchPlay(scene.campaignId, key, live.uid, live.name ?? turnToken.name, TURN_RESET).catch(() => undefined);
+    if (!live?.uid || !(turnFieldsUsed(live) || live.la || live.rc)) return;
+    // A monster's legendary actions come back, and its used-up abilities roll to recharge (the DM sees how it went).
+    // (Recharges rolled by hand at the table stay marked until the DM uses the ability again.)
+    const patch: Record<string, unknown> = { ...TURN_RESET, la: null };
+    if (live.rc && asDM && autoRechargeOf(currentCampaign)) {
+      // Its abilities' own names when its stat block is at hand ("Fire Breath", not "fire breath").
+      const statText = turnToken.entityId ? entityMap.get(turnToken.entityId)?.statBlock : null;
+      const names = Object.fromEntries(statBlockOptions(statText).options.map((o) => [o.id, o.name.replace(/\s*\(recharge[^)]*\)/i, '')]));
+      const r = rollRecharges(live.rc, () => rollDie(6), names);
+      patch.rc = r.rc;
+      if (r.lines.length) tableChat.note(`${turnToken.name}: ${r.lines.join('; ')}.`);
+    }
+    patchPlay(scene.campaignId, key, live.uid, live.name ?? turnToken.name, patch).catch(() => undefined);
   }, [combat.turn, combat.round]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Whose turn it is, on the scene itself: every page shows "Your turn" to that token's players.
+  const turnBy = combat.active && turnToken ? turnToken.controlledBy : [];
+  const turnOwnName = combat.active && turnToken && turnToken.controlledBy.length ? turnToken.name : null;
+  useEffect(() => {
+    if (!asDM || !tokensReady) return;
+    if (JSON.stringify(turnBy) === JSON.stringify(combat.turnBy ?? []) && (turnOwnName ?? null) === (combat.turnName ?? null)) return;
+    updateScene(scene.id, { 'combat.turnBy': turnBy, 'combat.turnName': turnOwnName }).catch(() => undefined);
+  }, [asDM, tokensReady, combat.active, combat.turn, turnBy.join(','), turnOwnName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Everyone on this map starts fresh (a fight starting or ending). */
   const freshTurns = async () => {
@@ -73,7 +101,7 @@ export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asD
     for (const t of tokens) {
       for (const key of [t.entityId ? `c_${t.entityId}` : null, `t_${t.id}`]) {
         const live = key ? play[key] : undefined;
-        if (key && turnFieldsUsed(live) && live?.uid) await patchPlay(scene.campaignId, key, live.uid, live.name ?? t.name, TURN_RESET).catch(() => undefined);
+        if (key && live?.uid && (turnFieldsUsed(live) || live.la || live.rc)) await patchPlay(scene.campaignId, key, live.uid, live.name ?? t.name, { ...TURN_RESET, la: null, rc: null }).catch(() => undefined);
       }
     }
   };
@@ -232,7 +260,7 @@ export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asD
   if (!asDM && !combat.active && order.length === 0 && !unrolled.some(mine)) return null;
 
   return (
-    <div onMouseLeave={() => onHover?.(null)} className="w-72 max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-xl border border-stone-700/80 bg-stone-950/92 text-sm shadow-xl backdrop-blur">
+    <div onMouseLeave={() => onHover?.(null)} className={clsx(className, 'overflow-hidden rounded-xl border border-stone-700/80 bg-stone-950/92 text-sm shadow-xl backdrop-blur')}>
       <div className="flex items-center">
         <button type="button" className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
           <Swords size={15} className={combat.active ? 'text-amber-400' : 'text-stone-500'} />
@@ -261,7 +289,8 @@ export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asD
       </div>
       {open && (
         <div className="border-t border-stone-800 px-2 pt-1.5 pb-2">
-          {asDM && tokens.some((t) => t.controlledBy.length === 0) && <EncounterMeter tokens={tokens} entityMap={entityMap} compact />}
+          {/* How hard the fight looks: for setting it up (in the middle of it, it's just noise). */}
+          {asDM && !combat.active && tokens.some((t) => t.controlledBy.length === 0) && <EncounterMeter tokens={tokens} entityMap={entityMap} compact />}
           {rows.length > 0 && (
             <ol className="scrollbar-thin max-h-56 space-y-0.5 overflow-y-auto">
               {rows.map((row, idx) => {

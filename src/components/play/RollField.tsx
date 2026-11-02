@@ -3,6 +3,7 @@ import clsx from 'clsx';
 import { Check, Dices, X } from 'lucide-react';
 import { parseFormula, rollFormula } from '../../lib/dice';
 import { toChatRoll, type ChatRoll } from '../../lib/chat/rolls';
+import { critRule, CRIT_LABEL } from '../../lib/play/rules';
 
 export interface RollOutcome {
   total: number;
@@ -36,7 +37,7 @@ export default function RollField({
   const f = formula ? parseFormula(formula.replace(/\s+/g, '')) : null;
   const rollHere = () => {
     if (!f) return;
-    const r = rollFormula(f, { crit });
+    const r = rollFormula(f, { crit: crit ? critRule() : false });
     onChange({ total: r.total, roll: toChatRoll(r, label) });
     setTyped('');
   };
@@ -48,7 +49,7 @@ export default function RollField({
     <div className={clsx('flex flex-wrap items-center gap-1.5', compact ? 'text-xs' : 'text-sm')}>
       <span className="min-w-0 flex-1 basis-32 text-stone-300">
         {label}
-        {formula && <span className="ml-1.5 font-mono text-xs text-stone-500">{formula.replace(/\s+/g, '')}{crit ? ' ×2 dice' : ''}</span>}
+        {formula && <span className="ml-1.5 font-mono text-xs text-stone-500">{formula.replace(/\s+/g, '')}{crit ? ` (${CRIT_LABEL[critRule()]})` : ''}</span>}
         {hint && <span className="block text-[11px] text-stone-500 italic">{hint}</span>}
       </span>
       {value ? (

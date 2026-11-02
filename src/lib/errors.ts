@@ -36,6 +36,6 @@ export function friendlyError(error: unknown, fallback = 'Something went wrong.'
 }
 
 export function logError(context: string, error: unknown) {
-  // eslint-disable-next-line no-console
+   
   console.error(`[DnDocs] ${context}`, error);
 }

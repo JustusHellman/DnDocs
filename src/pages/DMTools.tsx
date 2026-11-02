@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Download, Image as ImageIcon, Package, RefreshCw, Save, Store, UserRound, Wand2 } from 'lucide-react';
+import { Download, Image as ImageIcon, RefreshCw, Save, Wand2 } from 'lucide-react';
 import clsx from 'clsx';
 import { GiCowled, GiDiceTwentyFacesTwenty, GiLockedChest, GiRollingDices, GiTavernSign } from 'react-icons/gi';
 import { useAuth } from '../contexts/AuthContext';

@@ -7,22 +7,18 @@ import SpellCard, { ColoringPicker, SpellTags, levelLine } from './SpellCard';
 import { useAuth } from '../../contexts/AuthContext';
 import { useCampaignData } from '../../contexts/CampaignDataContext';
 import { useToast } from '../../contexts/ToastContext';
-import type { PlayerApi } from '../../lib/play/usePlayer';
-import { className as classLabel, ordinal, pactLeft, resourceLeft, slotsLeft } from '../../lib/play/model';
+import { freeLabel, type PlayerApi } from '../../lib/play/usePlayer';
+import { className as classLabel, ordinal, pactLeft, slotsLeft } from '../../lib/play/model';
 import { countChosen, markOf, openPlay, readySpells, useSpellIndex, withMark, type SpellMark } from '../../lib/play/ui';
 import { deleteCustomSpell, saveCustomSpell } from '../../lib/play/live';
 import { cleanCustomSpell, LEVEL_TONE, SCHOOLS, type Spell } from '../../lib/play/spells';
 import { spellTone, useColoring } from '../../lib/play/coloring';
 import SpellGlyph from './SpellGlyph';
+import { readDevice, writeDevice } from '../../lib/device';
 
 type Tab = 'ready' | 'choose' | 'write';
 
 /** Free casts a counter gives for this spell, as a short label ("Free ×2 · Fey Touched"). */
-export function freeLabel(p: PlayerApi, id: string) {
-  const r = p.d.resources.find((x) => x.spell === id);
-  return r ? `Free ×${resourceLeft(r, p.live)} · ${r.name.split(':')[0]}` : null;
-}
-
 /**
  * A character's spells. "Ready": the hand of cards you can cast now. "Choose": prepare or learn
  * spells from your class lists (or any list), and mark some always prepared. "Write a card": a
@@ -107,20 +103,10 @@ function ReadyTab({ p, ready: all, names, onChoose }: { p: PlayerApi; ready: Spe
   const [open, setOpen] = useState<string | null>(null);
   const [q, setQ] = useState('');
   // Small cards, or the whole text of every spell (remembered on this device).
-  const [view, setView] = useState<'cards' | 'text'>(() => {
-    try {
-      return localStorage.getItem(VIEW_KEY) === 'text' ? 'text' : 'cards';
-    } catch {
-      return 'cards';
-    }
-  });
+  const [view, setView] = useState<'cards' | 'text'>(() => (readDevice(VIEW_KEY) === 'text' ? 'text' : 'cards'));
   const pickView = (v: 'cards' | 'text') => {
     setView(v);
-    try {
-      localStorage.setItem(VIEW_KEY, v);
-    } catch {
-      /* ignore */
-    }
+    writeDevice(VIEW_KEY, v);
   };
   const ready = q ? all.filter((s) => s.n.toLowerCase().includes(q.toLowerCase())) : all;
   // The picked card opens above the hand: bring it into view (on a phone it's often off screen).

@@ -24,7 +24,9 @@ import { concentrationDC, playKey } from '../../lib/play/model';
 import { patchPlay, setDmConc, useTableLive } from '../../lib/play/live';
 import { tableChat } from '../../lib/chat/bus';
 import { TurnChips } from '../play/PlayTracker';
+import { conditionRule } from '../../lib/battle/conditions';
 import { openQuickBook } from '../play/QuickBook';
+import { editionOf, massiveDamageOf } from '../../lib/play/rules';
 
 interface Props {
   token: Token;
@@ -45,6 +47,10 @@ interface Props {
   /** For timed conditions. */
   combat?: SceneCombat;
   feetPerSquare?: number;
+  /** In the battle map's side panel: no frame of its own (the panel has one). */
+  embedded?: boolean;
+  /** The turn helper's dots show this token's reaction: don't show it twice. */
+  hideReaction?: boolean;
 }
 
 /** What a token field was before a change (missing fields get their neutral value, so undo is valid). */
@@ -62,7 +68,7 @@ const DURATIONS = [
 
 const HEALTH_WORD: Record<string, string> = { healthy: 'Unhurt', bloodied: 'Bloodied', down: 'Down' };
 
-export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEditEntity, secretHp, players, onClose, onOpenEntry, onUndoable, combat, feetPerSquare = 5, onFramed }: Props) {
+export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEditEntity, secretHp, players, onClose, onOpenEntry, onUndoable, combat, feetPerSquare = 5, onFramed, embedded, hideReaction }: Props) {
   const [framing, setFraming] = useState<string | null>(null);
   const toast = useToast();
   const { currentCampaign } = useAuth();
@@ -86,6 +92,7 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
   const shown = own ?? (fromSrd ? { stats: fromSrd.dndStats, text: fromSrd.statBlock } : null);
   const stats = shown?.stats ?? null;
   const editConditions = asDM || controller;
+  const [ruleShown, setRuleShown] = useState<string | null>(null);
   const isCharacter = entity?.type === 'character';
   // Table state: a character's trackers; a creature's reaction (everyone sees it) and, for the DM,
   // whether it's concentrating (only the DM sees that).
@@ -94,7 +101,7 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
   const creatureKey = playKey(null, t.id);
   const creatureLive = table.play[creatureKey];
   const creatureConc = !!table.dm[creatureKey]?.conc;
-  const edition = currentCampaign?.houseRules?.edition === '2024' ? '2024' : '2014';
+  const edition = editionOf(currentCampaign);
   const n = parseInt(amount, 10);
   const valid = Number.isFinite(n) && n >= 0;
 
@@ -136,7 +143,17 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
     // A timed condition runs out at the start of this same turn, that many rounds later.
     const timer = duration && combat?.active ? { round: combat.round + duration, turn: combat.turn } : null;
     patch({ conditions: arrayUnion(c), [timerKey(c)]: timer ?? deleteField() }, { conditions: arrayRemove(c), [timerKey(c)]: deleteField() }, `Add ${c}`);
+    if (c === 'Concentrating') concentrate(true);
     setNewCondition('');
+  };
+  /**
+   * One concentration: the condition on the token and the tracker's (a character's, or the DM's
+   * private mark on a creature) go on and off together.
+   */
+  const concentrate = (on: boolean) => {
+    if (player) {
+      if (!!player.live.conc !== on) player.setConc(on).catch(() => undefined);
+    } else if (asDM && currentCampaign && creatureConc !== on) setDmConc(currentCampaign.id, creatureKey, on).catch(() => undefined);
   };
   const removeCondition = (c: string) => {
     // An aura that came from the concentration spell ends with it.
@@ -146,6 +163,7 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
       { conditions: arrayUnion(c), [timerKey(c)]: timerOr(c), ...(endsAura ? { aura: t.aura, [timerKey(AURA_TIMER)]: timerOr(AURA_TIMER) } : {}) },
       `Remove ${c}`,
     );
+    if (c === 'Concentrating') concentrate(false);
   };
   /** null: not chosen in this card (changing the radius then keeps a running timer). */
   const [auraDuration, setAuraDuration] = useState<number | null>(null);
@@ -215,7 +233,7 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
       if (wasUp && !nowUp) side = knockOut();
       else if (!wasUp && nowUp) side = wakeUp();
       else concentrationCheck();
-      const { deathSaves, massive } = deathSavesAfter(charHp, next, kind, n, saves, currentCampaign?.houseRules?.massiveDamage !== false);
+      const { deathSaves, massive } = deathSavesAfter(charHp, next, kind, n, saves, massiveDamageOf(currentCampaign));
       if (massive) toast.show(`Massive damage: ${t.name} dies outright (massive damage rule; the DM can switch it off under Members).`);
       return writeChar({ ...hpToAttributes(next), deathSaves }, label, side);
     }
@@ -267,7 +285,7 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
         : null;
 
   return (
-    <div className="scrollbar-thin max-h-[min(70vh,34rem)] w-72 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-xl border border-stone-700/80 bg-stone-950/95 p-3 text-sm shadow-2xl backdrop-blur">
+    <div className={clsx('text-sm', embedded ? 'p-3' : 'scrollbar-thin max-h-[min(70vh,34rem)] w-72 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-xl border border-stone-700/80 bg-stone-950/95 p-3 shadow-2xl backdrop-blur')}>
       <div className="flex items-center gap-2">
         <span className="size-4 shrink-0 rounded-full ring-2 ring-stone-700" style={{ background: t.color }} />
         {asDM ? (
@@ -283,9 +301,11 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
           <span className="min-w-0 flex-1 truncate font-semibold text-stone-50">{t.name}</span>
         )}
         {t.hidden && <EyeOff size={14} className="text-stone-500" aria-label="Hidden from players" />}
-        <button type="button" className="btn-icon-sm" aria-label="Close" onClick={onClose}>
-          <X size={15} />
-        </button>
+        {!embedded && (
+          <button type="button" className="btn-icon-sm" aria-label="Close" onClick={onClose}>
+            <X size={15} />
+          </button>
+        )}
       </div>
 
       {stats && (
@@ -387,9 +407,9 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
       )}
 
       {/* Reaction and concentration. */}
-      {!isCharacter && (asDM || creatureLive?.re) && (
+      {!isCharacter && (asDM || (creatureLive?.re && !hideReaction)) && (
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          <button
+          {!hideReaction && <button
             type="button"
             disabled={!asDM}
             aria-pressed={!!creatureLive?.re}
@@ -398,12 +418,17 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
             title="Everyone sees when a creature has used its reaction. It comes back at the start of its turn."
           >
             <Zap size={13} /> {creatureLive?.re ? 'Reaction used' : 'Reaction ready'}
-          </button>
+          </button>}
           {asDM && (
             <button
               type="button"
               aria-pressed={creatureConc}
-              onClick={() => currentCampaign && setDmConc(currentCampaign.id, creatureKey, !creatureConc).catch((err) => toast.error(err, 'Concentration'))}
+              onClick={() => {
+                if (!currentCampaign) return;
+                setDmConc(currentCampaign.id, creatureKey, !creatureConc).catch((err) => toast.error(err, 'Concentration'));
+                // Stopping: the public "Concentrating" condition (if the DM had shown it) goes too.
+                if (creatureConc && t.conditions.includes('Concentrating')) removeCondition('Concentrating');
+              }}
               className={clsx('flex items-center gap-1 rounded-full border border-dashed px-2.5 py-1 text-xs font-semibold', creatureConc ? 'border-sky-400/70 bg-sky-500/15 text-sky-200' : 'border-stone-700 text-stone-400 hover:text-stone-200')}
               title="Only you see this. Damage then reminds you of the Constitution save."
             >
@@ -415,7 +440,7 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
       {/* A character: concentration and reaction here; spells, slots and rests in the spellbook panel. */}
       {player && (
         <div className="mt-3 space-y-2">
-          <TurnChips p={player} />
+          <TurnChips p={player} noReaction={hideReaction} />
           {player.canEdit && (
             <button type="button" className="btn btn-secondary btn-sm w-full" onClick={() => openQuickBook({ entityId: entity!.id })}>
               <BookOpen size={13} /> Spells, abilities &amp; rests
@@ -427,12 +452,20 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
       <div className="mt-3">
         <span className="label">Conditions &amp; effects</span>
         <div className="flex flex-wrap gap-1">
-          {t.conditions.map((c) => {
+          {/* A character's concentration is the chip above (they go on and off together). */}
+          {t.conditions.filter((c) => !(player && c === 'Concentrating')).map((c) => {
             const timer = t.timers?.[c];
             const left = timer && combat?.active ? Math.max(0, timer.round - combat.round) : null;
+            const rule = conditionRule(c);
             return (
-              <span key={c} className="chip gap-1 text-violet-200 bg-violet-500/10 ring-violet-500/30" title={timer ? `Ends at the start of round ${timer.round}` : 'Until removed'}>
-                {c}
+              <span key={c} className={clsx('chip gap-1 text-violet-200 bg-violet-500/10 ring-violet-500/30', ruleShown === c && 'ring-violet-300')} title={`${rule ? `${rule}\n` : ''}${timer ? `Ends at the start of round ${timer.round}` : 'Until removed'}`}>
+                {rule ? (
+                  <button type="button" className="underline decoration-dotted underline-offset-2" aria-expanded={ruleShown === c} onClick={() => setRuleShown(ruleShown === c ? null : c)}>
+                    {c}
+                  </button>
+                ) : (
+                  c
+                )}
                 {left !== null && <span className="text-violet-300/70">· {left === 0 ? 'ends this round' : `${left} rd`}</span>}
                 {editConditions && (
                   <button type="button" aria-label={`Remove ${c}`} onClick={() => removeCondition(c)}>
@@ -444,6 +477,12 @@ export default function TokenCard({ token: t, sceneId, asDM, uid, entity, canEdi
           })}
           {t.conditions.length === 0 && !editConditions && <span className="text-xs text-stone-500">None</span>}
         </div>
+        {/* What it does (tap a condition): handy for anyone still learning them. */}
+        {ruleShown && t.conditions.includes(ruleShown) && conditionRule(ruleShown) && (
+          <p className="mt-1 rounded-md bg-violet-500/10 px-2 py-1 text-xs text-violet-100">
+            <b>{ruleShown}:</b> {conditionRule(ruleShown)}
+          </p>
+        )}
         {editConditions && (
           <form
             className="mt-1.5 flex flex-wrap gap-1"

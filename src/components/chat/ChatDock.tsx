@@ -13,9 +13,11 @@ import { listenTable, tableLive } from '../../lib/play/live';
 import { partyRest, usePlayer } from '../../lib/play/usePlayer';
 import EventLine from './EventLine';
 import { useActingCharacter } from '../play/useActingCharacter';
-import { readySpells, useSpellIndex } from '../../lib/play/ui';
+import { readySpells, useMapOpen, useSpellIndex } from '../../lib/play/ui';
+import { emit } from '../../lib/play/tableEvents';
 import SpellGlyph from '../play/SpellGlyph';
 import { useDragPosition } from '../../hooks/useDragPosition';
+import { attackNumbers } from '../../lib/play/attacks';
 import { LEVEL_TONE } from '../../lib/play/spells';
 import { ordinal } from '../../lib/play/model';
 import { runCommand } from './runCommand';
@@ -29,6 +31,8 @@ import { parseRollCommand, rollCommand, toChatRoll, type ChatRoll } from '../../
 import type { RollResult } from '../../lib/dice';
 import DiceTray from '../dice/DiceTray';
 import DiceToss from './DiceToss';
+import { editionOf } from '../../lib/play/rules';
+import { readDevice, writeDevice } from '../../lib/device';
 
 /** Open the table chat from anywhere (e.g. the battle map's dice button): `{ dice: true }` opens the dice too. */
 export function openTableChat(opts: { dice?: boolean; toggle?: boolean; initiative?: boolean; close?: boolean } = {}) {
@@ -46,20 +50,8 @@ export const useChatOpen = () =>
 
 const seenKey = (cid: string, uid: string) => `dndocs-chat-seen:${cid}:${uid}`;
 const showKey = (cid: string) => `dndocs-chat-dm-show:${cid}`;
-const read = (k: string) => {
-  try {
-    return localStorage.getItem(k);
-  } catch {
-    return null;
-  }
-};
-const write = (k: string, v: string) => {
-  try {
-    localStorage.setItem(k, v);
-  } catch {
-    /* ignore */
-  }
-};
+const read = readDevice;
+const write = (k: string, v: string) => writeDevice(k, v);
 const posKey = 'dndocs-chat-pos';
 const PANEL_W = 416; // 26rem at the default font size; measured for real when dragging
 const sameRoll = (a: ChatRoll | undefined, b: ChatRoll | null) => !!a && !!b && JSON.stringify(a) === JSON.stringify(b);
@@ -97,6 +89,8 @@ export function ChatButton() {
   const popped = useRef(new Set<string>());
   const panel = useRef<HTMLDivElement>(null);
   const phone = useIsPhone();
+  // On the battle map the right side holds the initiative and the token panel: the chat opens on the left.
+  const onMap = useMapOpen();
   const { pos, startDrag, reset } = useDragPosition(posKey, panel, PANEL_W);
   const cid = currentCampaign?.id;
   const uid = user?.uid;
@@ -205,7 +199,7 @@ export function ChatButton() {
     chatIsOpen = open;
     chatOpenSubs.forEach((f) => f());
     // On a phone there's room for one panel: the chat or the spellbook.
-    if (open && phone) window.dispatchEvent(new CustomEvent('dndocs:book', { detail: { close: true } }));
+    if (open && phone) emit('book', { close: true });
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!open || !cid || !uid) return;
@@ -305,6 +299,16 @@ export function ChatButton() {
         .slice(0, 8)
         .map((r) => ({ key: r.key, main: r.name, detail: `${actingP.d.resources.includes(r) ? `${Math.max(0, r.max - (actingP.live.r?.[r.key] ?? 0))} of ${r.max} left` : ''}`, pick: () => send(`/${res[1].toLowerCase()} ${r.name}`) }));
     }
+    const atk = text.match(/^\/(attack|a)\s+(.*)$/i);
+    if (atk && actingP?.def.attacks?.length) {
+      return actingP.def.attacks
+        .filter((x) => !q(atk[2]) || x.name.toLowerCase().split(/[\s-]+/).some((w2) => w2.startsWith(q(atk[2]))))
+        .slice(0, 8)
+        .map((x) => {
+          const n = attackNumbers(x, actingP.d);
+          return { key: x.id, main: x.name, detail: `${n.hit >= 0 ? '+' : ''}${n.hit} to hit · ${n.dmg} ${x.ty ?? ''}`, pick: () => send(`/attack ${x.name}`) };
+        });
+    }
     const w = text.match(/^\/(?:w|whisper)\s+(\S*)$/i);
     if (w) return people.filter((p) => p.name.toLowerCase().startsWith(q(w[1]))).slice(0, 8).map((p) => ({ key: `${p.uid}-${p.name}`, main: p.name, detail: p.label !== p.name ? `(${p.label})` : '', pick: () => setText(`/w ${p.name} `) }));
     return [];
@@ -333,7 +337,7 @@ export function ChatButton() {
             cid,
             currentCampaign!.dmId,
             entities.filter((e) => e.type === 'character' && e.playerId),
-            currentCampaign?.houseRules?.edition === '2024' ? '2024' : '2014',
+            editionOf(currentCampaign),
             kind,
             tableLive().play,
           ).catch((err) => toast.error(err, 'Party rest')),
@@ -369,8 +373,8 @@ export function ChatButton() {
           className={clsx(
             'fixed z-[110] flex flex-col overflow-hidden rounded-xl border border-stone-700/80 bg-stone-950/97 shadow-2xl backdrop-blur',
             // Phones: a sheet above the bottom bar. Bigger screens: a floating window you can drag around.
-            phone ? 'inset-x-2 top-16 bottom-[calc(env(safe-area-inset-bottom)+4.75rem)]' : 'h-[min(78vh,46rem)] w-[min(26rem,calc(100vw-1rem))]',
-            !phone && !pos && 'top-[4.5rem] right-2',
+            phone ? 'inset-x-2 top-16 bottom-[calc(env(safe-area-inset-bottom)+4.75rem)]' : onMap && !pos ? 'h-[min(calc(100vh-11rem),46rem)] w-[min(24rem,calc(100vw-1rem))]' : 'h-[min(78vh,46rem)] w-[min(26rem,calc(100vw-1rem))]',
+            !phone && !pos && (onMap ? 'top-[10rem] left-4 sm:left-8' : 'top-[4.5rem] right-2'),
           )}
           style={!phone && pos ? { left: pos.x, top: pos.y } : undefined}
         >
@@ -498,7 +502,7 @@ export function ChatButton() {
       {toss && <DiceToss key={tossKey.current} roll={toss} avoid={open && !phone && panel.current ? panel.current.getBoundingClientRect() : null} color={colorOf(colors, uid)} onLand={() => setLanded(true)} onDone={() => (setToss(null), setLanded(true))} />}
       <PlayHost />
       {pops.length > 0 && !open && (
-        <div className="pointer-events-none fixed top-[4.5rem] right-3 z-[110] flex w-64 flex-col gap-1.5">
+        <div className={clsx('pointer-events-none fixed z-[110] flex w-64 flex-col gap-1.5', onMap && !phone ? 'top-[10rem] left-8' : 'top-[4.5rem] right-3')}>
           {pops.map((m) => (
             <RollPop key={m.id} m={m} color={colorOf(colors, m.uid)} onOpen={() => setOpen(true)} />
           ))}

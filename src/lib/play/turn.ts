@@ -154,10 +154,14 @@ export function counterOptions(resources: Resource[], costs: Record<string, Cost
 const SECTION: Record<string, Cost | 'legendary'> = { actions: 'action', 'bonus actions': 'bonus', reactions: 'reaction', 'legendary actions': 'legendary' };
 
 /** A stat block's actions, bonus actions, reactions and legendary actions (Markdown "### Actions" + "***Name.*** text"). */
-export function statBlockOptions(text: string | null | undefined): { options: TurnOption[]; legendary: TurnOption[] } {
+export function statBlockOptions(text: string | null | undefined): { options: TurnOption[]; legendary: TurnOption[]; legendaryPer: number } {
   const options: TurnOption[] = [];
   const legendary: TurnOption[] = [];
-  if (!text) return { options, legendary };
+  if (!text) return { options, legendary, legendaryPer: 0 };
+  // "can take 3 legendary actions" (2014) / "Legendary Action Uses: 3" (2024).
+  const per = /take (\d+|one|two|three|four|five) legendary actions?|Legendary Action Uses:?\s*(\d+)/i.exec(text);
+  const words: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5 };
+  const legendaryPer = per ? Number(per[2] ?? words[per[1].toLowerCase()] ?? per[1]) || 0 : 0;
   let section: Cost | 'legendary' | 'traits' = 'traits';
   const lines = text.split('\n');
   for (const raw of lines) {
@@ -201,7 +205,7 @@ export function statBlockOptions(text: string | null | undefined): { options: Tu
     };
     (cost === 'legendary' ? legendary : options).push(o);
   }
-  return { options, legendary };
+  return { options, legendary, legendaryPer: legendary.length ? legendaryPer || 3 : 0 };
 }
 
 // ---------------------------------------------------------------------------
@@ -296,8 +300,34 @@ export function spellsNote(bits: number, edition: Edition, mode: SpellsPerTurn =
   return null;
 }
 
+/** The d6 roll a "Recharge 5–6" ability needs (5); "Recharge 6" → 6. */
+export const rechargeMin = (r: string) => Math.max(1, Math.min(6, Number(/\d/.exec(r)?.[0] ?? 6)));
+
+/**
+ * At the start of a monster's turn: each ability waiting to recharge rolls a d6. Returns the new
+ * waiting list and what happened (for the DM's note).
+ */
+export function rollRecharges(rc: Record<string, number> | undefined, d6: () => number, names?: Record<string, string>): { rc: Record<string, number> | null; lines: string[] } {
+  const left: Record<string, number> = {};
+  const lines: string[] = [];
+  for (const [k, min] of Object.entries(rc ?? {})) {
+    const r = d6();
+    const slug = k.replace(/^sb-\d+-/, '').replace(/-/g, ' ');
+    const name = names?.[k] ?? slug.charAt(0).toUpperCase() + slug.slice(1);
+    if (r >= min) lines.push(`${name} recharged (rolled ${r})`);
+    else {
+      left[k] = min;
+      lines.push(`${name} not yet (rolled ${r}, needs ${min}+)`);
+    }
+  }
+  return { rc: Object.keys(left).length ? left : null, lines };
+}
+
+/** What a legendary action costs: "Wing Attack (Costs 2 Actions)" → 2, otherwise 1. */
+export const legendaryCost = (name: string) => Number(/\(\s*costs?\s+(\d)\s+actions?\s*\)/i.exec(name)?.[1] ?? 1);
+
 /** The live fields a new turn clears (reaction included: it comes back at the start of your turn). */
-export const TURN_RESET: Record<string, null> = { ac: null, ax: null, ba: null, re: null, mv: null, dx: null, sp: null };
+export const TURN_RESET: Record<string, null> = { ac: null, ax: null, ba: null, re: null, mv: null, dx: null, sp: null, aa: null };
 export const turnFieldsUsed = (live: PlayLive | null | undefined) => !!live && Object.keys(TURN_RESET).some((k) => (live as Record<string, unknown>)[k]);
 
 /** The first number of feet in a speed ("30 ft., fly 60 ft." → 30). */

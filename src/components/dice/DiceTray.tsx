@@ -3,6 +3,7 @@ import clsx from 'clsx';
 import { Bookmark, Dices, Minus, Plus, Trash2, X } from 'lucide-react';
 import { addDie, addModifier, DICE_SIDES, formatFormula, parseFormula, rollFormula, type RollResult } from '../../lib/dice';
 import type { DndStats } from '../../types';
+import { readDeviceJson, writeDeviceJson } from '../../lib/device';
 
 interface Saved {
   name: string;
@@ -12,21 +13,8 @@ interface Saved {
 /** Saved rolls and recent results: this device only (never in the database). */
 const savedKey = (uid: string) => `dndocs-dice-saved:${uid}`;
 const historyKey = (uid: string) => `dndocs-dice-history:${uid}`;
-function read<T>(key: string, fallback: T): T {
-  try {
-    const v = JSON.parse(localStorage.getItem(key) || 'null');
-    return v ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-function write(key: string, value: unknown) {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    /* private mode: kept for this visit only */
-  }
-}
+const read = readDeviceJson;
+const write = writeDeviceJson;
 
 const ABILITIES = [
   ['str', 'STR'],

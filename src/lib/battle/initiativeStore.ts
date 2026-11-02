@@ -4,6 +4,7 @@
  * "sitting out" list per scene: creatures on the map that aren't in this fight (kept on this device).
  */
 import { useSyncExternalStore } from 'react';
+import { readDeviceJson, writeDeviceJson } from '../device';
 
 export interface InitiativeToken {
   id: string;
@@ -48,11 +49,7 @@ const outCache = new Map<string, string[]>();
 export function sittingOut(sceneId: string): string[] {
   let v = outCache.get(sceneId);
   if (!v) {
-    try {
-      v = JSON.parse(localStorage.getItem(outKey(sceneId)) || '[]') as string[];
-    } catch {
-      v = [];
-    }
+    v = readDeviceJson<string[]>(outKey(sceneId), []);
     if (!Array.isArray(v)) v = [];
     outCache.set(sceneId, v);
   }
@@ -61,11 +58,7 @@ export function sittingOut(sceneId: string): string[] {
 export function setSittingOut(sceneId: string, ids: string[]) {
   const v = [...new Set(ids)];
   outCache.set(sceneId, v);
-  try {
-    localStorage.setItem(outKey(sceneId), JSON.stringify(v));
-  } catch {
-    /* ignore */
-  }
+  writeDeviceJson(outKey(sceneId), v);
   emit();
 }
 export const useSittingOut = (sceneId: string | undefined) => useSyncExternalStore(subscribe, () => (sceneId ? sittingOut(sceneId) : EMPTY));

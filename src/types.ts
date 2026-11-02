@@ -34,6 +34,15 @@ export interface HouseRules {
    * levelled spell a turn, cantrips are free", or none.
    */
   spellsPerTurn?: 'rules' | 'one-levelled' | 'off';
+  /**
+   * Critical hits: roll the damage dice twice (default), roll once and add the dice's maximum, or
+   * roll once and double what the dice show.
+   */
+  crits?: 'double-dice' | 'max-plus-roll' | 'double-total';
+  /** The DM's screen rolls a monster's recharge at the start of its turn. Default on. */
+  autoRecharge?: boolean;
+  /** Attacking ends Hidden on the attacker's token. Default on. */
+  autoUnhide?: boolean;
 }
 
 export type BuiltinType =
@@ -249,6 +258,12 @@ export interface SceneCombat {
   turn: string | null;
   /** Turn order (token ids, hidden ones included) kept up to date by the DM's screen. */
   order?: string[];
+  /**
+   * Whose turn it is, for the "Your turn" banner on every page (kept by the DM's screen): the
+   * players controlling that token, and its name when it's one of theirs (a monster's stays out).
+   */
+  turnBy?: string[];
+  turnName?: string | null;
 }
 
 /** scenes/{entityId}: one battle map per entry with a map image. */

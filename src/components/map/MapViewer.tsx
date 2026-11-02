@@ -436,13 +436,14 @@ export default function MapViewer({ src, alt, pins, onMapClick, onPinDrop, onPin
       {/* Controls */}
       <div className="absolute right-2 bottom-2 flex flex-col gap-1 pb-safe">
         <div className="flex flex-col overflow-hidden rounded-lg border border-stone-700/70 bg-stone-900/85 backdrop-blur">
-          <button type="button" className="btn-icon rounded-none" onClick={() => zoomAt(1.5)} aria-label="Zoom in">
+          {/* Phones pinch to zoom: just "reset view" there, so the buttons take less of a small screen. */}
+          <button type="button" className="btn-icon hidden rounded-none sm:flex" onClick={() => zoomAt(1.5)} aria-label="Zoom in">
             <Plus size={18} />
           </button>
-          <button type="button" className="btn-icon rounded-none border-t border-stone-800" onClick={() => zoomAt(1 / 1.5)} aria-label="Zoom out">
+          <button type="button" className="btn-icon hidden rounded-none border-t border-stone-800 sm:flex" onClick={() => zoomAt(1 / 1.5)} aria-label="Zoom out">
             <Minus size={18} />
           </button>
-          <button type="button" className="btn-icon rounded-none border-t border-stone-800" onClick={home} aria-label="Reset view" disabled={view.s === 1}>
+          <button type="button" className="btn-icon rounded-none sm:border-t sm:border-stone-800" onClick={home} aria-label="Reset view" disabled={view.s === 1}>
             <RotateCcw size={16} />
           </button>
         </div>

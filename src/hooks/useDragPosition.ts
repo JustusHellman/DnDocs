@@ -1,20 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
+import { readDevice, writeDevice } from '../lib/device';
 
-const read = (k: string) => {
-  try {
-    return localStorage.getItem(k);
-  } catch {
-    return null;
-  }
-};
-const write = (k: string, v: string | null) => {
-  try {
-    if (v === null) localStorage.removeItem(k);
-    else localStorage.setItem(k, v);
-  } catch {
-    /* ignore */
-  }
-};
+const read = readDevice;
+const write = writeDevice;
 
 /**
  * A floating window you drag by its header: where it sits (its top-left corner in px, on the

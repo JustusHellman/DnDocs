@@ -4,6 +4,7 @@ import { Modal } from '../ui/Modal';
 import SpellCard from './SpellCard';
 import SpellGlyph from './SpellGlyph';
 import RollField, { type RollOutcome } from './RollField';
+import { DamageTarget } from './SpellTargets';
 import { tableChat } from '../../lib/chat/bus';
 import { ordinal } from '../../lib/play/model';
 import { abilityName, castSummary, dmgAt, fromSelf, healAt, type Spell } from '../../lib/play/spells';
@@ -46,7 +47,14 @@ export default function CreatureCastDialog({ sp, edition, onClose }: { sp: Spell
     const inFight = picked ? combatContext()?.tokens.find((t) => t.id === picked.id) : undefined;
     const ct = castTime(sp);
     if (inFight && ct !== 'longer') await markCost(inFight.key, ct).catch(() => undefined);
-    if (place && sp.a) placeCastArea({ spell: sp.n, area: sp.a, fromSelected: fromSelf(sp), color: '#8b2a1c' });
+    if (place && sp.a)
+      placeCastArea({
+        spell: sp.n,
+        area: sp.a,
+        fromSelected: fromSelf(sp),
+        color: '#8b2a1c',
+        hit: { by: name, dmg: dmg ?? undefined, ty: sp.dm?.ty?.toLowerCase(), total: rolls.Damage?.total, save: sp.sv, dc: Number(dc) || undefined, half: sp.sh === 'half' },
+      });
     onClose();
   };
   return (
@@ -117,6 +125,7 @@ export default function CreatureCastDialog({ sp, edition, onClose }: { sp: Spell
           )}
           {sp.at && <RollField label="Spell attack" formula={`1d20${signed(Number(atk) || 0)}`} value={rolls['Spell attack'] ?? null} onChange={setRoll('Spell attack')} compact />}
           {dmg && <RollField label={`Damage${sp.dm?.ty ? ` (${sp.dm.ty.toLowerCase()})` : ''}`} formula={dmg} value={rolls.Damage ?? null} onChange={setRoll('Damage')} compact />}
+          {dmg && !sp.a && <DamageTarget title={sp.n} by={name} dmg={dmg} ty={sp.dm?.ty?.toLowerCase()} total={rolls.Damage?.total} save={sp.sv} dc={Number(dc) || undefined} half={sp.sh === 'half'} />}
           {heal && <RollField label="Healing" formula={heal} value={rolls.Healing ?? null} onChange={setRoll('Healing')} compact />}
           <label className="flex items-center gap-1.5 text-sm text-stone-300">
             <input type="checkbox" className="accent-amber-500" checked={tell} onChange={(e) => setTell(e.target.checked)} /> Tell the table (the spell shows in the chat)

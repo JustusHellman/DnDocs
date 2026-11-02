@@ -4,6 +4,7 @@
  */
 import { useSyncExternalStore } from 'react';
 import { LEVEL_TONE, type Spell } from './spells';
+import { readDevice, writeDevice } from '../device';
 
 export type Coloring = 'level' | 'school' | 'time' | 'effect';
 
@@ -61,12 +62,8 @@ export function legend(mode: Coloring): { label: string; tone: string }[] {
 
 const KEY = 'dndocs-spell-coloring';
 let current: Coloring = (() => {
-  try {
-    const v = localStorage.getItem(KEY) as Coloring | null;
-    return v && COLORINGS.some((c) => c.value === v) ? v : 'level';
-  } catch {
-    return 'level';
-  }
+  const v = readDevice(KEY) as Coloring | null;
+  return v && COLORINGS.some((c) => c.value === v) ? v : 'level';
 })();
 const subs = new Set<() => void>();
 export const useColoring = () =>
@@ -76,10 +73,6 @@ export const useColoring = () =>
   );
 export function setColoring(c: Coloring) {
   current = c;
-  try {
-    localStorage.setItem(KEY, c);
-  } catch {
-    /* ignore */
-  }
+  writeDevice(KEY, c);
   subs.forEach((f) => f());
 }

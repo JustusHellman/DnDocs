@@ -27,7 +27,23 @@ export type TableEvent =
   /** Initiative entered (typed or rolled). */
   | { t: 'init'; who: string; total: number; rolled?: 1 }
   /** Something done on a turn (Dodge, Dash, an opportunity attack…), from the turn helper. */
-  | { t: 'act'; who: string; what: string; cost: 'action' | 'bonus' | 'reaction' | 'free'; note?: string };
+  | { t: 'act'; who: string; what: string; cost: 'action' | 'bonus' | 'reaction' | 'free'; note?: string }
+  /** An area spell placed on the battle map, and who's inside (the DM applies it from here). */
+  | { t: 'area'; spell: string; scene: string; shape: AreaShape; names: string[]; hit: import('../play/ui').AreaHit }
+  /**
+   * A player's hit (or healing) on someone they can't change themselves: the DM (or, for healing,
+   * the character's player) applies it from here, after seeing it. `ids`: tokens on `scene`;
+   * `ents`: the characters among them (healing can be applied without the map).
+   */
+  | { t: 'hit'; kind: 'damage' | 'heal'; title: string; by: string; scene?: string; ids: string[]; names: string[]; ents?: string[]; total: number; dmg?: string; ty?: string };
+
+/** Where an area is on the battle map (squares): the template kind, its two points, a line's width. */
+export interface AreaShape {
+  k: 'circle' | 'cone' | 'beam' | 'cube';
+  a: { x: number; y: number };
+  b: { x: number; y: number };
+  w?: number;
+}
 
 export function parseEvent(text: string): TableEvent | undefined {
   try {

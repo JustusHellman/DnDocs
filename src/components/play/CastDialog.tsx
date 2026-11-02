@@ -15,6 +15,8 @@ import { useSpellRule } from '../../lib/play/useSpellRule';
 import { patchPlay, tableLive } from '../../lib/play/live';
 import { canPlaceArea, placeCastArea } from '../../lib/play/ui';
 import { colorOf, useTableColors } from '../../lib/chat/colorStore';
+import { DamageTarget, HealSomeone } from './SpellTargets';
+import { critRule, CRIT_LABEL } from '../../lib/play/rules';
 
 type Via = { k: 'slot'; level: number } | { k: 'pact' } | { k: 'res'; key: string } | { k: 'ritual' } | { k: 'free' } | { k: 'cantrip' };
 const viaId = (v: Via) => (v.k === 'slot' ? `slot${v.level}` : v.k === 'res' ? `res:${v.key}` : v.k);
@@ -195,7 +197,7 @@ export default function CastDialog({ p, sp, level, onClose }: { p: PlayerApi; sp
               <RollField label="Spell attack" formula={`1d20${signed(d.attack ?? 0)}`} value={rolls['Spell attack'] ?? null} onChange={setRoll('Spell attack')} />
               {dmg && (
                 <label className="flex items-center gap-1.5 text-xs text-stone-400">
-                  <input type="checkbox" className="accent-amber-500" checked={crit} onChange={(e) => setCrit(e.target.checked)} /> Critical hit (damage dice twice)
+                  <input type="checkbox" className="accent-amber-500" checked={crit} onChange={(e) => setCrit(e.target.checked)} /> Critical hit ({CRIT_LABEL[critRule()].replace(/^critical:? ?!?/, '') || 'damage dice twice'})
                 </label>
               )}
             </div>
@@ -211,11 +213,21 @@ export default function CastDialog({ p, sp, level, onClose }: { p: PlayerApi; sp
             <div className="surface p-3">
               <RollField label={`Damage${sp.dm?.ty ? ` (${sp.dm.ty.toLowerCase()})` : ''}`} formula={dmg} crit={crit} value={rolls.Damage ?? null} onChange={setRoll('Damage')} />
               {sp.sh === 'half' && rolls.Damage && <p className="hint not-italic">Half on a save: {Math.floor(rolls.Damage.total / 2)}</p>}
+              {!sp.a && (
+                <div className="mt-2">
+                  <DamageTarget title={sp.n} by={p.entity.name} byEntity={p.entity.id} dmg={dmg} ty={sp.dm?.ty?.toLowerCase()} total={rolls.Damage?.total} save={sp.sv} dc={d.saveDC ?? undefined} half={sp.sh === 'half'} />
+                </div>
+              )}
             </div>
           )}
           {heal && (
             <div className="surface p-3">
               <RollField label="Healing" formula={heal} value={rolls.Healing ?? null} onChange={setRoll('Healing')} />
+              {!sp.a && (
+                <div className="mt-2">
+                  <HealSomeone title={sp.n} by={p.entity.name} selfId={p.entity.id} amount={rolls.Healing?.total ?? null} />
+                </div>
+              )}
             </div>
           )}
           {!dmg && !heal && !sp.at && !sp.sv && <p className="text-sm text-stone-400">Nothing to roll. The card is in the chat for everyone.</p>}
@@ -230,7 +242,13 @@ export default function CastDialog({ p, sp, level, onClose }: { p: PlayerApi; sp
                   type="button"
                   className="btn btn-secondary btn-sm"
                   onClick={() => {
-                    placeCastArea({ spell: sp.n, area: sp.a!, fromEntity: fromSelf(sp) ? p.entity.id : undefined, color: colorOf(colors, p.owner) });
+                    placeCastArea({
+                      spell: sp.n,
+                      area: sp.a!,
+                      fromEntity: fromSelf(sp) ? p.entity.id : undefined,
+                      color: colorOf(colors, p.owner),
+                      hit: { by: p.entity.name, dmg: dmg ?? undefined, ty: sp.dm?.ty?.toLowerCase(), total: rolls.Damage?.total, save: sp.sv, dc: d.saveDC ?? undefined, half: sp.sh === 'half' },
+                    });
                     done();
                   }}
                 >

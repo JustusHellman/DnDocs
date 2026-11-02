@@ -73,10 +73,14 @@ export function addModifier(f: Formula | null, by: number): Formula {
   return { dice: f?.dice.map((d) => ({ ...d })) ?? [], mod: (f?.mod ?? 0) + by };
 }
 
+/** How a critical hit's damage goes (a table rule): the dice twice, one set maxed plus a roll, or the dice's total doubled. */
+export type CritRule = 'double-dice' | 'max-plus-roll' | 'double-total';
+
 export interface RollOptions {
   advantage?: boolean;
   disadvantage?: boolean;
-  crit?: boolean;
+  /** A critical hit: true is the rules' "roll the dice twice"; or the table's own rule. */
+  crit?: boolean | CritRule;
 }
 
 export interface RolledTerm extends DiceTerm {
@@ -113,8 +117,9 @@ export function rollFormula(f: Formula, opts: RollOptions = {}, rand: () => numb
   // Both at once cancel out (5e).
   const adv = !!opts.advantage && !opts.disadvantage;
   const dis = !!opts.disadvantage && !opts.advantage;
+  const crit: CritRule | null = opts.crit === true ? 'double-dice' : opts.crit || null;
   const terms: RolledTerm[] = f.dice.map((d) => {
-    const count = opts.crit ? d.count * 2 : d.count;
+    const count = crit === 'double-dice' ? d.count * 2 : d.count;
     if (d.sides === 20 && (adv || dis)) {
       const rolls: number[] = [];
       const dropped: number[] = [];
@@ -129,17 +134,20 @@ export function rollFormula(f: Formula, opts: RollOptions = {}, rand: () => numb
     }
     return { ...d, count, rolls: Array.from({ length: count }, () => rollDie(d.sides, rand)) };
   });
-  const total = terms.reduce((sum, t) => sum + t.sign * t.rolls.reduce((a, b) => a + b, 0), 0) + f.mod;
+  const diceTotal = terms.reduce((sum, t) => sum + t.sign * t.rolls.reduce((a, b) => a + b, 0), 0);
+  // The other critical rules add to the modifier: the dice's maximum, or what they showed again.
+  const critBonus = crit === 'max-plus-roll' ? terms.reduce((sum, t) => sum + t.sign * t.count * t.sides, 0) : crit === 'double-total' ? diceTotal : 0;
+  const total = diceTotal + f.mod + critBonus;
   const d20s = terms.filter((t) => t.sides === 20);
   const natural = d20s.length === 1 && d20s[0].rolls.length === 1 ? d20s[0].rolls[0] : undefined;
   return {
     formula: formatFormula(f),
     terms,
-    mod: f.mod,
+    mod: f.mod + critBonus,
     total,
     natural,
     ...(adv ? { advantage: true } : {}),
     ...(dis ? { disadvantage: true } : {}),
-    ...(opts.crit ? { crit: true } : {}),
+    ...(crit ? { crit: true } : {}),
   };
 }

@@ -29,7 +29,7 @@ import { baseType, fieldLabel, fieldsFor, HP_KEYS, permissionKeys, QUEST_STATUS_
 import { fieldState, planFieldToggle } from '../../lib/sharing';
 import { applySharingUpdate, deleteEntity } from '../../lib/entityService';
 import RevealButton from './RevealButton';
-import { isPlayerOf, visibilityOf } from '../../lib/permissions';
+import { isPlayerOf } from '../../lib/permissions';
 import { excerpt, timeAgo } from '../../lib/text';
 import type { Entity } from '../../types';
 import { Avatar, EmptyState, Spinner, TypeBadge, TypeIcon, VisibilityBadge } from '../ui/bits';

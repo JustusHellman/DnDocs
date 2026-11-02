@@ -168,7 +168,6 @@ export default function Home() {
             <h2 className="section-title mb-3">Browse</h2>
             <div className="grid grid-cols-2 gap-2 @lg:grid-cols-3 @4xl:grid-cols-4">
               {ENTITY_TYPES.filter((t) => counts[t.value]).map((t) => {
-                const Icon = t.icon;
                 return (
                   <Link key={t.value} to={`/entities/${t.value}`} className="card flex items-center gap-3 p-3 transition hover:border-amber-500/40">
                     <TypeTile type={t.value} size="sm" />

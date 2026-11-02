@@ -1,6 +1,7 @@
 import { useAuth } from '../../contexts/AuthContext';
 import { isTurnOf, useCombatContext } from './turnStore';
 import { spellRule } from './turn';
+import { spellsPerTurnOf } from './rules';
 import type { PlayerApi } from './usePlayer';
 
 /**
@@ -12,6 +13,6 @@ export function useSpellRule(p: PlayerApi | null | undefined): (sp: { l: number;
   const { currentCampaign } = useAuth();
   if (!p || !isTurnOf(p.key)) return () => null;
   const bits = p.live.sp ?? 0;
-  const mode = currentCampaign?.houseRules?.spellsPerTurn ?? 'rules';
+  const mode = spellsPerTurnOf(currentCampaign);
   return (sp) => spellRule(sp, bits, p.edition, mode);
 }

@@ -4,6 +4,7 @@ import { History, Menu, Plus, Search, Swords, X } from 'lucide-react';
 import { GiBookmarklet, GiOpenBook, GiTreasureMap } from 'react-icons/gi';
 import clsx from 'clsx';
 import { useAuth } from '../../contexts/AuthContext';
+import { setCurrentRules } from '../../lib/play/rules';
 import CodexInbox from '../codex/CodexInbox';
 import { ChatButton } from '../chat/ChatDock';
 import { QuickBookButton } from '../play/QuickBook';
@@ -23,13 +24,10 @@ import { DragProvider } from './drag';
 import { ActiveScenesProvider, useActiveBattles } from '../../contexts/ActiveScenesContext';
 import { JukeboxProvider } from '../../contexts/JukeboxContext';
 import { JukeboxBanner, JukeboxButton } from '../jukebox/JukeboxControls';
+import { readDevice, writeDevice } from '../../lib/device';
 
 function readCompact() {
-  try {
-    return localStorage.getItem('sidebar:compact') === '1';
-  } catch {
-    return false;
-  }
+  return readDevice('sidebar:compact') === '1';
 }
 
 /** Opens entities the DM pushed on the players' screens. */
@@ -113,11 +111,30 @@ function NewButton({ compact }: { compact?: boolean }) {
 }
 
 /** "Join battle" for everyone while the DM has a battle map switched on. */
-function BattleBanner() {
+export function BattleBanner() {
   const battles = useActiveBattles();
   const location = useLocation();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [dismissed, setDismissed] = useState<string[]>([]);
+  // It's your turn (in a fight on another page): that comes first, and comes back every turn.
+  const mine = battles.find((b) => b.combat?.active && user && b.combat.turnBy?.includes(user.uid) && location.pathname !== `/battle/${b.id}`);
+  const turnKey = mine ? `${mine.id}:${mine.combat!.round}:${mine.combat!.turn}` : '';
+  if (mine && !dismissed.includes(turnKey))
+    return (
+      <div className="flex shrink-0 items-center gap-2 border-b border-amber-500/60 bg-amber-500/30 px-3 py-1.5 text-sm text-amber-50 sm:px-4" role="status">
+        <Swords size={16} className="shrink-0 text-amber-300" />
+        <span className="min-w-0 flex-1 truncate">
+          <strong>Your turn{mine.combat!.turnName ? `: ${mine.combat!.turnName}` : ''}</strong> · round {mine.combat!.round} at {mine.name}
+        </span>
+        <button type="button" className="btn btn-primary btn-sm" onClick={() => navigate(`/battle/${mine.id}`)}>
+          To the map
+        </button>
+        <button type="button" className="btn-icon-sm" aria-label="Hide" onClick={() => setDismissed((d) => [...d, turnKey])}>
+          <X size={15} />
+        </button>
+      </div>
+    );
   const battle = battles.find((b) => !dismissed.includes(b.id) && location.pathname !== `/battle/${b.id}`);
   if (!battle) return null;
   return (
@@ -209,6 +226,8 @@ export default function AppShell() {
   const location = useLocation();
   const mainRef = useRef<HTMLElement>(null);
   const { pageHidden, setPageHidden } = usePeek();
+  // The table's rules for rolls made outside any campaign screen (critical hits from the chat…).
+  setCurrentRules(currentCampaign ?? null);
 
   // Scroll to top on navigation (the main column is the scroll container).
   useEffect(() => {
@@ -233,11 +252,7 @@ export default function AppShell() {
 
   const toggleCompact = () =>
     setCompact((c) => {
-      try {
-        localStorage.setItem('sidebar:compact', c ? '0' : '1');
-      } catch {
-        /* ignore */
-      }
+      writeDevice('sidebar:compact', c ? '0' : '1');
       return !c;
     });
 

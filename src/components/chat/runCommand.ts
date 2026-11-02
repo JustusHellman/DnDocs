@@ -12,6 +12,7 @@ import type { PlayerApi } from '../../lib/play/usePlayer';
 import { openPlay, readySpells } from '../../lib/play/ui';
 import { loadSrdSpells } from '../../lib/play/spells';
 import { tableLive } from '../../lib/play/live';
+import { attack } from '../../lib/play/attacks';
 
 export interface CommandEnv {
   p: PlayerApi | null;
@@ -125,6 +126,16 @@ export async function runCommand(cmd: Command, env: CommandEnv): Promise<void> {
       if (!sp) return note(`No spell called “${cmd.spell}”. Your spells are under Spells on the character bar.`);
       if (cmd.level !== undefined && cmd.level < sp.l) return note(`${sp.n} is ${ordinal(sp.l)} level: it can’t be cast with a ${ordinal(cmd.level)}-level slot.`);
       openPlay({ kind: 'cast', entityId: p.entity.id, spellId: sp.i, level: cmd.level });
+      return;
+    }
+    case 'attack': {
+      const list = p.def.attacks ?? [];
+      if (!list.length) return note(`${p.entity.name} has no attacks set up yet: add them under the gear (set up) on the tracker.`);
+      const a = cmd.what ? findByName(cmd.what, list, (x) => x.name) : list.length === 1 ? list[0] : null;
+      if (!a) return note(cmd.what ? `No attack called “${cmd.what}”. There’s: ${list.map((x) => x.name).join(', ')}.` : `Which one? ${list.map((x) => `/attack ${x.name.toLowerCase()}`).join(' · ')}`);
+      // The same attack as from the turn list: at the target picked on the map, if any.
+      const warn = await attack(p, a, { adv: cmd.adv, dis: cmd.dis });
+      if (warn) note(warn);
       return;
     }
     case 'use':

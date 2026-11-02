@@ -12,6 +12,7 @@ import { setPlayDef, updateCharacterHp } from '../entityService';
 import { applyHp, hpToAttributes, readHp, writeDeathSaves } from '../hitPoints';
 import { patchPlay, setPlay, useTableLive } from './live';
 import { concentrationDC, derive, hitDiceLeft, hitDieLeft, longRest, ordinal, pactLeft, playKey, resourceLeft, shortRest, slotsLeft, type Derived, type Edition, type PlayDef, type PlayLive, type Resource } from './model';
+import { editionOf } from './rules';
 
 export interface PlayerApi {
   entity: Entity;
@@ -58,7 +59,7 @@ export function usePlayer(entity: Entity | null | undefined): PlayerApi | null {
   const { currentCampaign, user, isDM } = useAuth();
   const toast = useToast();
   const table = useTableLive();
-  const edition: Edition = currentCampaign?.houseRules?.edition === '2024' ? '2024' : '2014';
+  const edition: Edition = editionOf(currentCampaign);
   const def = readDef(entity);
   const d = useMemo(
     () => derive({ classLevel: entity?.attributes?.classLevel, stats: entity?.dndStats ?? undefined, def, edition }),
@@ -183,4 +184,10 @@ export async function partyRest(cid: string, dmId: string, characters: Entity[],
     }
   }
   await tableChat.event({ t: 'rest', who: 'The party', kind, party: 1, ...(kind === 'short' ? { hd: 'spend hit dice with Short rest on your tracker' } : { hp: 'HP, slots and resources back' }) });
+}
+
+/** "Free ×2 · Star Map" when one of the character's counters casts this spell without a slot. */
+export function freeLabel(p: PlayerApi, id: string) {
+  const r = p.d.resources.find((x) => x.spell === id);
+  return r ? `Free ×${resourceLeft(r, p.live)} · ${r.name.split(':')[0]}` : null;
 }

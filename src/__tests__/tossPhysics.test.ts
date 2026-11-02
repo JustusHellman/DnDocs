@@ -57,3 +57,13 @@ describe('dice collisions', () => {
     }
   });
 });
+
+describe('where the dice settle', () => {
+  it('finds the widest free stretch beside dialogs and the chat', async () => {
+    const { freeSpan } = await import('../lib/chat/tossPhysics');
+    expect(freeSpan(1400, [])).toEqual({ x0: 0, x1: 1400 });
+    expect(freeSpan(1400, [{ left: 400, right: 1000 }])).toEqual({ x0: 0, x1: 400 });
+    expect(freeSpan(1400, [{ left: 300, right: 900 }, { left: 1000, right: 1400 }])).toEqual({ x0: 0, x1: 300 });
+    expect(freeSpan(1400, [{ left: 100, right: 700 }, { left: 1000, right: 1400 }])).toEqual({ x0: 700, x1: 1000 });
+  });
+});

@@ -94,7 +94,7 @@ describe('stat blocks', () => {
     expect(options[1]).toMatchObject({ name: 'Bite', hit: 6, dmg: [{ f: '1d10 + 4', ty: 'piercing' }, { f: '1d6', ty: 'fire' }] });
   });
   it('is empty without a stat block', () => {
-    expect(statBlockOptions(null)).toEqual({ options: [], legendary: [] });
+    expect(statBlockOptions(null)).toEqual({ options: [], legendary: [], legendaryPer: 0 });
   });
 });
 

@@ -2,19 +2,21 @@
  * Opening the play dialogs (cast, rest, spells, tracker setup) from anywhere: the chat's
  * commands, the token card, the character page. One host (in the chat) shows them.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { Derived, Edition, PlayDef } from './model';
 import { loadSrdSpells, type Spell } from './spells';
 import { useTableLive } from './live';
+import { emit } from './tableEvents';
 
 export type PlayOpen =
   | { kind: 'cast'; entityId: string; spellId?: string; level?: number }
   | { kind: 'spells'; entityId: string; tab?: 'ready' | 'choose' | 'write' }
   | { kind: 'rest'; entityId: string; rest: 'short' | 'long' }
-  | { kind: 'settings'; entityId: string };
+  | { kind: 'settings'; entityId: string }
+  | { kind: 'levelup'; entityId: string };
 
 export function openPlay(o: PlayOpen) {
-  window.dispatchEvent(new CustomEvent<PlayOpen>('dndocs:play', { detail: o }));
+  emit('play', o);
 }
 
 /** Place a spell's area on the open battle map (the map listens; nothing happens without one). */
@@ -26,25 +28,50 @@ export interface CastArea {
   /** …or the token picked on the map (a creature the DM casts for). */
   fromSelected?: boolean;
   color?: string;
+  /** What it does to those caught (so the DM can apply it to every creature inside in one go). */
+  hit?: AreaHit;
+}
+/** An area spell's effect on the creatures inside. */
+export interface AreaHit {
+  /** Who cast it. */
+  by: string;
+  /** Damage dice ("8d6") and type, and the total if it was already rolled. */
+  dmg?: string;
+  ty?: string;
+  total?: number;
+  /** The save: ability, DC, and whether a success halves it (or does nothing). */
+  save?: string;
+  dc?: number;
+  half?: boolean;
 }
 let mapsListening = 0;
+const mapSubs = new Set<() => void>();
+const mapChanged = () => mapSubs.forEach((f) => f());
 /** The battle map says it can place areas (while it's open). */
 export const mapListens = () => {
   mapsListening++;
+  mapChanged();
   return () => {
     mapsListening--;
+    mapChanged();
   };
 };
+/** Whether a battle map is on screen (the chat then opens on the map's free side). */
+export const useMapOpen = () =>
+  useSyncExternalStore(
+    (f) => (mapSubs.add(f), () => void mapSubs.delete(f)),
+    () => mapsListening > 0,
+  );
 export const canPlaceArea = () => mapsListening > 0;
 /** The DM casts a spell for a creature (no slots: the numbers are typed in). */
-export const openCreatureCast = (spellId: string) => window.dispatchEvent(new CustomEvent<{ spellId: string }>('dndocs:npccast', { detail: { spellId } }));
+export const openCreatureCast = (spellId: string) => emit('npccast', { spellId });
 /** The token picked on the battle map, while one is (for a creature's spell). */
 let picked: { id: string; name: string } | null = null;
 export const setPickedToken = (t: { id: string; name: string } | null) => {
   picked = t;
 };
 export const pickedToken = () => picked;
-export const placeCastArea = (a: CastArea) => window.dispatchEvent(new CustomEvent<CastArea>('dndocs:cast-area', { detail: a }));
+export const placeCastArea = (a: CastArea) => emit('cast-area', a);
 
 /** All spells for the campaign's rules, plus its own cards, by id. Loads the SRD on first use. */
 export function useSpellIndex(edition: Edition, enabled = true) {

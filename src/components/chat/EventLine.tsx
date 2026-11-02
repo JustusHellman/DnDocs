@@ -1,19 +1,26 @@
 import { useState } from 'react';
 import clsx from 'clsx';
-import { Brain, Calculator, ChevronDown, ChevronUp, Coffee, Footprints, Heart, Moon, Sparkles, Swords, Undo2, Wand2, Zap } from 'lucide-react';
+import { Brain, Calculator, ChevronDown, ChevronUp, Coffee, Flame, Footprints, Heart, Moon, Sparkles, Swords, Undo2, Wand2, Zap } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import type { ChatMessage } from '../../lib/chat/service';
 import type { TableEvent } from '../../lib/chat/events';
 import { tableChat } from '../../lib/chat/bus';
 import { patchPlay, tableLive, useTableLive } from '../../lib/play/live';
-import { useSpellIndex } from '../../lib/play/ui';
+import { canPlaceArea, useSpellIndex } from '../../lib/play/ui';
+import { requestHit } from '../../lib/battle/aimStore';
+import { emit } from '../../lib/play/tableEvents';
+import { healCharacter } from '../../lib/battle/applyDamage';
+import { applyHp, readHp } from '../../lib/hitPoints';
+import { useConfirm } from '../../contexts/ConfirmContext';
+import { useCampaignData } from '../../contexts/CampaignDataContext';
 import { LEVEL_TONE } from '../../lib/play/spells';
 import { tint } from '../../lib/chat/colors';
 import SpellCard from '../play/SpellCard';
 import SpellGlyph from '../play/SpellGlyph';
 import { spellTone, useColoring } from '../../lib/play/coloring';
 import RollField, { type RollOutcome } from '../play/RollField';
+import { editionOf } from '../../lib/play/rules';
 
 const time = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 const signed = (n: number) => (n >= 0 ? `+${n}` : `${n}`);
@@ -145,6 +152,29 @@ export default function EventLine({ m, ev, color, mine }: { m: ChatMessage; ev: 
           )}
         </>,
       );
+    case 'area':
+      return line(
+        <Flame size={13} />,
+        <>
+          <Who n={ev.hit.by} />’s <b className="text-stone-100">{ev.spell}</b> catches {ev.names.join(', ')}
+          <span className="text-stone-500">
+            {ev.hit.save ? ` · DC ${ev.hit.dc ?? '?'} ${ev.hit.save.toUpperCase()} save${ev.hit.half ? ' (half)' : ''}` : ''}
+            {ev.hit.total !== undefined ? ` · ${ev.hit.total} ${ev.hit.ty ?? ''}` : ev.hit.dmg ? ` · ${ev.hit.dmg} ${ev.hit.ty ?? ''}` : ''}
+          </span>
+        </>,
+        isDM ? (
+          <button
+            type="button"
+            className="flex shrink-0 items-center gap-0.5 rounded bg-amber-500/15 px-1.5 text-[11px] font-semibold text-amber-300 hover:bg-amber-500/25"
+            title="Saves and damage for everyone inside (on the battle map)"
+            onClick={() => emit('area-apply', { spell: ev.spell, scene: ev.scene, shape: ev.shape, hit: ev.hit })}
+          >
+            Apply
+          </button>
+        ) : null,
+      );
+    case 'hit':
+      return <HitLine ev={ev} line={line} Who={Who} />;
     case 'init':
       return line(
         <Swords size={13} />,
@@ -159,7 +189,7 @@ export default function EventLine({ m, ev, color, mine }: { m: ChatMessage; ev: 
 function CastLine({ m, ev, color }: { m: ChatMessage; ev: Extract<TableEvent, { t: 'cast' }>; color: string }) {
   const [open, setOpen] = useState(false);
   const { currentCampaign } = useAuth();
-  const edition = currentCampaign?.houseRules?.edition === '2024' ? '2024' : '2014';
+  const edition = editionOf(currentCampaign);
   const index = useSpellIndex(edition);
   const full = index.byId.get(ev.id);
   const sp = open ? full : undefined;
@@ -236,5 +266,72 @@ function ConcCheck({ m, ev, color }: { m: ChatMessage; ev: Extract<TableEvent, {
         </div>
       )}
     </div>
+  );
+}
+
+/** A player's hit or healing for the DM (or the healed character's player) to apply, after seeing it. */
+function HitLine({
+  ev,
+  line,
+  Who,
+}: {
+  ev: Extract<TableEvent, { t: 'hit' }>;
+  line: (icon: React.ReactNode, body: React.ReactNode, extra?: React.ReactNode) => React.ReactElement;
+  Who: (p: { n: string }) => React.ReactElement;
+}) {
+  const { isDM } = useAuth();
+  const toast = useToast();
+  const confirm = useConfirm();
+  const { entities, canEdit } = useCampaignData();
+  const [done, setDone] = useState(false);
+  const heal = ev.kind === 'heal';
+  const mineToHeal = heal ? entities.filter((e) => ev.ents?.includes(e.id) && (isDM || canEdit(e))) : [];
+  const may = isDM || mineToHeal.length > 0;
+  const apply = async () => {
+    // On the battle map: its dialog (hit points before → after, the amount can still change).
+    if (ev.scene && canPlaceArea()) {
+      requestHit({ title: ev.title, by: ev.by, kind: ev.kind, tokenIds: ev.ids, dmg: ev.dmg, ty: ev.ty, total: ev.total, fromChat: true });
+      setDone(true);
+      return;
+    }
+    if (!heal) return toast.show('Open the battle map to apply it (the monsters’ hit points are there).');
+    const list = mineToHeal;
+    const lines = list.map((e) => {
+      const hp = readHp(e.attributes, e.dndStats?.hitPoints);
+      return `${e.name}: ${hp.current ?? '?'} → ${applyHp(hp, 'heal', ev.total).current ?? '?'} HP`;
+    });
+    const ok = await confirm({ title: `${ev.title}: heal ${ev.total}?`, message: lines.join('\n'), confirmLabel: 'Heal' });
+    if (!ok) return;
+    try {
+      const undos = await Promise.all(list.map((e) => healCharacter(e, ev.total)));
+      setDone(true);
+      toast.show(`${ev.title}: +${ev.total} HP — done`, { action: { label: 'Undo', onClick: () => void Promise.all(undos.map((u) => u.undo())).then(() => setDone(false)) }, duration: 8000 });
+    } catch (err) {
+      toast.error(err, ev.title);
+    }
+  };
+  return line(
+    heal ? <Heart size={13} /> : <Swords size={13} />,
+    <>
+      <Who n={ev.by} />’s <b className="text-stone-100">{ev.title}</b>:{' '}
+      <b className={heal ? 'text-emerald-300' : 'text-amber-300'}>
+        {heal ? '+' : ''}
+        {ev.total}
+        {heal ? ' HP' : ev.ty ? ` ${ev.ty}` : ''}
+      </b>{' '}
+      for {ev.names.join(', ')}
+      <span className="text-stone-500"> (to apply)</span>
+    </>,
+    may ? (
+      <button
+        type="button"
+        disabled={done}
+        className="flex shrink-0 items-center gap-0.5 rounded bg-amber-500/15 px-1.5 text-[11px] font-semibold text-amber-300 hover:bg-amber-500/25 disabled:opacity-50"
+        title={heal ? 'See the hit points before → after, then heal' : 'See the hit points before → after, then apply (on the battle map)'}
+        onClick={apply}
+      >
+        {done ? 'Done' : 'Apply…'}
+      </button>
+    ) : null,
   );
 }

@@ -88,3 +88,15 @@ export function squaresIn(poly: Pt[]): Pt[] {
     }
   return out;
 }
+
+/** The tokens with any of their squares inside an area (a creature is caught if any part of its space is). */
+export function tokensInArea<T extends { x: number; y: number; size: number }>(kind: TemplateKind, a: Pt, b: Pt, width: number | undefined, tokens: T[]): T[] {
+  const caught = new Set(squaresIn(templatePolygon(kind, a, b, width ?? 1)).map((p) => `${p.x},${p.y}`));
+  return tokens.filter((t) => {
+    const n = Math.max(1, Math.round(t.size));
+    const x0 = Math.floor(t.x + 1e-6);
+    const y0 = Math.floor(t.y + 1e-6);
+    for (let y = y0; y < y0 + n; y++) for (let x = x0; x < x0 + n; x++) if (caught.has(`${x},${y}`)) return true;
+    return false;
+  });
+}

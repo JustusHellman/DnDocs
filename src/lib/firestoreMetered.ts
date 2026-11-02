@@ -3,7 +3,7 @@
  * Everything is the real SDK; writes and server reads are also reported to lib/dbMeter.ts so the
  * DM can see what uses the free plan's daily quota. Nothing else changes.
  */
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 import * as fs from '@firebase/firestore';
 import { recordRead, recordWrite } from './dbMeter';
 

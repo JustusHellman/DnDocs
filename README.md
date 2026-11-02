@@ -194,15 +194,78 @@ Icons: [game-icons.net](https://game-icons.net) by Lorc, Delapouite and contribu
     turn), Hide, opportunity attacks, class features with their uses (Second Wind, Rage, Action Surge,
     Flurry of Blows…), and your own counters that say what they take. Monsters get the actions,
     bonus actions, reactions and legendary actions of their stat block, with attacks rolled in one
-    tap (the first attack takes the action; the rest are Multiattack). Moving a token on its turn
-    counts against its speed. Everything comes back at the start of the creature's turn, and when the
+    tap (the first attack takes the action; the rest are Multiattack). Movement is marked by hand on the dots (+ and −); dragging a token never counts by itself, so
+    fixing where one stands doesn't use anything up. Everything comes back at the start of the creature's turn, and when the
     fight ends. Stunned and the like grey everything out; Grappled and the like make the speed 0.
     The spells-per-turn rule greys out what it rules out, in the list and the spellbook panel (2014:
     a turn with a bonus-action spell can only add a cantrip that takes an action, in either order;
     2024: one spell slot a turn; or, under Members, the house rule "one levelled spell a turn", or off) — a warning, not a lock, for Quickened Spell and the DM's say-so.
-    The list and the spellbook panel can be dragged by their header (double-click puts them back). Fold it to just
-    the dots, or to a small pill (remembered on each device). Classes: the free rules' features by
-    level and edition; subclasses, feats and items go in as your own counters.
+    Rarely used actions (Help, Search, Use an Object) fold under *More*; a monster's legendary actions
+    have a tab of their own. Fold the dots to a small pill (remembered on each device). Classes: the
+    free rules' features by level and edition; subclasses, feats and items go in as your own counters.
+  - **The battle map's layout**: the map stays the main thing. On the right, one column: the
+    initiative on top and under it one side panel with two tabs, *what the acting creature can do*
+    (the list above) and *the picked token's card* (hit points, conditions, aura…). Picking a token
+    shows its card, or its options when it's its turn; the turn dots stay at the bottom middle and are
+    the one place for action, bonus action, reaction and movement. The chat and the spellbook panel
+    open on the left on the map (they can still be dragged). On phones the initiative sits under the
+    toolbar (one row that scrolls), the side panel is a sheet at the bottom, and zooming is by pinch.
+    The encounter difficulty shows while setting up a fight, not during it. Dice still fly over
+    everything, but settle beside an open dialog when there's room, so they don't cover what you type.
+  - **Targets are picked on purpose**: clicking a token only shows its card. To aim, press *Pick
+    target* in the turn list: a banner says "Click the token Brom targets · nothing else happens · Esc
+    to cancel", and the token gets crosshairs. The list then shows how far away it is (edge to edge,
+    by the map's diagonal rule) and its AC when you may know it (the DM always; a player only a
+    character's). Attacking out of reach asks first ("Goblin 1 is 25 ft away and Longsword reaches
+    5 ft. Attack anyway?"); beyond a ranged weapon's normal range it offers the roll with
+    disadvantage. The roll says hits / misses / critical hit. A new turn forgets the target.
+  - **Nothing hits anyone's hit points by itself**: after an attack at the target, the list offers
+    *Apply damage…* (*Apply anyway…* on a miss). It opens one dialog: the amount (type another number
+    or roll again), resistant / vulnerable / immune, and each creature's hit points before → after;
+    only *Apply* changes anything, and Undo puts it back. A spell's damage offers the same for the
+    target, healing spells have *Heal [who]* with before → after. A player's hit on a monster (or
+    healing for someone else's character) goes to the chat as "Lyra's Quarterstaff: 6 bludgeoning for
+    Goblin 1 (to apply)" with *Apply…* for the DM (or, for healing, that character's player), who
+    still sees the dialog and can change the number.
+  - **Anything automatic is said, with an Undo**: Hidden ending when the creature attacks, a timed
+    condition running out, a recharge rolled. The DM can switch off the automatic recharge roll and
+    the Hidden rule under Members (*What the app does by itself*); a recharging ability used anyway
+    asks first. Critical hits roll by the table's rule (Members → *Critical hits*): the dice twice
+    (default), one set at maximum plus a roll, or the dice's total doubled.
+  - **Attacks**: a character's weapons (and unarmed strikes, spell attacks…) go in under the gear
+    button → *Attacks*: pick a weapon to start from (Longsword, Rapier, Shortbow…), then the ability
+    (STR, DEX, the better of the two for finesse, or the spellcasting ability), magic bonus, proficient
+    or not, and whether it's an off-hand (bonus action) attack. The to-hit and damage follow the
+    character's stats, so they grow with it. Roll them from the turn helper (under *Attack*,
+    *Opportunity Attack* and the off-hand bonus action), the character page, the spellbook panel or
+    `/attack longsword [adv|dis]` in the chat: to hit, then damage, with the dice doubled on a 20. In a
+    fight the first attack takes the action, the next ones are part of it (Extra Attack counts: "Attack
+    1 of 2"), Action Surge gives a second round, and off your turn it's an opportunity attack (your
+    reaction).
+  - **Area damage**: a spell with damage placed on the map works out who is inside. On the DM's
+    screen a dialog opens with them listed: the damage (type it or roll it), the save DC, the monsters'
+    saves rolled from their stat blocks (*Saving Throws* if listed, else the ability), Saved/Failed
+    for the characters (their players roll), resistant / vulnerable / immune per creature, and one
+    *Apply* for all of it, with an Undo. Dropping to 0 knocks characters unconscious and ends
+    concentration; a concentrating survivor gets the Constitution save asked for in the chat. A
+    player's area goes to the chat as "Lyra's Fireball catches Goblin 1, Goblin 2" with an *Apply*
+    for the DM.
+  - **Monsters: recharge and legendary actions**: using a "Recharge 5–6" ability marks it used; at the
+    start of the monster's turn the DM's screen rolls the d6 and says in the chat whether it came back.
+    Legendary actions show dots for how many are left this round, know what each costs ("Costs 2
+    Actions") and come back on the monster's turn.
+  - **Concentration is one thing**: the "Concentrating" condition on a character's token and the
+    tracker's concentration go on and off together, from either side (an aura from the spell ends with
+    it).
+  - **Conditions explained**: click a condition on a token card (Poisoned, Prone, Restrained…) for what
+    it does, in short.
+  - **"Your turn"**: in a fight, a player on any other page gets a banner when it's their character's
+    turn, with *To the map* (hide it and it comes back next turn).
+  - **Level up** (button on the character's trackers): pick the class (or a new one to multiclass),
+    the hit points (average or roll the hit die, plus CON), and a list of what changes — proficiency
+    bonus, new spell slots and spell levels, more cantrips or prepared spells, new resources and turn
+    options, Extra Attack, Ability Score Improvements, the subclass level. Writes the new "Class &
+    Level", max and current HP.
   - **Esc** stops the ruler, drawing and other map tools (or tap *Done* on the pill at the bottom),
     cancels placing a spell's area, and closes the chat and the spellbook panel.
   - **Rests**: short rest spends hit dice (roll here or type it), long rest restores HP, slots,
@@ -217,7 +280,8 @@ Icons: [game-icons.net](https://game-icons.net) by Lorc, Delapouite and contribu
     an *Undo*.
   - Initiative can be typed in (rolled with real dice) or rolled in the chat.
   - Needs the current `database.rules.json` published (the trackers live next to the chat, so they
-    cost no Firestore reads or writes).
+    cost no Firestore reads or writes). **Publish it again after this update**: attacks made, recharges
+    and legendary actions are new fields the old rules refuse.
 - **Images** are stored as WebP (JPEG on browsers without WebP) at up to 1280 px, with a tiny preview
   on each entry so lists show pictures without loading the full images.
 
@@ -230,7 +294,10 @@ npm install
 npm run dev          # http://localhost:3000
 ```
 
-Other scripts: `npm run build`, `npm run preview`, `npm run lint` (type-check), `npm test` (unit tests).
+Other scripts: `npm run build`, `npm run preview`, `npm test` (unit tests), `npm run lint` (type-check
+and ESLint, with the React hooks rules), `npm run format` (Prettier, the project's style is in
+`.prettierrc.json`), `npm run test:rules` (security rules against the Firebase emulators, see
+`rules-tests/`), and `npm run e2e` (a play-through in a real browser, see `e2e/README.md`).
 
 ### Optional: Firebase emulators
 
@@ -336,4 +403,10 @@ src/
     jukebox/    music button, now playing, volume, environment picker
   lib/jukebox/  play order (shared shuffle + clock), audio engine with fades, library + DM changes
   pages/        routed pages
+  pages/battle/ the battle map's parts: the layer over the image, toolbar, side panel, hints, and
+                hooks for the ruler, undo, turn bookkeeping, attacks, damage dialogs, DM actions
+  lib/play/     the table: trackers, spells, turns, attacks, rules; tableEvents.ts is the one typed
+                list of events between the chat, the spellbook panel, the dialogs and the map
+e2e/            browser play-through: a harness with the database swapped for in-memory fakes
+rules-tests/    Firestore and Realtime Database rules tests (emulators)
 ```

@@ -16,6 +16,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'r', aliases: ['roll'], usage: '/r 1d20+5 [adv|dis] [label]', help: 'Roll dice (a bare 2d6+3 works too).' },
   { name: 'math', aliases: ['='], usage: '/math 12+7+3  or  = 12+7+3', help: 'Add things up (+ − × ÷ and brackets); shows half too.' },
   { name: 'cast', usage: '/cast fireball [level]  or  /cast 2', help: 'Cast one of your spells (opens its card), or just use a slot of that level.' },
+  { name: 'attack', aliases: ['a'], usage: '/attack longsword [adv|dis]', help: 'Attack with one of your weapons: to hit and damage (doubled dice on a 20).' },
   { name: 'use', usage: '/use rage [n]', help: 'Use a class resource or counter (Rage, Ki, Star Map…).' },
   { name: 'regain', usage: '/regain ki [n]', help: 'Get uses back (slot: /regain slot 2).' },
   { name: 'conc', usage: '/conc [spell] | /conc off', help: 'Start or stop concentrating.' },
@@ -32,6 +33,7 @@ export const COMMANDS: CommandSpec[] = [
 export type Command =
   | { c: 'math'; expr: string }
   | { c: 'cast'; spell?: string; level?: number }
+  | { c: 'attack'; what: string; adv?: boolean; dis?: boolean }
   | { c: 'use'; what: string; n: number }
   | { c: 'regain'; what: string; n: number }
   | { c: 'conc'; on: boolean; spell?: string }
@@ -69,6 +71,13 @@ export function parseCommand(text: string): Command | null {
       if (lv) return { c: 'cast', level: Number(lv[1]) };
       const at = rest.match(/^(.+?)\s+(?:at\s+)?(?:level\s*|lvl\s*)?(\d)(?:st|nd|rd|th)?(?:\s*level)?$/i);
       return at ? { c: 'cast', spell: at[1].trim(), level: Number(at[2]) } : { c: 'cast', spell: rest };
+    }
+    case 'attack':
+    case 'a': {
+      const adv = /\b(adv|advantage)\b/i.test(rest);
+      const dis = /\b(dis|disadvantage)\b/i.test(rest);
+      const what = rest.replace(/\b(adv|advantage|dis|disadvantage)\b/gi, '').trim();
+      return { c: 'attack', what, ...(adv ? { adv } : {}), ...(dis ? { dis } : {}) };
     }
     case 'use':
     case 'regain': {

@@ -201,10 +201,22 @@ export function stepBodies(bodies: Body[], radius: number, dt: number, vw: numbe
     const inX = b.x > radius && b.x < vw - radius;
     const inY = b.y > radius && b.y < vh - radius;
     if (inX || inY) {
-      if (b.x < radius && b.vx < 0) (b.x = radius), (b.vx *= -0.4);
-      if (b.x > vw - radius && b.vx > 0) (b.x = vw - radius), (b.vx *= -0.4);
-      if (b.y < radius && b.vy < 0) (b.y = radius), (b.vy *= -0.4);
-      if (b.y > vh - radius && b.vy > 0) (b.y = vh - radius), (b.vy *= -0.4);
+      if (b.x < radius && b.vx < 0) {
+        b.x = radius;
+        b.vx *= -0.4;
+      }
+      if (b.x > vw - radius && b.vx > 0) {
+        b.x = vw - radius;
+        b.vx *= -0.4;
+      }
+      if (b.y < radius && b.vy < 0) {
+        b.y = radius;
+        b.vy *= -0.4;
+      }
+      if (b.y > vh - radius && b.vy > 0) {
+        b.y = vh - radius;
+        b.vy *= -0.4;
+      }
     }
   }
   // Bumps: every pair (40 dice = 780 pairs, nothing for a computer).
@@ -251,9 +263,26 @@ export function stepBodies(bodies: Body[], radius: number, dt: number, vw: numbe
       b.vy *= MAX_SPEED / sp;
     }
     b.va = Math.max(-1600, Math.min(1600, b.va));
-    if (!b.asleep && sp < 6 && Math.abs(b.va) < 20) (b.asleep = true), (b.vx = 0), (b.vy = 0), (b.va = 0);
+    if (!b.asleep && sp < 6 && Math.abs(b.va) < 20) {
+      b.asleep = true;
+      b.vx = 0;
+      b.vy = 0;
+      b.va = 0;
+    }
   }
 }
 
 /** Total motion left (for tests: it must die down). */
 export const energy = (bodies: Body[]) => bodies.reduce((e, b) => e + b.vx * b.vx + b.vy * b.vy, 0);
+
+/** The widest stretch of the screen's width that none of `blocks` covers. */
+export function freeSpan(w: number, blocks: { left: number; right: number }[]): { x0: number; x1: number } {
+  const spans = blocks.map((b) => [Math.max(0, b.left), Math.min(w, b.right)] as const).filter(([a, b]) => b > a).sort((a, b) => a[0] - b[0]);
+  let best = { x0: 0, x1: 0 };
+  let x = 0;
+  for (const [a, b] of [...spans, [w, w] as const]) {
+    if (a - x > best.x1 - best.x0) best = { x0: x, x1: a };
+    x = Math.max(x, b);
+  }
+  return best;
+}

@@ -1,9 +1,10 @@
 import clsx from 'clsx';
-import { BookOpen, Brain, Coffee, Moon, Settings2, Sparkles, Zap } from 'lucide-react';
+import { ArrowUpCircle, BookOpen, Brain, Coffee, Moon, Settings2, Sparkles, Zap } from 'lucide-react';
 import type { PlayerApi } from '../../lib/play/usePlayer';
 import { className as classLabel, hitDiceLeft, hitDieLeft, pactLeft, resourceLeft, slotsLeft, ordinal, type Resource } from '../../lib/play/model';
 import { openPlay } from '../../lib/play/ui';
 import { LEVEL_TONE } from '../../lib/play/spells';
+import AttackList from './AttackList';
 
 const signed = (n: number) => (n >= 0 ? `+${n}` : `${n}`);
 
@@ -35,7 +36,8 @@ export function Pips({ max, left, onSet, tone = '#b08a3e', label, disabled, size
 }
 
 /** Concentration and reaction: one tap each (everyone sees them; only the owner and the DM change them). */
-export function TurnChips({ p }: { p: PlayerApi }) {
+/** Concentration and reaction (`noReaction`: the turn helper's dots already show the reaction). */
+export function TurnChips({ p, noReaction }: { p: PlayerApi; noReaction?: boolean }) {
   const { live } = p;
   return (
   <div className="flex flex-wrap items-center gap-1.5">
@@ -49,7 +51,7 @@ export function TurnChips({ p }: { p: PlayerApi }) {
     >
       <Brain size={13} /> {live.conc ? `Concentrating${live.cs ? ` · ${live.cs}` : ''}` : 'Concentration'}
     </button>
-    <button
+    {!noReaction && <button
       type="button"
       disabled={!p.canEdit}
       aria-pressed={!!live.re}
@@ -58,7 +60,7 @@ export function TurnChips({ p }: { p: PlayerApi }) {
       title={live.re ? 'Reaction used (comes back at the start of your turn)' : 'Reaction ready: tap when you use it'}
     >
       <Zap size={13} /> {live.re ? 'Reaction used' : 'Reaction ready'}
-    </button>
+    </button>}
   </div>
   );
 }
@@ -122,6 +124,11 @@ export default function PlayTracker({ p, compact, hideHeader }: { p: PlayerApi; 
             <Moon size={13} /> {compact ? 'Long' : 'Long rest'}
           </button>
           <span className="flex-1" />
+          {!compact && (
+            <button type="button" className="btn btn-ghost btn-sm" title="One more level: hit points, and everything that changes" onClick={() => openPlay({ kind: 'levelup', entityId: p.entity.id })}>
+              <ArrowUpCircle size={13} /> Level up
+            </button>
+          )}
           <button type="button" className="btn-icon-sm" aria-label="Set up trackers" title="Set up: classes, slots, resources, your own counters" onClick={() => openPlay({ kind: 'settings', entityId: p.entity.id })}>
             <Settings2 size={15} />
           </button>
@@ -170,6 +177,7 @@ export default function PlayTracker({ p, compact, hideHeader }: { p: PlayerApi; 
           <Pips max={d.pact.n} left={pactLeft(d, live)} onSet={(l) => p.setPactUsed(d.pact!.n - l)} label="pact slot" tone="#7c5cbf" disabled={!p.canEdit} size={compact ? 'sm' : 'md'} />
         </div>
       )}
+      {!compact && <AttackList p={p} hint />}
       {d.resources.length > 0 && (
         <div className="space-y-0.5">
           <div className="label mb-0.5">Resources</div>
