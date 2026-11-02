@@ -151,6 +151,24 @@
             "cs": {
               ".validate": "newData.isString() && newData.val().length <= 80"
             },
+            "ac": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9"
+            },
+            "ax": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9"
+            },
+            "ba": {
+              ".validate": "newData.val() === 1"
+            },
+            "mv": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9999"
+            },
+            "dx": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9"
+            },
+            "sp": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 15"
+            },
             "at": {
               ".validate": "newData.isNumber()"
             },

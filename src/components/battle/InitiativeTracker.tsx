@@ -9,6 +9,7 @@ import { rollD20 } from '../../lib/battle/table';
 import type { Entity, Scene, Token } from '../../types';
 import EncounterMeter from './EncounterMeter';
 import { patchPlay, tableLive } from '../../lib/play/live';
+import { TURN_RESET, turnFieldsUsed } from '../../lib/play/turn';
 import { colorOf, useTableColors } from '../../lib/chat/colorStore';
 import { setInitiativeContext, useSittingOut } from '../../lib/battle/initiativeStore';
 import { openTableChat } from '../chat/ChatDock';
@@ -27,6 +28,9 @@ interface Props {
   /** The token pointed at on the map: its row lights up. */
   highlightId?: string | null;
 }
+
+/** Conditions the turn helper puts on that end with the fight. */
+const FIGHT_ONLY = ['Dodging', 'Disengaged', 'Readied'];
 
 /** Phones: the tracker starts folded so it doesn't cover the map. */
 const narrow = () => typeof window !== 'undefined' && window.innerWidth < 640;
@@ -53,15 +57,26 @@ export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asD
     if (combat.active && !narrow()) setOpen(true);
   }, [combat.active]);
 
-  // A creature's reaction comes back at the start of its turn (the DM's screen does it, or the
-  // player's own for their character).
+  // A new turn: the creature's action, bonus action, reaction and movement come back (the DM's
+  // screen does it, or the player's own for their character).
   useEffect(() => {
     if (!combat.active || !turnToken || !(asDM || mine(turnToken))) return;
     const play = tableLive().play;
     const key = turnToken.entityId && play[`c_${turnToken.entityId}`] ? `c_${turnToken.entityId}` : `t_${turnToken.id}`;
     const live = play[key];
-    if (live?.re && live.uid) patchPlay(scene.campaignId, key, live.uid, live.name ?? turnToken.name, { re: null }).catch(() => undefined);
+    if (turnFieldsUsed(live) && live?.uid) patchPlay(scene.campaignId, key, live.uid, live.name ?? turnToken.name, TURN_RESET).catch(() => undefined);
   }, [combat.turn, combat.round]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Everyone on this map starts fresh (a fight starting or ending). */
+  const freshTurns = async () => {
+    const play = tableLive().play;
+    for (const t of tokens) {
+      for (const key of [t.entityId ? `c_${t.entityId}` : null, `t_${t.id}`]) {
+        const live = key ? play[key] : undefined;
+        if (key && turnFieldsUsed(live) && live?.uid) await patchPlay(scene.campaignId, key, live.uid, live.name ?? t.name, TURN_RESET).catch(() => undefined);
+      }
+    }
+  };
 
   // The DM's screen keeps the stored order in step with the rolls (players can't see hidden tokens).
   // Only the order field is written, so a turn a player just passed on is never overwritten.
@@ -138,6 +153,7 @@ export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asD
         all = tokens.map((t) => (t.id in rolls ? { ...t, initiative: rolls[t.id] } : t));
       }
       const o = initiativeOrder(all);
+      await freshTurns();
       await setCombat(scene.id, { active: true, round: 1, turn: o[0]?.id ?? null, order: o.map((t) => t.id) });
     }, 'Start combat');
 
@@ -163,18 +179,18 @@ export default function InitiativeTracker({ scene, tokens, tokensReady, uid, asD
 
   const end = async () => {
     // Right next to "Next turn": a slip shouldn't throw away the turn order.
-    if (!(await confirm({ title: 'End combat?', message: 'The turn order is cleared. Conditions stay on the tokens until removed.', confirmLabel: 'End combat' }))) return;
+    if (!(await confirm({ title: 'End combat?', message: 'The turn order is cleared. Conditions stay on the tokens until removed (Dodging, Disengaged and readied actions end with the fight).', confirmLabel: 'End combat' }))) return;
     await run(async () => {
       await setCombat(scene.id, { active: false, round: 0, turn: null, order: [] });
       // Round counts mean nothing outside combat: timed effects stay on, until removed by hand.
-      await Promise.all(tokens.filter((t) => t.timers && Object.keys(t.timers).length).map((t) => updateToken(scene.id, t.id, { timers: {} })));
-      // Reactions are a per-round thing: everyone on this map has theirs back when the fight ends.
-      const play = tableLive().play;
-      for (const t of tokens) {
-        const key = t.entityId && play[`c_${t.entityId}`] ? `c_${t.entityId}` : `t_${t.id}`;
-        const live = play[key];
-        if (live?.re && live.uid) await patchPlay(scene.campaignId, key, live.uid, live.name ?? t.name, { re: null }).catch(() => undefined);
-      }
+      // …and what only means something within a fight (Dodging, Disengaged, a readied action) goes.
+      await Promise.all(
+        tokens
+          .filter((t) => (t.timers && Object.keys(t.timers).length) || t.conditions.some((c) => FIGHT_ONLY.includes(c)))
+          .map((t) => updateToken(scene.id, t.id, { timers: {}, ...(t.conditions.some((c) => FIGHT_ONLY.includes(c)) ? { conditions: t.conditions.filter((c) => !FIGHT_ONLY.includes(c)) } : {}) })),
+      );
+      // Actions, reactions and movement are per turn: everyone on this map has theirs back.
+      await freshTurns();
     }, 'End combat');
   };
   // The DM's say on the order (ties the players talk out, or anything else): one place at a time.

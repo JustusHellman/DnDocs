@@ -94,6 +94,11 @@ import { INK_COLORS, spreadAround } from '../lib/battle/table';
 import { readHp } from '../lib/hitPoints';
 import { snapTemplate, templateLabel, type TemplateKind } from '../lib/battle/templates';
 import { mapListens, setPickedToken, type CastArea } from '../lib/play/ui';
+import { patchPlay, useTableLive } from '../lib/play/live';
+import { playKey } from '../lib/play/model';
+import { turnState } from '../lib/play/turn';
+import { setCombatContext } from '../lib/play/turnStore';
+import TurnHelper from '../components/battle/TurnHelper';
 import type { Drawing, Entity, FogMode, LiveMark, Scene, SceneGrid, SceneSecret, Token } from '../types';
 import { arrayRemove, deleteField } from 'firebase/firestore';
 
@@ -122,9 +127,10 @@ interface LayerProps {
   canMove: (t: Token) => boolean;
   canErase: (d: Drawing) => boolean;
   onSelect: (id: string | null) => void;
-  onMove: (id: string, x: number, y: number) => void;
+  onMove: (id: string, x: number, y: number, feet?: number) => void;
   onBlocked: (t: Token, x: number, y: number) => void;
   speedOf: (t: Token) => number | null;
+  movedOf: (t: Token) => number;
   onOpen: (t: Token) => void;
   onDoor: (i: number) => void;
   onErase: (d: Drawing) => void;
@@ -239,6 +245,7 @@ function BattleLayer(p: LayerProps) {
       onMove={p.onMove}
       onBlocked={p.onBlocked}
       speedOf={p.speedOf}
+      movedOf={p.movedOf}
       onOpen={p.onOpen}
       onDoor={p.onDoor}
       onErase={p.onErase}
@@ -321,8 +328,9 @@ interface ViewProps {
 }
 
 function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allTokens, tokensReady, drawings, marks, secret, preview, setPreview }: ViewProps) {
-  const { user, isDM } = useAuth();
+  const { user, isDM, currentCampaign } = useAuth();
   const { entityMap, canView, canViewField, canEdit, players, memberName } = useCampaignData();
+  const table = useTableLive();
   const { peek } = usePeek();
   const toast = useToast();
   const confirm = useConfirm();
@@ -565,6 +573,43 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
     const m = /(\d+)\s*ft/i.exec(e.dndStats?.speed ?? '');
     return m ? Number(m[1]) : null;
   };
+  // Turns in a fight: whose live state a token's is (a character's own, or the token's), what it
+  // has used, and how far it can still move.
+  const combat = scene.combat;
+  const fighting = !!combat?.active && !isDraft;
+  const dmId = currentCampaign?.dmId ?? uid;
+  const edition = currentCampaign?.houseRules?.edition === '2024' ? '2024' : '2014';
+  const keyOf = (t: Token) => {
+    const e = entityOf(t);
+    if (e?.type === 'character' || (t.entityId && table.play[playKey(t.entityId)])) return playKey(t.entityId);
+    return playKey(null, t.id);
+  };
+  const ownerOf = (t: Token) => {
+    const e = entityOf(t);
+    return e?.type === 'character' ? e.playerId || dmId : table.play[keyOf(t)]?.uid ?? dmId;
+  };
+  const onTurn = (t: Token) => fighting && combat?.turn === t.id;
+  const turnSpeed = (t: Token) => {
+    const base = speedOf(t);
+    return onTurn(t) ? turnState(table.play[keyOf(t)], { speed: base, conditions: t.conditions, edition }).speed : base;
+  };
+  const movedOf = (t: Token) => (onTurn(t) ? table.play[keyOf(t)]?.mv ?? 0 : 0);
+  /** A token moved on its own turn: the feet count against its movement (undo gives them back). */
+  const countMove = (t: Token, feet: number | undefined) => {
+    if (!feet || !onTurn(t) || !currentCampaign) return null;
+    const key = keyOf(t);
+    const live = table.play[key];
+    const was = live?.mv ?? 0;
+    const write = (mv: number) => patchPlay(currentCampaign.id, key, live?.uid ?? ownerOf(t), live?.name ?? t.name, { mv: mv || null }).catch(() => undefined);
+    write(was + feet);
+    return () => write(was);
+  };
+  const turnKey = fighting ? `${combat!.round}:${combat!.turn}:${allTokens.map((t) => `${t.id}=${keyOf(t)}`).join(',')}` : '';
+  useEffect(() => {
+    if (!fighting || !currentCampaign) return setCombatContext(null);
+    setCombatContext({ cid: currentCampaign.id, sceneId: scene.id, round: combat!.round, turn: combat!.turn, tokens: allTokens.map((t) => ({ id: t.id, key: keyOf(t), name: t.name, owner: ownerOf(t) })) });
+  }, [turnKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => setCombatContext(null), []);
   const thumbOf = (t: Token) => {
     const e = entityOf(t);
     // The entry's current picture when the viewer can see it, else the copy on the token
@@ -1220,8 +1265,38 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
     </div>
   );
 
+  // The turn helper follows: for a player, their token whose turn it is, or the one they picked,
+  // or their character; for the DM, the picked token or else whoever's turn it is.
+  const turnToken = fighting ? tokens.find((t) => t.id === combat!.turn) : undefined;
+  const mineTok = (t: Token | null | undefined): t is Token => !!t && t.controlledBy.includes(uid);
+  const helperFor: Token | null = !fighting
+    ? null
+    : asDM
+      ? selected ?? turnToken ?? null
+      : mineTok(turnToken)
+        ? turnToken
+        : mineTok(selected)
+          ? selected
+          : tokens.find((t) => mineTok(t) && entityOf(t)?.type === 'character' && t.initiative !== null && t.initiative !== undefined) ?? tokens.find((t) => mineTok(t) && t.initiative !== null && t.initiative !== undefined) ?? null;
+  const phone = typeof window !== 'undefined' && window.innerWidth < 640;
+  const showHelper = !!helperFor && tool === 'select' && !casting && !armed && !(phone && selected);
   const overlay = (
     <>
+      {showHelper && helperFor && (
+        <TurnHelper
+          scene={scene}
+          tokens={tokens}
+          subject={helperFor}
+          entity={entityOf(helperFor)}
+          liveKey={keyOf(helperFor)}
+          owner={ownerOf(helperFor)}
+          asDM={asDM}
+          speed={speedOf(helperFor)}
+          // The dots: bottom middle, beside the token card when one is open. The list: down the left side.
+          barClass={clsx('bottom-2 left-2 right-14 pb-safe', selected ? (cardRight ? 'sm:right-[24rem] sm:left-4' : 'sm:left-[22rem] sm:right-16') : 'sm:left-24 sm:right-24')}
+          panelClass={clsx('top-16 left-2 max-h-[calc(100%-9.5rem)] sm:top-20', selected && !cardRight && 'sm:left-[22rem]')}
+        />
+      )}
       {/* On phones this column starts below the toolbar. */}
       <div className="absolute top-14 right-2 flex flex-col items-end gap-2 sm:top-2 sm:pt-safe">
         {asDM && panelOpen ? (
@@ -1434,9 +1509,10 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
               canMove={canMove}
               canErase={canErase}
               onSelect={(id) => (setSelectedId(id), setDrawingId(null))}
-              onMove={(id, x, y) => {
+              onMove={(id, x, y, feet) => {
                 const t = allTokens.find((k) => k.id === id);
-                if (t) pushUndo(`Moving ${t.name}`, () => moveToken(scene.id, id, t.x, t.y));
+                const back = t ? countMove(t, feet) : null;
+                if (t) pushUndo(`Moving ${t.name}`, () => Promise.all([moveToken(scene.id, id, t.x, t.y), back?.()]));
                 moveToken(scene.id, id, x, y).catch((err) => toast.error(err, 'Move token'));
               }}
               onBlocked={async (t, x, y) => {
@@ -1450,7 +1526,8 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
                 pushUndo(`Moving ${t.name}`, () => moveToken(scene.id, t.id, t.x, t.y));
                 moveToken(scene.id, t.id, x, y).catch((err) => toast.error(err, 'Move token'));
               }}
-              speedOf={speedOf}
+              speedOf={turnSpeed}
+              movedOf={movedOf}
               onOpen={(t) => {
                 const e = entityOf(t);
                 if (e && canView(e)) openEntry(e);

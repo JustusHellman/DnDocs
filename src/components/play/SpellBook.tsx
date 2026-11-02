@@ -13,6 +13,7 @@ import { countChosen, markOf, openPlay, readySpells, useSpellIndex, withMark, ty
 import { deleteCustomSpell, saveCustomSpell } from '../../lib/play/live';
 import { cleanCustomSpell, LEVEL_TONE, SCHOOLS, type Spell } from '../../lib/play/spells';
 import { spellTone, useColoring } from '../../lib/play/coloring';
+import SpellGlyph from './SpellGlyph';
 
 type Tab = 'ready' | 'choose' | 'write';
 
@@ -187,6 +188,7 @@ function ReadyTab({ p, ready: all, names, onChoose }: { p: PlayerApi; ready: Spe
                   key={sp.i}
                   sp={sp}
                   mini={view === 'cards'}
+                  still
                   charLevel={p.d.level}
                   mod={p.d.ability ? p.d.mods[p.d.ability] : undefined}
                   edition={p.edition}
@@ -300,7 +302,7 @@ function ChooseTab({ p, all, byId, names, onEdit }: { p: PlayerApi; all: Spell[]
               <div className="flex flex-wrap items-center gap-2 px-2 py-1.5">
                 <button type="button" className="flex min-w-0 flex-1 basis-48 items-center gap-1.5 text-left" onClick={() => setOpen(open === sp.i ? null : sp.i)} aria-expanded={open === sp.i}>
                   {open === sp.i ? <ChevronDown size={14} className="shrink-0 text-stone-500" /> : <ChevronRight size={14} className="shrink-0 text-stone-500" />}
-                  <span className="size-2.5 shrink-0 rounded-full" style={{ background: spellTone(sp, coloring) }} />
+                  <SpellGlyph sp={sp} tone={spellTone(sp, coloring)} size={26} />
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-semibold text-stone-100">{sp.n}</span>
                     <span className="block truncate text-[11px] text-stone-500">

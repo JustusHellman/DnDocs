@@ -8,6 +8,7 @@ import { Brain, Clock, Crosshair, Hourglass, Ruler, Sparkles } from 'lucide-reac
 import { abilityName, areaLabel, dmgAt, healAt, type Spell } from '../../lib/play/spells';
 import { COLORINGS, legend, setColoring, spellTone, useColoring } from '../../lib/play/coloring';
 import { ordinal } from '../../lib/play/model';
+import SpellGlyph from './SpellGlyph';
 
 export const levelLine = (sp: Spell) => (sp.l === 0 ? `${sp.s} cantrip` : `${ordinal(sp.l)}-level ${sp.s.toLowerCase()}`);
 export const sourceLine = (sp: Spell, edition: string, names?: Record<string, string>) =>
@@ -57,6 +58,8 @@ export default function SpellCard({
   selected,
   actions,
   mod,
+  still,
+  cast,
 }: {
   sp: Spell;
   mini?: boolean;
@@ -70,6 +73,10 @@ export default function SpellCard({
   actions?: React.ReactNode;
   /** The caster's spellcasting modifier ("heals 1d8 + 4" instead of "+ mod"). */
   mod?: number;
+  /** Keep the picture still (many full cards at once). */
+  still?: boolean;
+  /** Changes when the spell is cast: the picture pops. */
+  cast?: number;
 }) {
   const tone = spellTone(sp, useColoring());
   const dmg = dmgAt(sp, sp.l || 1, charLevel);
@@ -88,9 +95,12 @@ export default function SpellCard({
       )}
       style={{ borderColor: tone }}
     >
-      <div className="px-2.5 py-1.5 text-white" style={{ background: tone }}>
-        <div className={clsx('font-display leading-tight font-semibold', mini ? 'text-sm' : 'text-lg')}>{sp.n}</div>
-        <div className="text-[10px] tracking-wide uppercase opacity-90">{levelLine(sp)}</div>
+      <div className={clsx('flex items-center text-white', mini ? 'gap-1.5 px-2 py-1.5' : 'gap-2.5 px-2.5 py-2')} style={{ background: tone }}>
+        <SpellGlyph sp={sp} tone={tone} size={mini ? 30 : 46} live={!mini && !still} cast={cast} className="drop-shadow-[0_1px_2px_rgba(0,0,0,.45)]" />
+        <div className="min-w-0">
+          <div className={clsx('font-display leading-tight font-semibold', mini ? 'text-sm' : 'text-lg')}>{sp.n}</div>
+          <div className="text-[10px] tracking-wide uppercase opacity-90">{levelLine(sp)}</div>
+        </div>
       </div>
       <div className={clsx('flex flex-1 flex-col gap-1.5 px-2.5 py-2', mini ? 'text-[11px]' : 'text-sm')}>
         <div className={clsx('grid gap-x-2 gap-y-0.5 text-stone-300', mini ? 'grid-cols-1' : 'grid-cols-2')}>

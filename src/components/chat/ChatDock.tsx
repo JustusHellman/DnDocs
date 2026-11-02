@@ -14,6 +14,8 @@ import { partyRest, usePlayer } from '../../lib/play/usePlayer';
 import EventLine from './EventLine';
 import { useActingCharacter } from '../play/useActingCharacter';
 import { readySpells, useSpellIndex } from '../../lib/play/ui';
+import SpellGlyph from '../play/SpellGlyph';
+import { useDragPosition } from '../../hooks/useDragPosition';
 import { LEVEL_TONE } from '../../lib/play/spells';
 import { ordinal } from '../../lib/play/model';
 import { runCommand } from './runCommand';
@@ -62,64 +64,6 @@ const posKey = 'dndocs-chat-pos';
 const PANEL_W = 416; // 26rem at the default font size; measured for real when dragging
 const sameRoll = (a: ChatRoll | undefined, b: ChatRoll | null) => !!a && !!b && JSON.stringify(a) === JSON.stringify(b);
 
-/** Where the floating chat sits (top-left corner, px), remembered between visits. null: the default top-right spot. */
-function useChatPosition(panel: React.RefObject<HTMLDivElement | null>) {
-  const [pos, setPos] = useState<{ x: number; y: number } | null>(() => {
-    try {
-      const p = JSON.parse(read(posKey) || 'null') as { x: number; y: number } | null;
-      return p && Number.isFinite(p.x) && Number.isFinite(p.y) ? p : null;
-    } catch {
-      return null;
-    }
-  });
-  const clamp = useCallback(
-    (p: { x: number; y: number }) => {
-      const el = panel.current;
-      const w = el?.offsetWidth ?? PANEL_W;
-      const h = el?.offsetHeight ?? 400;
-      return { x: Math.max(4, Math.min(window.innerWidth - w - 4, p.x)), y: Math.max(4, Math.min(window.innerHeight - h - 4, p.y)) };
-    },
-    [panel],
-  );
-  // Keep it on screen when the window shrinks.
-  useEffect(() => {
-    if (!pos) return;
-    const on = () => setPos((p) => (p ? clamp(p) : p));
-    window.addEventListener('resize', on);
-    return () => window.removeEventListener('resize', on);
-  }, [pos, clamp]);
-  const startDrag = (e: React.PointerEvent) => {
-    if (e.button !== 0 || (e.target as HTMLElement).closest('button')) return;
-    const el = panel.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const dx = e.clientX - r.left;
-    const dy = e.clientY - r.top;
-    let last = { x: r.left, y: r.top };
-    const move = (ev: PointerEvent) => {
-      last = clamp({ x: ev.clientX - dx, y: ev.clientY - dy });
-      setPos(last);
-    };
-    const up = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      write(posKey, JSON.stringify(last));
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-    e.preventDefault();
-  };
-  const reset = () => {
-    setPos(null);
-    try {
-      localStorage.removeItem(posKey);
-    } catch {
-      /* ignore */
-    }
-  };
-  return { pos, startDrag, reset };
-}
-
 /** How long others' rolls keep their number hidden: about when the roller's dice settle. */
 const ROLL_SPIN_MS = 1600;
 const time = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -153,7 +97,7 @@ export function ChatButton() {
   const popped = useRef(new Set<string>());
   const panel = useRef<HTMLDivElement>(null);
   const phone = useIsPhone();
-  const { pos, startDrag, reset } = useChatPosition(panel);
+  const { pos, startDrag, reset } = useDragPosition(posKey, panel, PANEL_W);
   const cid = currentCampaign?.id;
   const uid = user?.uid;
   const [showDmRolls, setShowDmRolls] = useState(false);
@@ -339,7 +283,7 @@ export function ChatButton() {
 
   // The autocomplete under the message box: commands, then your spells for /cast, your resources
   // for /use and /regain, and people for /w.
-  type Hint = { key: string; main: string; detail: string; tone?: string; pick: () => void; command?: { name: string; usage: string } };
+  type Hint = { key: string; main: string; detail: string; tone?: string; spell?: boolean; pick: () => void; command?: { name: string; usage: string } };
   const castQ = text.match(/^\/cast\s+(.*)$/i)?.[1];
   const spellIndex = useSpellIndex(actingP?.edition ?? '2014', castQ !== undefined && !!actingP);
   const hints = useMemo<Hint[]>(() => {
@@ -352,7 +296,7 @@ export function ChatButton() {
         .filter((sp) => !q(castQ) || sp.n.toLowerCase().startsWith(q(castQ)) || sp.n.toLowerCase().split(/[\s/-]+/).some((w) => w.startsWith(q(castQ))))
         .sort((a, b) => Number(b.n.toLowerCase().startsWith(q(castQ))) - Number(a.n.toLowerCase().startsWith(q(castQ))))
         .slice(0, 8)
-        .map((sp) => ({ key: sp.i, main: sp.n, detail: sp.l === 0 ? 'cantrip' : `${ordinal(sp.l)} level`, tone: LEVEL_TONE[sp.l], pick: () => send(`/cast ${sp.n}`) }));
+        .map((sp) => ({ key: sp.i, main: sp.n, detail: sp.l === 0 ? 'cantrip' : `${ordinal(sp.l)} level`, tone: LEVEL_TONE[sp.l], spell: true, pick: () => send(`/cast ${sp.n}`) }));
     }
     const res = text.match(/^\/(use|regain)\s+(.*)$/i);
     if (res && actingP) {
@@ -498,7 +442,7 @@ export function ChatButton() {
                       <span className="shrink-0 font-mono text-xs text-amber-300">{h.main}</span>
                     ) : (
                       <span className="flex shrink-0 items-center gap-1.5 text-sm font-semibold text-stone-100">
-                        {h.tone && <span className="size-2 rounded-full" style={{ background: h.tone }} />}
+                        {h.spell && h.tone ? <SpellGlyph sp={{ i: h.key }} tone={h.tone} size={22} /> : h.tone && <span className="size-2 rounded-full" style={{ background: h.tone }} />}
                         {h.main}
                       </span>
                     )}

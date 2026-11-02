@@ -25,7 +25,9 @@ export type TableEvent =
   /** An action line: "/me ducks behind the cart". */
   | { t: 'me'; text: string }
   /** Initiative entered (typed or rolled). */
-  | { t: 'init'; who: string; total: number; rolled?: 1 };
+  | { t: 'init'; who: string; total: number; rolled?: 1 }
+  /** Something done on a turn (Dodge, Dash, an opportunity attack…), from the turn helper. */
+  | { t: 'act'; who: string; what: string; cost: 'action' | 'bonus' | 'reaction' | 'free'; note?: string };
 
 export function parseEvent(text: string): TableEvent | undefined {
   try {

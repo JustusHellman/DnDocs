@@ -175,10 +175,34 @@ Icons: [game-icons.net](https://game-icons.net) by Lorc, Delapouite and contribu
     legend. Spells from other books have no text in the app: anyone at the table can write what one
     does in their own words (*Write what it does* on its card), shared with the whole campaign. Anyone
     can improve it later (the card says who edited it last).
+  - **Spell pictures**: every spell (all 532, the other books' too) has its own small picture in one
+    shared style, on a disc in the card's colour. They sit still in lists and come alive for a few
+    seconds when a card opens or the spell is cast (not for people whose device asks for less
+    motion). The pictures are SVG drawn in code (`src/lib/play/glyphMotifs.ts`: about 100 shared motifs plus pictures of their own for the ~45 spells cast most often);
+    which spell gets which is in `scripts/spell-glyphs.txt`, built into `src/data/spell-glyphs.json`
+    by `scripts/build-spell-glyphs.py`. Campaign cards get one from their damage, healing or school.
   - **The DM's spellbook**: the same button opens any character's spells, or *All spells (the
     library)* with search, level and class filters. *Cast for a creature* takes the save DC and attack
     from the stat block, rolls (or not), can tell the table or stay quiet, and places the area from
     the token picked on the map.
+  - **The turn helper** (battle map, in a fight): three dots for the action, bonus action and
+    reaction, and the movement left, for your character (or, for the DM, the picked token or whoever's
+    turn it is). Tap a dot when something used it up that the app doesn't know about ("action
+    taken"). *What can I do?* opens the cheat-sheet: every option by what it costs, where it comes
+    from ("Rogue 2 · Cunning Action") and a tap to do it — cast (the spells sorted by casting time),
+    Dash (doubles the movement), Dodge / Disengage / Ready (a tag on the token that ends at the right
+    turn), Hide, opportunity attacks, class features with their uses (Second Wind, Rage, Action Surge,
+    Flurry of Blows…), and your own counters that say what they take. Monsters get the actions,
+    bonus actions, reactions and legendary actions of their stat block, with attacks rolled in one
+    tap (the first attack takes the action; the rest are Multiattack). Moving a token on its turn
+    counts against its speed. Everything comes back at the start of the creature's turn, and when the
+    fight ends. Stunned and the like grey everything out; Grappled and the like make the speed 0.
+    The spells-per-turn rule greys out what it rules out, in the list and the spellbook panel (2014:
+    a turn with a bonus-action spell can only add a cantrip that takes an action, in either order;
+    2024: one spell slot a turn; or, under Members, the house rule "one levelled spell a turn", or off) — a warning, not a lock, for Quickened Spell and the DM's say-so.
+    The list and the spellbook panel can be dragged by their header (double-click puts them back). Fold it to just
+    the dots, or to a small pill (remembered on each device). Classes: the free rules' features by
+    level and edition; subclasses, feats and items go in as your own counters.
   - **Esc** stops the ruler, drawing and other map tools (or tap *Done* on the pill at the bottom),
     cancels placing a spell's area, and closes the chat and the spellbook panel.
   - **Rests**: short rest spends hit dice (roll here or type it), long rest restores HP, slots,

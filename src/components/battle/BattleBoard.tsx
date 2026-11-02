@@ -64,11 +64,14 @@ interface Props {
   /** Whether the viewer can see a point through the fog (players; always true for the DM). */
   seen: (p: Pt) => boolean;
   onSelect: (id: string | null) => void;
-  onMove: (id: string, x: number, y: number) => void;
+  /** `feet`: how far it walked (not given for a jump through walls the DM allowed). */
+  onMove: (id: string, x: number, y: number, feet?: number) => void;
   /** A player dropped a token where walls or closed doors leave no walking path (they may still move it). */
   onBlocked?: (t: Token, x: number, y: number) => void;
   /** Walking speed in feet, when known: shown next to the distance (never enforced). */
   speedOf?: (t: Token) => number | null;
+  /** Feet it has already moved this turn (on its turn in a fight; else 0). */
+  movedOf?: (t: Token) => number;
   onOpen: (t: Token) => void;
   onDoor: (index: number) => void;
   onErase: (d: Drawing) => void;
@@ -297,7 +300,7 @@ export default function BattleBoard(props: Props) {
       if (c.x !== t.x || c.y !== t.y) {
         // Players walk; the DM can put anything anywhere.
         if (!asDM && dragWalk?.blocked && props.onBlocked) props.onBlocked(t, c.x, c.y);
-        else props.onMove(t.id, c.x, c.y);
+        else props.onMove(t.id, c.x, c.y, dragWalk && !dragWalk.blocked ? dragWalk.feet : undefined);
       }
     } else if (!held) tapToken(t);
     setDrag(null);
@@ -314,6 +317,7 @@ export default function BattleBoard(props: Props) {
     const down = t.health === 'down' || (hp !== null && hp.cur <= 0);
     const clip = `${id}-c-${t.id}`;
     const speed = drag?.id === t.id ? props.speedOf?.(t) ?? null : null;
+    const before = drag?.id === t.id ? props.movedOf?.(t) ?? 0 : 0;
     return (
       <g
         key={t.id}
@@ -423,9 +427,10 @@ export default function BattleBoard(props: Props) {
           // How far it walks (around walls and closed doors when the map has them).
           <text x={r} y={-px(8)} textAnchor="middle" fontSize={px(16)} fontWeight={700} fill={dragWalk.blocked ? '#ff6b6b' : '#f2b632'} style={haloStyle(px(4))}>
             {dragWalk.blocked ? 'no walking path' : `${dragWalk.feet} ft${dragWalk.detour ? ' walking' : ''}`}
-            {!dragWalk.blocked && speed && (
-              // Just information: the DM decides (dash, pushed, a shortcut…).
-              <tspan fill={dragWalk.feet > speed ? '#ffa94d' : '#c9c2b0'} fontWeight={500}>{` / ${speed}`}</tspan>
+            {!dragWalk.blocked && speed !== null && (
+              // Just information: the DM decides (dash, pushed, a shortcut…). On its turn, counting
+              // what it already moved.
+              <tspan fill={before + dragWalk.feet > speed ? '#ffa94d' : '#c9c2b0'} fontWeight={500}>{before ? ` · ${before + dragWalk.feet} of ${speed}` : ` / ${speed}`}</tspan>
             )}
           </text>
         )}

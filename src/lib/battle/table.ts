@@ -20,7 +20,7 @@ export const CONDITIONS = [
 ] as const;
 
 /** Common spell effects and states, offered alongside the conditions (anything can be typed). */
-export const EFFECTS = ['Bless', 'Bane', 'Blur', 'Dodging', 'Faerie Fire', 'Haste', 'Hex', 'Hidden', "Hunter's Mark", 'Mirror Image', 'Rage', 'Shield of Faith', 'Slow', 'Flying'];
+export const EFFECTS = ['Bless', 'Bane', 'Blur', 'Disengaged', 'Dodging', 'Faerie Fire', 'Haste', 'Hex', 'Hidden', "Hunter's Mark", 'Mirror Image', 'Rage', 'Readied', 'Shield of Faith', 'Slow', 'Flying'];
 
 /** Token rings and drawing inks that read on parchment and on dark maps alike. */
 export const TOKEN_COLORS = ['#b8862b', '#8e2020', '#2d6a43', '#2e5b72', '#5b3a7d', '#9a5518', '#3c3a3c', '#c9c2b0'];

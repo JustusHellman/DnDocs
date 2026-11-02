@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import clsx from 'clsx';
-import { Brain, Calculator, ChevronDown, ChevronUp, Coffee, Heart, Moon, Sparkles, Swords, Undo2, Wand2 } from 'lucide-react';
+import { Brain, Calculator, ChevronDown, ChevronUp, Coffee, Footprints, Heart, Moon, Sparkles, Swords, Undo2, Wand2, Zap } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import type { ChatMessage } from '../../lib/chat/service';
@@ -11,6 +11,8 @@ import { useSpellIndex } from '../../lib/play/ui';
 import { LEVEL_TONE } from '../../lib/play/spells';
 import { tint } from '../../lib/chat/colors';
 import SpellCard from '../play/SpellCard';
+import SpellGlyph from '../play/SpellGlyph';
+import { spellTone, useColoring } from '../../lib/play/coloring';
 import RollField, { type RollOutcome } from '../play/RollField';
 
 const time = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -130,6 +132,19 @@ export default function EventLine({ m, ev, color, mine }: { m: ChatMessage; ev: 
           <Who n={m.name} /> {ev.text}
         </div>
       );
+    case 'act':
+      return line(
+        ev.cost === 'reaction' ? <Zap size={13} /> : <Footprints size={13} />,
+        <>
+          <Who n={ev.who} /> {ev.what}
+          {(ev.cost === 'bonus' || ev.cost === 'reaction' || ev.note) && (
+            <span className="text-stone-500">
+              {' '}
+              ({[ev.cost === 'bonus' ? 'bonus action' : ev.cost === 'reaction' ? 'reaction' : '', ev.note].filter(Boolean).join(' · ')})
+            </span>
+          )}
+        </>,
+      );
     case 'init':
       return line(
         <Swords size={13} />,
@@ -146,21 +161,23 @@ function CastLine({ m, ev, color }: { m: ChatMessage; ev: Extract<TableEvent, { 
   const { currentCampaign } = useAuth();
   const edition = currentCampaign?.houseRules?.edition === '2024' ? '2024' : '2014';
   const index = useSpellIndex(edition);
-  const sp = open ? index.byId.get(ev.id) : undefined;
-  const tone = LEVEL_TONE[ev.lvl] ?? LEVEL_TONE[0];
+  const full = index.byId.get(ev.id);
+  const sp = open ? full : undefined;
+  const coloring = useColoring();
+  const tone = full ? spellTone(full, coloring) : (LEVEL_TONE[ev.lvl] ?? LEVEL_TONE[0]);
+  const [fresh] = useState(() => Date.now() - m.at < 15_000);
   return (
     <div className="overflow-hidden rounded-lg border border-l-[3px] border-stone-700/70 bg-stone-900/80" style={{ borderLeftColor: color }}>
       <button type="button" className="flex w-full items-start gap-2 px-2.5 py-1.5 text-left" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-        <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md text-white" style={{ background: tone }}>
-          <Wand2 size={15} />
-        </span>
+        {/* Moves (and pops) when it has only just been cast. */}
+        <SpellGlyph sp={full ?? { i: ev.id }} tone={tone} size={30} cast={fresh ? m.at : undefined} className="mt-0.5" />
         <span className="min-w-0 flex-1">
           <span className="block text-sm text-stone-200">
             <b style={{ color }}>{ev.who}</b> casts <b className="text-stone-50">{ev.spell}</b>
             {ev.conc && <Brain size={12} className="ml-1 inline text-sky-300" aria-label="concentration" />}
           </span>
           <span className="block text-[11px] text-stone-400">
-            {/level slot$/.test(ev.via) ? '' : `${ev.via} · `}
+            {/level slot$|^cantrip$/.test(ev.via) ? '' : `${ev.via} · `}
             {ev.sum}
           </span>
         </span>

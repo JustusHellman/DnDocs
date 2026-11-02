@@ -55,6 +55,8 @@ export interface Counter {
   spell?: string;
   /** Uses follow the proficiency bonus or an ability modifier (at least 1) instead of `max`. */
   per?: 'pb' | Ability;
+  /** Using it takes an action, a bonus action or a reaction (it then shows in the turn helper). */
+  cost?: 'action' | 'bonus' | 'reaction' | 'free';
 }
 
 /** The setup, stored on the character (attributes.play). Everything is optional: missing = worked out. */
@@ -94,6 +96,19 @@ export interface PlayLive {
   re?: 1;
   /** The spell being concentrated on. */
   cs?: string;
+  // This turn (cleared at the start of the creature's turn and when combat ends):
+  /** Actions taken. */
+  ac?: number;
+  /** Extra actions (Action Surge). */
+  ax?: number;
+  /** Bonus action taken. */
+  ba?: 1;
+  /** Feet moved. */
+  mv?: number;
+  /** Dashes (each adds the speed again). */
+  dx?: number;
+  /** Spells cast this turn (for the spell-per-turn rules): 1 = with a slot, 2 = as a bonus action, 4 = not an action cantrip, 8 = levelled. */
+  sp?: number;
 }
 
 export interface Resource {

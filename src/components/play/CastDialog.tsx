@@ -2,13 +2,17 @@ import { useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { Brain, Crosshair, Undo2, Wand2 } from 'lucide-react';
 import { Modal } from '../ui/Modal';
+import SpellGlyph from './SpellGlyph';
 import SpellCard from './SpellCard';
 import RollField, { type RollOutcome } from './RollField';
 import { tableChat } from '../../lib/chat/bus';
 import type { PlayerApi } from '../../lib/play/usePlayer';
 import { ordinal, pactLeft, resourceLeft, slotsLeft } from '../../lib/play/model';
 import { abilityName, castSummary, dmgAt, fromSelf, healAt, type Spell } from '../../lib/play/spells';
-import { spellTone, useColoring } from '../../lib/play/coloring';
+import { castTime, spellTone, useColoring } from '../../lib/play/coloring';
+import { markCost } from '../../lib/play/turnStore';
+import { useSpellRule } from '../../lib/play/useSpellRule';
+import { patchPlay, tableLive } from '../../lib/play/live';
 import { canPlaceArea, placeCastArea } from '../../lib/play/ui';
 import { colorOf, useTableColors } from '../../lib/chat/colorStore';
 
@@ -25,6 +29,7 @@ const signed = (n: number) => (n >= 0 ? `+${n}` : `${n}`);
 export default function CastDialog({ p, sp, level, onClose }: { p: PlayerApi; sp: Spell; level?: number; onClose: () => void }) {
   const { d, live } = p;
   const colors = useTableColors();
+  const ruleOf = useSpellRule(p);
   const options = useMemo(() => {
     const out: { via: Via; label: string; left: number | null; slot: number }[] = [];
     if (sp.l === 0) return [{ via: { k: 'cantrip' } as Via, label: 'Cantrip (no slot)', left: null, slot: 0 }];
@@ -42,12 +47,16 @@ export default function CastDialog({ p, sp, level, onClose }: { p: PlayerApi; sp
   const [busy, setBusy] = useState(false);
   const [msgId, setMsgId] = useState<string | null>(null);
   const [prevConc, setPrevConc] = useState<{ on: boolean; cs?: string } | null>(null);
+  // The turn's marks before the cast (in a fight): Undo puts them back.
+  const [prevTurn, setPrevTurn] = useState<Record<string, unknown> | null>(null);
   const [rolls, setRolls] = useState<Record<string, RollOutcome | null>>({});
   const [crit, setCrit] = useState(false);
   const chosen = options.find((o) => viaId(o.via) === pick) ?? first;
   const slot = Math.max(sp.l, chosen.slot);
   const mod = d.ability ? d.mods[d.ability] : 0;
   const who = p.entity.name.split(' ')[0];
+  // The spells-per-turn rule, in a fight on your turn (computed before this cast marks anything).
+  const [ruleNote] = useState(() => ruleOf(sp));
 
   const spend = async (v: Via) => {
     if (v.k === 'slot') return p.spendSlot(v.level, 'quiet');
@@ -79,6 +88,13 @@ export default function CastDialog({ p, sp, level, onClose }: { p: PlayerApi; sp
       const dc = sp.sv && d.saveDC !== null ? ` · DC ${d.saveDC}` : '';
       const id = await tableChat.event({ t: 'cast', who, key: p.key, spell: sp.n, id: sp.i, lvl: sp.l, slot, via, sum: castSummary(sp, slot) + dc, ...(sp.k ? { conc: 1 as const } : {}) });
       setMsgId(id);
+      // In a fight: the action, bonus action or reaction it took.
+      const ct = castTime(sp);
+      if (ct !== 'longer' && chosen.via.k !== 'ritual') {
+        const before = tableLive().play[p.key] ?? {};
+        setPrevTurn({ ac: before.ac ?? null, ba: before.ba ?? null, re: before.re ?? null, sp: before.sp ?? null });
+        await markCost(p.key, ct, { spell: { slot: sp.l > 0 && (chosen.via.k === 'slot' || chosen.via.k === 'pact'), cantrip: sp.l === 0 } }).catch(() => undefined);
+      }
       setPhase('cast');
     } finally {
       setBusy(false);
@@ -89,6 +105,7 @@ export default function CastDialog({ p, sp, level, onClose }: { p: PlayerApi; sp
     try {
       await refund(chosen.via);
       if (prevConc) await p.setConc(prevConc.on, prevConc.cs, true);
+      if (prevTurn) await patchPlay(p.entity.campaignId, p.key, p.live.uid ?? p.owner, p.entity.name, prevTurn).catch(() => undefined);
       if (msgId) await tableChat.remove(msgId);
       onClose();
     } finally {
@@ -116,7 +133,7 @@ export default function CastDialog({ p, sp, level, onClose }: { p: PlayerApi; sp
       size="lg"
       title={
         <span className="flex items-center gap-2">
-          <Wand2 size={18} style={{ color: tone }} /> {phase === 'choose' ? `Cast ${sp.n}` : `${sp.n} is cast`}
+          <SpellGlyph sp={sp} tone={tone} size={32} live cast={phase === 'cast' ? 1 : undefined} /> {phase === 'choose' ? `Cast ${sp.n}` : `${sp.n} is cast`}
         </span>
       }
       description={phase === 'choose' ? `${p.entity.name}${d.saveDC !== null ? ` · spell DC ${d.saveDC} · attack ${signed(d.attack ?? 0)}` : ''}` : castSummary(sp, slot)}
@@ -144,7 +161,7 @@ export default function CastDialog({ p, sp, level, onClose }: { p: PlayerApi; sp
     >
       {phase === 'choose' ? (
         <div className="grid gap-4 sm:grid-cols-2">
-          <SpellCard sp={sp} charLevel={d.level} edition={p.edition} mod={mod} />
+          <SpellCard sp={sp} charLevel={d.level} edition={p.edition} mod={mod} still />
           <div className="space-y-2">
             <div className="label">Cast using</div>
             {options.map((o) => {
@@ -158,6 +175,11 @@ export default function CastDialog({ p, sp, level, onClose }: { p: PlayerApi; sp
                 </label>
               );
             })}
+            {ruleNote && (
+              <p className="flex items-start gap-1.5 rounded-md bg-amber-500/10 p-2 text-xs text-amber-200">
+                <Wand2 size={14} className="mt-0.5 shrink-0" /> {ruleNote} You can still cast it if the DM agrees (Quickened Spell and the like).
+              </p>
+            )}
             {sp.k && live.conc && (
               <p className="flex items-start gap-1.5 rounded-md bg-sky-500/10 p-2 text-xs text-sky-200">
                 <Brain size={14} className="mt-0.5 shrink-0" /> You’re concentrating{live.cs ? ` on ${live.cs}` : ''}: casting this ends it.

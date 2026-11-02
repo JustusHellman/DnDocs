@@ -27,7 +27,8 @@ const SCHOOL_TONE: Record<string, string> = {
 const TIME_TONE = { action: '#8b2a1c', bonus: '#c46a12', reaction: '#6d3fa0', longer: '#2f6e8e' };
 const EFFECT_TONE = { damage: '#8b2a1c', healing: '#2f9e44', control: '#6d3fa0', other: '#7a6447' };
 
-export const castTime = (sp: Spell): keyof typeof TIME_TONE => (/reaction/i.test(sp.t) ? 'reaction' : /bonus/i.test(sp.t) ? 'bonus' : /^1 action/i.test(sp.t) ? 'action' : 'longer');
+export const castTime = (sp: Spell): keyof typeof TIME_TONE => (/reaction/i.test(sp.t) ? 'reaction' : /bonus/i.test(sp.t) ? 'bonus' : /^(1 )?action/i.test(sp.t) ? 'action' : 'longer');
+// (2014 says "1 action", 2024 just "Action".)
 export const effectOf = (sp: Spell): keyof typeof EFFECT_TONE => (sp.dm ? 'damage' : sp.he ? 'healing' : sp.sv || sp.at ? 'control' : 'other');
 
 /** The colour of a spell's card in the chosen scheme. */

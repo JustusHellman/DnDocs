@@ -248,6 +248,24 @@ export default function Members() {
               ]}
             />
           </div>
+          <div className="mt-4 flex flex-wrap items-start gap-3 border-t border-stone-800 pt-4">
+            <div className="min-w-0 flex-1 basis-56">
+              <div className="text-stone-100">Spells a turn</div>
+              <p className="text-xs text-stone-500">
+                What the turn helper warns about (it never stops a cast). As written: 2014, a bonus-action spell leaves room only for a cantrip that takes an action; 2024, one spell slot a turn. One levelled: the common house rule, any number of cantrips but one levelled spell a turn.
+              </p>
+            </div>
+            <Segmented
+              size="sm"
+              value={currentCampaign?.houseRules?.spellsPerTurn ?? 'rules'}
+              onChange={(spellsPerTurn) => currentCampaign && setHouseRules(currentCampaign.id, { ...(currentCampaign.houseRules ?? {}), spellsPerTurn }).catch((err) => toast.error(err, 'Table rules'))}
+              options={[
+                { value: 'rules', label: 'As written' },
+                { value: 'one-levelled', label: 'One levelled' },
+                { value: 'off', label: 'Off' },
+              ]}
+            />
+          </div>
           <PartyRest />
           <div className="mt-4 border-t border-stone-800 pt-4">
             <div className="text-xs text-stone-500">Join code</div>

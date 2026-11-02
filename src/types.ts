@@ -29,6 +29,11 @@ export interface HouseRules {
   massiveDamage?: boolean;
   /** Which rules the trackers follow (rests, concentration, class tables, SRD spells). Default 2014. */
   edition?: '2014' | '2024';
+  /**
+   * The spells-a-turn warnings: as written for the edition (default), the common house rule "one
+   * levelled spell a turn, cantrips are free", or none.
+   */
+  spellsPerTurn?: 'rules' | 'one-levelled' | 'off';
 }
 
 export type BuiltinType =

@@ -227,6 +227,14 @@ export default function TrackerSettings({ p, onClose }: { p: PlayerApi; onClose:
                       <option value="long">long rest</option>
                       <option value="none">never (refill by hand)</option>
                     </select>
+                    · using it takes
+                    <select className="input w-auto py-1 text-sm" value={c.cost ?? ''} onChange={(e) => setCounter(i, { cost: (e.target.value || undefined) as Counter['cost'] })} aria-label="What using it takes" title="It then shows in the turn helper on the battle map">
+                      <option value="">(nothing to track)</option>
+                      <option value="action">an action</option>
+                      <option value="bonus">a bonus action</option>
+                      <option value="reaction">a reaction</option>
+                      <option value="free">nothing (free)</option>
+                    </select>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 text-xs text-stone-400">
                     Casts the spell

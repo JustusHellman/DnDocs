@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
-import { BookOpen, Coffee, Moon, Search, Settings2, Sparkles, X } from 'lucide-react';
+import { BookOpen, Coffee, GripHorizontal, Moon, Search, Settings2, Sparkles, X } from 'lucide-react';
+import { useDragPosition } from '../../hooks/useDragPosition';
+import { useSpellRule } from '../../lib/play/useSpellRule';
 import { useAuth } from '../../contexts/AuthContext';
 import { CLASS_IDS, className } from '../../lib/play/model';
 import { spellTone, useColoring } from '../../lib/play/coloring';
+import SpellGlyph from './SpellGlyph';
 import { useIsPhone } from '../../hooks/useMediaQuery';
 import { usePlayer, type PlayerApi } from '../../lib/play/usePlayer';
 import { hitDiceLeft, hitDieLeft, ordinal, pactLeft, slotsLeft } from '../../lib/play/model';
@@ -83,21 +86,27 @@ function Panel({ p, choices, setId, onClose, phone }: { p: PlayerApi | null; cho
   // a creature. The DM starts there until picking a character.
   const [lib, setLib] = useState(!p);
   const showLib = lib || !p;
+  // Bigger screens: drag it by its header anywhere (remembered on this device).
+  const box = useRef<HTMLDivElement | null>(null);
+  const drag = useDragPosition('dndocs-book-pos', box, 352);
+  const moved = !phone && drag.pos;
   return (
     <div
+      ref={box}
+      style={moved ? { left: drag.pos!.x, top: drag.pos!.y, maxHeight: `calc(100vh - ${drag.pos!.y + 12}px)` } : undefined}
       // Escape closes it while you're in it (on the map, Escape belongs to the map's tools).
       onKeyDown={(e) => e.key === 'Escape' && !(e.target as HTMLElement).closest('[aria-modal="true"]') && (e.stopPropagation(), onClose())}
       className={clsx(
         'fixed z-[110] flex flex-col overflow-hidden rounded-xl border border-stone-700/80 bg-stone-950/97 shadow-2xl backdrop-blur',
-        phone ? 'inset-x-2 top-16 bottom-[calc(env(safe-area-inset-bottom)+4.75rem)]' : 'top-[4.5rem] max-h-[min(80vh,46rem)] w-[min(22rem,calc(100vw-1rem))]',
-        // Next to the chat when both are open.
-        !phone && (chatOpen ? 'right-[calc(min(26rem,100vw-1rem)+1rem)]' : 'right-2'),
+        phone ? 'inset-x-2 top-16 bottom-[calc(env(safe-area-inset-bottom)+4.75rem)]' : 'max-h-[min(80vh,46rem)] w-[min(22rem,calc(100vw-1rem))]',
+        // Next to the chat when both are open (until it's been dragged somewhere).
+        !phone && !moved && (chatOpen ? 'top-[4.5rem] right-[calc(min(26rem,100vw-1rem)+1rem)]' : 'top-[4.5rem] right-2'),
       )}
       role="complementary"
       aria-label="Spells and abilities"
     >
-      <div className="flex items-center gap-2 border-b border-stone-800 px-3 py-2">
-        <BookOpen size={16} className="shrink-0 text-amber-400" />
+      <div className={clsx('flex items-center gap-2 border-b border-stone-800 px-3 py-2', !phone && 'cursor-grab touch-none select-none active:cursor-grabbing')} {...drag.handle(!phone)}>
+        {phone ? <BookOpen size={16} className="shrink-0 text-amber-400" /> : <GripHorizontal size={16} className="shrink-0 text-stone-500" />}
         <select
           className="min-w-0 flex-1 rounded border border-stone-700 bg-stone-950 px-1 py-0.5 text-sm font-semibold text-stone-100"
           value={showLib ? '__all' : p?.entity.id ?? '__all'}
@@ -127,6 +136,8 @@ function Panel({ p, choices, setId, onClose, phone }: { p: PlayerApi | null; cho
 
 function Body({ p }: { p: PlayerApi }) {
   const { d, live } = p;
+  const coloring = useColoring();
+  const rule = useSpellRule(p);
   const index = useSpellIndex(p.edition);
   const allReady = useMemo(() => readySpells(p.def, d, index.byId), [p.def, d, index.byId]);
   const [q, setQ] = useState('');
@@ -172,9 +183,12 @@ function Body({ p }: { p: PlayerApi }) {
                 <ul className="space-y-0.5">
                   {list.map((sp) => {
                     const free = freeLabel(p, sp.i);
+                    // Ruled out by the spells-per-turn rule this turn: greyed with the reason (still castable).
+                    const no = rule(sp);
                     return (
                       <li key={sp.i}>
-                        <button type="button" disabled={!p.canEdit} onClick={() => cast(sp)} className="group flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left hover:bg-stone-900 disabled:cursor-default">
+                        <button type="button" disabled={!p.canEdit} onClick={() => cast(sp)} title={no ?? undefined} className={clsx('group flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left hover:bg-stone-900 disabled:cursor-default', no && 'opacity-50')}>
+                          <SpellGlyph sp={sp} tone={spellTone(sp, coloring)} size={26} />
                           <span className="min-w-0 flex-1">
                             <span className="block truncate text-sm text-stone-100">{sp.n}</span>
                             <span className="block truncate text-[11px] text-stone-500">
@@ -288,7 +302,7 @@ function Library() {
         {list.slice(0, 120).map((sp) => (
           <li key={sp.i}>
             <button type="button" onClick={() => setOpen(open === sp.i ? null : sp.i)} aria-expanded={open === sp.i} className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left hover:bg-stone-900">
-              <span className="size-2.5 shrink-0 rounded-full" style={{ background: spellTone(sp, coloring) }} />
+              <SpellGlyph sp={sp} tone={spellTone(sp, coloring)} size={26} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm text-stone-100">{sp.n}</span>
                 <span className="block truncate text-[11px] text-stone-500">

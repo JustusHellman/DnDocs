@@ -1,13 +1,15 @@
 import { useState } from 'react';
-import { Crosshair, Wand2 } from 'lucide-react';
+import { Crosshair } from 'lucide-react';
 import { Modal } from '../ui/Modal';
 import SpellCard from './SpellCard';
+import SpellGlyph from './SpellGlyph';
 import RollField, { type RollOutcome } from './RollField';
 import { tableChat } from '../../lib/chat/bus';
 import { ordinal } from '../../lib/play/model';
 import { abilityName, castSummary, dmgAt, fromSelf, healAt, type Spell } from '../../lib/play/spells';
 import { canPlaceArea, pickedToken, placeCastArea } from '../../lib/play/ui';
-import { spellTone, useColoring } from '../../lib/play/coloring';
+import { castTime, spellTone, useColoring } from '../../lib/play/coloring';
+import { combatContext, markCost } from '../../lib/play/turnStore';
 
 const signed = (n: number) => (n >= 0 ? `+${n}` : `${n}`);
 
@@ -40,6 +42,10 @@ export default function CreatureCastDialog({ sp, edition, onClose }: { sp: Spell
       const typed = Object.entries(rolls).filter(([, v]) => v && !v.roll) as [string, RollOutcome][];
       if (typed.length) await tableChat.event({ t: 'castres', who: name, spell: sp.n, parts: typed.map(([l, v]) => ({ l, v: v.total })) });
     }
+    // In a fight: the picked creature used its action (bonus action, reaction) on it.
+    const inFight = picked ? combatContext()?.tokens.find((t) => t.id === picked.id) : undefined;
+    const ct = castTime(sp);
+    if (inFight && ct !== 'longer') await markCost(inFight.key, ct).catch(() => undefined);
     if (place && sp.a) placeCastArea({ spell: sp.n, area: sp.a, fromSelected: fromSelf(sp), color: '#8b2a1c' });
     onClose();
   };
@@ -50,7 +56,7 @@ export default function CreatureCastDialog({ sp, edition, onClose }: { sp: Spell
       size="lg"
       title={
         <span className="flex items-center gap-2">
-          <Wand2 size={18} style={{ color: tone }} /> {sp.n} for a creature
+          <SpellGlyph sp={sp} tone={tone} size={32} live /> {sp.n} for a creature
         </span>
       }
       description="No slots to keep track of: type the numbers from the creature's stat block."
@@ -71,7 +77,7 @@ export default function CreatureCastDialog({ sp, edition, onClose }: { sp: Spell
       }
     >
       <div className="grid gap-4 sm:grid-cols-2">
-        <SpellCard sp={sp} charLevel={5} edition={edition} />
+        <SpellCard sp={sp} charLevel={5} edition={edition} still />
         <div className="space-y-3">
           <label className="block text-sm">
             <span className="label">Cast by</span>
