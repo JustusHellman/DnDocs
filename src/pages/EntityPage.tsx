@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
+import { useGoBack } from '../hooks/useGoBack';
 import { ArrowLeft } from 'lucide-react';
 import EntityView from '../components/entity/EntityView';
 import { Page } from '../components/ui/bits';
@@ -7,7 +8,6 @@ import { usePeek } from '../contexts/PeekContext';
 
 export default function EntityPage() {
   const { id = '' } = useParams<{ id: string }>();
-  const navigate = useNavigate();
   const { activeId, close } = usePeek();
 
   // No point showing the same entry twice.
@@ -15,10 +15,7 @@ export default function EntityPage() {
     if (activeId === id) close();
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const back = () => {
-    if ((window.history.state?.idx ?? 0) > 0) navigate(-1);
-    else navigate('/search');
-  };
+  const back = useGoBack('/search');
 
   return (
     <Page wide>

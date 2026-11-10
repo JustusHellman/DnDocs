@@ -24,9 +24,13 @@ type Tab = 'ready' | 'choose' | 'write';
  * spells from your class lists (or any list), and mark some always prepared. "Write a card": a
  * spell of your own, in your own words, kept for the whole campaign.
  */
-export default function SpellBook({ p, onClose, initialTab = 'ready' }: { p: PlayerApi; onClose: () => void; initialTab?: Tab }) {
+/**
+ * `tab` and `onTab`: the open tab is kept by whoever opened the book, so it stays where you are
+ * (on Prepare, say) while what you change updates the character underneath.
+ */
+export default function SpellBook({ p, onClose, tab, onTab }: { p: PlayerApi; onClose: () => void; tab: Tab; onTab: (t: Tab) => void }) {
   const index = useSpellIndex(p.edition);
-  const [tab, setTab] = useState<Tab>(initialTab);
+  const setTab = onTab;
   const [editing, setEditing] = useState<Spell | null>(null);
   const { members } = useCampaignData();
   const names = useMemo(() => Object.fromEntries(members.map((m) => [m.uid, m.displayName])), [members]);

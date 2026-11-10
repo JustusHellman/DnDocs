@@ -62,6 +62,7 @@ import { useHitDialogs } from './battle/useHitDialogs';
 import { useSceneActions } from './battle/useSceneActions';
 import { castAreaShape } from '../lib/battle/castArea';
 import { useTableEvent } from '../lib/play/tableEvents';
+import { useGoBack } from '../hooks/useGoBack';
 import { readDevice, writeDevice } from '../lib/device';
 
 const TURN_LIST_KEY = 'dndocs-turn-list';
@@ -84,6 +85,7 @@ interface ViewProps {
 
 function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allTokens, tokensReady, drawings, marks, secret, preview, setPreview }: ViewProps) {
   const { user, isDM } = useAuth();
+  const goBack = useGoBack(entryVisible ? `/entity/${entity.id}` : '/map');
   const { entityMap, canView, canViewField, canEdit, players, memberName } = useCampaignData();
   const { peek } = usePeek();
   const toast = useToast();
@@ -469,7 +471,7 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
   };
   useEffect(() => {
     stopGestures();
-  }, [tool]);
+  }, [tool]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keyboard: tool shortcuts and Escape.
   useEffect(() => {
@@ -499,7 +501,7 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isDraft, asDM, fogOn]);
+  }, [isDraft, asDM, fogOn]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- DM actions: the map's settings, fog, import, Battlemap Forge, clearing ---------
   const { create, saveGrid, setFogMode, fogAll, importFile, importing, openForge, forgeModal, clearWalls, setActive, clearAllDrawings, clearAllTokens, remove } = useSceneActions({
@@ -724,11 +726,20 @@ function BattleView({ entity, entryVisible, src, scene, isDraft, tokens: allToke
     <div className="flex h-full flex-col">
       {isDM && preview && <PlayerPreviewBanner onExit={() => setPreview(false)} />}
       <div className="flex flex-wrap items-center gap-2 px-3 py-2 sm:px-5">
-        <Link to={entryVisible ? `/entity/${entity.id}` : '/map'} className="btn btn-ghost btn-sm" aria-label={entryVisible ? 'Back to the entry' : 'Back to the map'}>
+        <button type="button" onClick={goBack} className="btn btn-ghost btn-sm" aria-label="Back" title="Back (where you came from)">
           <ArrowLeft size={15} />
-        </Link>
+        </button>
         <Swords size={18} className="shrink-0 text-amber-500" />
-        <h1 className="min-w-0 flex-1 truncate font-display text-lg font-semibold text-stone-50 sm:text-xl">{entity.name}</h1>
+        {/* The place's entry is a link of its own (Back goes where you came from). */}
+        <h1 className="min-w-0 flex-1 truncate font-display text-lg font-semibold text-stone-50 sm:text-xl">
+          {entryVisible ? (
+            <Link to={`/entity/${entity.id}`} className="hover:text-amber-200 hover:underline" title="Open the entry">
+              {entity.name}
+            </Link>
+          ) : (
+            entity.name
+          )}
+        </h1>
         {!isDraft &&
           (scene.active ? (
             <span className={clsx('chip text-emerald-200 bg-emerald-500/10 ring-emerald-500/30', isDM && 'hidden sm:inline-flex')}>Battle on</span>

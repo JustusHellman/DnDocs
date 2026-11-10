@@ -56,7 +56,12 @@ export default function PlayHost() {
   });
   const { entities } = useCampaignData();
   const entity = open ? (entities.find((e) => e.id === open.entityId) ?? null) : null;
-  const p = usePlayer(entity);
+  const current = usePlayer(entity);
+  // The character being saved can be missing for a moment while the list reloads: the dialog
+  // stays open (and on its tab) with what it had, instead of closing and opening again.
+  const last = useRef(current);
+  if (current) last.current = current;
+  const p = current ?? (open && last.current?.entity.id === open.entityId ? last.current : null);
   const wrap = (node: ReactNode) => (
     <LoadBoundary
       key={failures}
@@ -78,7 +83,7 @@ export default function PlayHost() {
   };
   switch (open.kind) {
     case 'spells':
-      return wrap(<SpellBook key={entity!.id} p={p} onClose={close} initialTab={open.tab} />);
+      return wrap(<SpellBook key={open.entityId} p={p} onClose={close} tab={open.tab ?? 'ready'} onTab={(tab) => setOpen({ ...open, tab })} />);
     case 'rest':
       return wrap(<RestDialog p={p} kind={open.rest} onClose={close} />);
     case 'settings':

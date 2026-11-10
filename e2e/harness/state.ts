@@ -64,3 +64,15 @@ export function patchEntity(id: string, patch: Record<string, unknown>) {
   });
   listeners.forEach((f) => f());
 }
+
+/** Test hook: an entry missing for a moment (as while the list reloads after a save), then back. */
+export function flickerEntity(id: string, ms = 150) {
+  const e = entities.find((x) => x.id === id);
+  if (!e) return;
+  entities = entities.filter((x) => x.id !== id);
+  listeners.forEach((f) => f());
+  setTimeout(() => {
+    entities = [...entities, e];
+    listeners.forEach((f) => f());
+  }, ms);
+}

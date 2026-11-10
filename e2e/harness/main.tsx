@@ -24,7 +24,7 @@ const q = new URLSearchParams(location.search);
 const view = q.get('view') ?? 'page';
 const charId = q.get('char') ?? 'lyra';
 // Test hooks: open things, put chat lines in, and read the table's state.
-(window as unknown as Record<string, unknown>).__h = { openPlay, openTableChat, inject, messages, live: tableLive, patchPlay, scene: getSnap, setCombat: setSceneCombat, secretHp: getSecret, entities: () => S.entities };
+(window as unknown as Record<string, unknown>).__h = { openPlay, openTableChat, inject, messages, live: tableLive, patchPlay, scene: getSnap, setCombat: setSceneCombat, secretHp: getSecret, entities: () => S.entities, flicker: S.flickerEntity };
 if (view === 'battle') mapListens();
 seed([
   { uid: 'p2', name: 'Erik', kind: 'roll', roll: { l: 'Longsword', f: '1d20 + 6', t: 19, d: [{ s: 20, v: [13] }], m: 6, nat: 13 }, ago: 300 },
@@ -52,7 +52,7 @@ function FakeMap() {
 
 function Harness() {
   const { entities } = useCampaignData() as unknown as { entities: Entity[] };
-  const ch = entities.find((e) => e.id === charId)!;
+  const ch = entities.find((e) => e.id === charId);
   useEffect(() => {
     if (q.get('chat') === '1') setTimeout(() => openTableChat(), 300);
   }, []);
@@ -84,26 +84,29 @@ function Harness() {
         </div>
         <div className="absolute inset-x-0 top-12 bottom-0"><FakeMap />
           <div className="absolute bottom-3 left-3">
-            <TokenCard token={tok('tlyra', ch.name, ch.id, [S.ME.uid])} sceneId="s1" asDM={false} uid={S.ME.uid} entity={ch} canEditEntity secretHp={undefined} players={[]} onClose={() => {}} onOpenEntry={() => {}} combat={{ active: true, round: 2, turn: 'tlyra' } as never} />
+            <TokenCard token={tok('tlyra', ch!.name, ch!.id, [S.ME.uid])} sceneId="s1" asDM={false} uid={S.ME.uid} entity={ch} canEditEntity secretHp={undefined} players={[]} onClose={() => {}} onOpenEntry={() => {}} combat={{ active: true, round: 2, turn: 'tlyra' } as never} />
           </div>
         </div>
       </div>
     );
   return (
-    <MemoryRouter initialEntries={['/entity/' + ch.id]}>
+    <MemoryRouter initialEntries={['/entity/' + charId]}>
     <BattleBanner />
     <div className="min-h-screen bg-stone-950 p-3 sm:p-4">
       <div className="mb-3 flex items-center gap-3 border-b border-stone-800 pb-2">
         <b className="font-display text-stone-100">DnDocs</b>
-        <span className="flex-1 text-xs text-stone-500">Characters › {ch.name}</span>
+        <span className="flex-1 text-xs text-stone-500">Characters › {ch?.name}</span>
         <QuickBookButton />
         <ChatButton />
       </div>
-      <div className="max-w-2xl space-y-4">
-        <h1 className="font-display text-3xl text-stone-50">{ch.name}</h1>
-        <HitPoints entity={ch} maxText={ch.dndStats?.hitPoints} editable />
-        <CharacterPlay entity={ch} />
-      </div>
+      {/* (The character can be missing for a moment: a test takes it away and brings it back.) */}
+      {ch && (
+        <div className="max-w-2xl space-y-4">
+          <h1 className="font-display text-3xl text-stone-50">{ch.name}</h1>
+          <HitPoints entity={ch} maxText={ch.dndStats?.hitPoints} editable />
+          <CharacterPlay entity={ch} />
+        </div>
+      )}
     </div>
     </MemoryRouter>
   );

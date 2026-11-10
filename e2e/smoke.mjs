@@ -190,6 +190,19 @@ await check('/attack in the chat aims like the turn list; dragging a token count
   expectEq(await ev(p, () => window.__h.live().play.c_lyra?.mv ?? null), null, 'movement after a drag');
 });
 
+await check('the spellbook stays on Prepare while spells change', async (p) => {
+  await open(p, 'view=page');
+  // Opened on Ready (the Spells button), then switched to Prepare.
+  await ev(p, () => window.__h.openPlay({ kind: 'spells', entityId: 'lyra' }));
+  await p.locator('[role=dialog] button:has-text("Prepare")').first().click();
+  await p.locator('[role=dialog] li').first().locator('button:has-text("Known")').click();
+  // The character missing for a moment while the list reloads (as after a save).
+  await ev(p, () => window.__h.flicker('lyra'));
+  await p.waitForTimeout(400);
+  const onPrepare = await p.locator('[role=dialog] >> text=/Prepared \\d+ of \\d+/').count();
+  if (!onPrepare) throw new Error('the book went back to Ready');
+});
+
 await check('"Your turn" banner on other pages', async (p) => {
   await open(p, 'view=page&char=lyra');
   await ev(p, () => window.__h.setCombat({ turn: 'tlyra', turnBy: ['p1'], turnName: 'Lyra Starwhisper' }));
