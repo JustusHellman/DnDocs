@@ -8,3 +8,7 @@ dist
 firebase-debug.log
 firestore-debug.log
 ui-debug.log
+rules-tests/firestore.rules
+rules-tests/database.rules.json
+database-debug.log
+e2e/.out
